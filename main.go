@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"net"
-	"time"
 
 	"github.com/keithalucas/jsonrpc/pkg/jsonrpc"
 	"github.com/keithalucas/jsonrpc/pkg/spdk"
@@ -44,13 +43,19 @@ func main() {
 		},
 	}
 
+	ext := spdk.NewLonghornSetExternalAddress("127.0.0.1")
+	client.SendMsg(ext.GetMethod(), ext)
+
 	aio := spdk.NewAioCreate("aio1", "/root/aio1.img", 4096)
 
 	client.SendMsg(aio.GetMethod(), aio)
-	time.Sleep(time.Second)
+	//time.Sleep(time.Second)
 	client.SendMsg("bdev_longhorn_create", longhornCreate)
-	time.Sleep(time.Second)
+	//time.Sleep(time.Second)
 	client.SendMsg("bdev_get_bdevs", nil)
+
+	lrc := spdk.NewLonghornCreateReplica("replica", 1024*1024*1024, "lvs1", "127.0.0.1", 4420)
+	client.SendMsg(lrc.GetMethod(), lrc)
 
 	<-errChan
 }
