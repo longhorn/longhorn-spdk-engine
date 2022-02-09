@@ -80,6 +80,10 @@ func (c *Client) SendMsg(method string, params interface{}) interface{} {
 	return <-responseChan
 }
 
+func (c *Client) SendCommand(command Command) interface{} {
+	return c.SendMsg(command.GetMethod(), command)
+}
+
 func (c *Client) handleSend(msg *msgWrapper) {
 	id := atomic.AddUint32(&c.idCounter, 1)
 
