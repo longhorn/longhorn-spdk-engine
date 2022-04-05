@@ -72,13 +72,69 @@ go build
 
 
 
+
 ```
 ./longhorn-spdk storage create /path/to/disk
 ```
 
 This will register the specified disk with SPDK with an LVS name of "longhorn"
+Each storage device registered with SPDK has an LVS or logical volume store 
+name associated with it.  The default name is "longhorn" but mainly for 
+testing an alternative name for the LVS can be specified:
 
+```
+./longhorn-spdk storage create -l alternative-lvs /path/to/disk
+```
 
+The `storage create` subcommand can be used to re-register a disk that was 
+previously registered with SPDK.  
+
+## Starting replicas
+
+The `replica create` subcommand is used to create or reestablish a replica in 
+SPDK.
+
+```
+./longhorn-spdk replica create name 10g
+```
+
+This will create a new replica with the name "name".  The replica
+is a "local" replica because doesn't make itself available over NVMe over
+Fabrics.  NVMe over Fabrics needs a listen address.  In order to change the
+above example to a remote replica, the listen address needs to be specified:
+
+```
+./longhorn-spdk replica create --address 10.0.0.1 name 10g
+```
+
+Additionally, a specific NVMe-oF port can be specified with `--port xxxx`.
+The default NVMe-oF port will be 4420 if not specified.
+
+## Starting the volume
+
+The ideal longhorn scenario will be a three replica volume with one local 
+replica and two remote replicas.  All three replicas will use the default
+LVS name of "longhorn".  Each remote replica will use the default NVMe-oF 
+port of 4420.  To start a volume with such replicas, the command will be:
+
+```
+./longhorn-spdk volume create name --replica : --replica :10.0.0.1 --replica :10.0.0.2
+```
+
+In order to achieve flexibility in the specification of replicas, there are 
+four possible fields that can be specified for a replica when creating a
+replica, each delimited by `:`.  The first field is the LVS which can be empty
+if it is the default value of replica.  The second field is the listen IP
+address; this is empty for a local replica.  The third field is the NVMe-oF 
+port which is 4420 if not specified.  The fourth field is the TCP 
+communications port which is 4421 if not specified.
+
+## Registering and mounting the volume
+
+```
+nvme discover -t tcp -a 127.0.0.1 -s 4420
+nvme connect -t tcp -a 127.0.0.1 -s 4420 -n nqn.2021-12.io.longhorn.volume:name
+```
 
 ## One instance, file based disks example
 
@@ -115,5 +171,7 @@ fallocate -l 10g file3.img
 5. Discover and use volume.
 
 ```
+modprobe nvme-tcp
 nvme discover -t tcp -a 127.0.0.1 -s 4420
-nvme 
+nvme connect -t tcp -a 127.0.0.1 -s 4420 -n nqn.2021-12.io.longhorn.volume:volume
+```
