@@ -71,3 +71,19 @@ func NewBdevLvolCreateLvstore(bdevName string, lvsName string) *BdevLvolCreateLv
 		LvsName:  lvsName,
 	}
 }
+
+type LonghornBdevCompare struct {
+	BdevName1 string `json:"bdev1"`
+	BdevName2 string `json:"bdev2"`
+}
+
+func (b *LonghornBdevCompare) GetMethod() string {
+	return "longhorn_bdev_compare"
+}
+
+func NewLonghornBdevCompare(bdevName1 string, bdevName2 string) *LonghornBdevCompare {
+	return &LonghornBdevCompare{
+		BdevName1: bdevName1,
+		BdevName2: bdevName2,
+	}
+}

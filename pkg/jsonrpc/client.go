@@ -32,6 +32,8 @@ type msgWrapper struct {
 func NewClient(conn net.Conn) *Client {
 	writer := bufio.NewWriter(conn)
 	writer2 := bufio.NewWriter(os.Stdin)
+	stdenc := json.NewEncoder(os.Stdin)
+	stdenc.SetIndent("", "\t")
 
 	return &Client{
 		conn: conn,
@@ -41,7 +43,7 @@ func NewClient(conn net.Conn) *Client {
 		reader:  bufio.NewReader(conn),
 
 		encoder:  json.NewEncoder(conn),
-		encoder2: json.NewEncoder(os.Stdin),
+		encoder2: stdenc,
 
 		msgs:          make(chan *msgWrapper, 1024),
 		responseChans: make(map[uint32](chan interface{})),
@@ -74,7 +76,6 @@ func (c *Client) SendMsg(method string, params interface{}) interface{} {
 		params:   params,
 		response: responseChan}
 
-	fmt.Printf("sending msg %v\n", method)
 	c.msgs <- msg
 
 	return <-responseChan
@@ -91,7 +92,6 @@ func (c *Client) handleSend(msg *msgWrapper) {
 
 	c.responseChans[id] = msg.response
 
-	fmt.Printf("sending msg\n")
 	err := c.encoder.Encode(m)
 
 	if err != nil {
@@ -102,7 +102,6 @@ func (c *Client) handleSend(msg *msgWrapper) {
 }
 
 func (c *Client) handleRecv(obj map[string]interface{}) {
-	fmt.Printf("received\n")
 	fid, ok := obj["id"].(float64)
 
 	if ok {
@@ -120,13 +119,10 @@ func (c *Client) handleRecv(obj map[string]interface{}) {
 
 func (c *Client) dispatcher() {
 	for {
-		fmt.Printf("dispatching\n")
 		select {
 		case msg := <-c.msgs:
-			fmt.Printf("dispatching msg\n")
 			c.handleSend(msg)
 		case resp := <-c.resps:
-			fmt.Printf("dispatching resp\n")
 			c.handleRecv(resp)
 
 		}
@@ -148,11 +144,7 @@ func (c *Client) read(errChan chan error) {
 			errChan <- err
 		}
 
-		fmt.Printf("received response\n")
-
 		c.resps <- obj
-
-		fmt.Printf("enqueue response\n")
 
 		c.encoder2.Encode(obj)
 	}
