@@ -6,8 +6,8 @@
 
 ```
 git clone https://github.com/keithalucas/spdk
-git checkout longhorn
 cd spdk
+git checkout longhorn
 git submodule update --init
 ```
 
@@ -131,11 +131,50 @@ communications port which is 4421 if not specified.
 
 ## Registering and mounting the volume
 
+The 
 ```
 nvme discover -t tcp -a 127.0.0.1 -s 4420
 nvme connect -t tcp -a 127.0.0.1 -s 4420 -n nqn.2021-12.io.longhorn.volume:name
+nvme list
+```
+## Thres instances, three node example
+
+1. Register storage on each node:
+
+```
+./longhorn-spdk storage create /dev/sda
 ```
 
+2. Create replicas:
+
+On the two remote nodes:
+
+```
+./longhorn-spdk replica create --address <remote-ip> volume 100g
+```
+
+On the local node:
+
+```
+./longhorn-spdk replica create volume 100g
+```
+
+3. Create the volume on the local node:
+
+```
+./longhorn-spdk volume create volume --replica : --replica :<remote-ip1> --replica :<remote-ip2>
+```
+
+5. Discover and use volume.
+
+```
+modprobe nvme-tcp
+nvme discover -t tcp -a 127.0.0.1 -s 4420
+nvme connect -t tcp -a 127.0.0.1 -s 4420 -n nqn.2021-12.io.longhorn.volume:volume
+mkfs.ext4 /dev/nvme0n1
+mount /dev/nvme0n1 /mnt
+
+```
 ## One instance, file based disks example
 
 This example uses virtual disks to 
@@ -174,4 +213,6 @@ fallocate -l 10g file3.img
 modprobe nvme-tcp
 nvme discover -t tcp -a 127.0.0.1 -s 4420
 nvme connect -t tcp -a 127.0.0.1 -s 4420 -n nqn.2021-12.io.longhorn.volume:volume
+mkfs.ext4 /dev/nvme0n1
+mount /dev/nvme0n1 /mnt
 ```
