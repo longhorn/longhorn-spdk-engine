@@ -131,13 +131,16 @@ communications port which is 4421 if not specified.
 
 ## Registering and mounting the volume
 
-The 
+The nvme command can discover and connect to an NVMe-oF target.
+
 ```
 nvme discover -t tcp -a 127.0.0.1 -s 4420
 nvme connect -t tcp -a 127.0.0.1 -s 4420 -n nqn.2021-12.io.longhorn.volume:name
 nvme list
+mkfs.ext4 /dev/nvme0n1
+mount /dev/nvme0n1 /mnt
 ```
-## Thres instances, three node example
+## Three instances, three node example
 
 1. Register storage on each node:
 
