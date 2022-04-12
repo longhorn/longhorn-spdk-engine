@@ -63,7 +63,7 @@ different socket:
 ## Getting longhorn-spdk CLI
 
 ```
-git clone https://github.com/keithalucas/longhorn-spdk
+git clone https://github.com/longhorn/longhorn-spdk
 cd longhorn-spdk
 go build
 ```
