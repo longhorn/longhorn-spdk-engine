@@ -5,7 +5,7 @@
 1. Get source:
 
 ```
-git clone https://github.com/keithalucas/spdk
+git clone https://github.com/longhorn/spdk
 cd spdk
 git checkout longhorn
 git submodule update --init
@@ -34,7 +34,7 @@ make
 ## Running SPDK
 
 First, we need to configure the system for SPDK.  SPDK uses Linux's huge
-page feature, and it includes a script to configure the system in its 
+page feature, and it includes a script to configure the system in its
 source tree.
 
 ```
@@ -43,22 +43,22 @@ cd spdk
 ```
 
 Next, we need to run `spdk_tgt`.  It runs in the foreground which should be
-fine when it is actually deployed in a Kubernetes cluster but we need to 
-make sure it doesn't timeout if we running it in a ssh session, so I 
+fine when it is actually deployed in a Kubernetes cluster but we need to
+make sure it doesn't timeout if we running it in a ssh session, so I
 recommend running it in screen or tmux.
 
 ```
 ./build/bin/spdk_tgt
 ```
 
-You can run multiple instances of SPDK on a single host by specifying 
-different socket paths on the command line with `-r`.  The default socket 
-path is `/var/tmp/spdk.sock`.  For example, this starts SPDK with a 
+You can run multiple instances of SPDK on a single host by specifying
+different socket paths on the command line with `-r`.  The default socket
+path is `/var/tmp/spdk.sock`.  For example, this starts SPDK with a
 different socket:
 
 ```
 ./build/bin/spdk_tgt -r /var/tmp/spdk2.sock
-``` 
+```
 
 ## Getting longhorn-spdk CLI
 
@@ -71,27 +71,25 @@ go build
 ## Setting up storage
 
 
-
-
 ```
 ./longhorn-spdk storage create /path/to/disk
 ```
 
 This will register the specified disk with SPDK with an LVS name of "longhorn"
-Each storage device registered with SPDK has an LVS or logical volume store 
-name associated with it.  The default name is "longhorn" but mainly for 
+Each storage device registered with SPDK has an LVS or logical volume store
+name associated with it.  The default name is "longhorn" but mainly for
 testing an alternative name for the LVS can be specified:
 
 ```
 ./longhorn-spdk storage create -l alternative-lvs /path/to/disk
 ```
 
-The `storage create` subcommand can be used to re-register a disk that was 
-previously registered with SPDK.  
+The `storage create` subcommand can be used to re-register a disk that was
+previously registered with SPDK.
 
 ## Starting replicas
 
-The `replica create` subcommand is used to create or reestablish a replica in 
+The `replica create` subcommand is used to create or reestablish a replica in
 SPDK.
 
 ```
@@ -112,21 +110,21 @@ The default NVMe-oF port will be 4420 if not specified.
 
 ## Starting the volume
 
-The ideal longhorn scenario will be a three replica volume with one local 
+The ideal longhorn scenario will be a three replica volume with one local
 replica and two remote replicas.  All three replicas will use the default
-LVS name of "longhorn".  Each remote replica will use the default NVMe-oF 
+LVS name of "longhorn".  Each remote replica will use the default NVMe-oF
 port of 4420.  To start a volume with such replicas, the command will be:
 
 ```
 ./longhorn-spdk volume create name --replica : --replica :10.0.0.1 --replica :10.0.0.2
 ```
 
-In order to achieve flexibility in the specification of replicas, there are 
+In order to achieve flexibility in the specification of replicas, there are
 four possible fields that can be specified for a replica when creating a
 replica, each delimited by `:`.  The first field is the LVS which can be empty
 if it is the default value of replica.  The second field is the listen IP
-address; this is empty for a local replica.  The third field is the NVMe-oF 
-port which is 4420 if not specified.  The fourth field is the TCP 
+address; this is empty for a local replica.  The third field is the NVMe-oF
+port which is 4420 if not specified.  The fourth field is the TCP
 communications port which is 4421 if not specified.
 
 ## Registering and mounting the volume
@@ -180,7 +178,7 @@ mount /dev/nvme0n1 /mnt
 ```
 ## One instance, file based disks example
 
-This example uses virtual disks to 
+This example uses virtual disks to
 
 1. Create file based disks:
 
