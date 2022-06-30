@@ -17,7 +17,7 @@ package cmd
 
 import (
 	"github.com/docker/go-units"
-	"github.com/keithalucas/longhorn-spdk/pkg/spdk"
+	"github.com/longhorn/longhorn-spdk/pkg/spdk"
 	"github.com/spf13/cobra"
 )
 

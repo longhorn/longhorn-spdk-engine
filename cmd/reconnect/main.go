@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/keithalucas/jsonrpc/pkg/jsonrpc"
-	"github.com/keithalucas/jsonrpc/pkg/spdk"
+	"github.com/longhorn/longhorn-spdk/pkg/jsonrpc"
+	"github.com/longhorn/longhorn-spdk/pkg/spdk"
 )
 
 func main() {

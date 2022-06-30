@@ -16,7 +16,7 @@ limitations under the License.
 package cmd
 
 import (
-	"github.com/keithalucas/longhorn-spdk/pkg/spdk"
+	"github.com/longhorn/longhorn-spdk/pkg/spdk"
 	"github.com/spf13/cobra"
 )
 

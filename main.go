@@ -15,7 +15,7 @@ limitations under the License.
 */
 package main
 
-import "github.com/keithalucas/longhorn-spdk/cmd"
+import "github.com/longhorn/longhorn-spdk/cmd"
 
 func main() {
 	cmd.Execute()

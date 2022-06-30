@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/keithalucas/longhorn-spdk/pkg/spdk"
+	"github.com/longhorn/longhorn-spdk/pkg/spdk"
 	"github.com/spf13/cobra"
 )
 
