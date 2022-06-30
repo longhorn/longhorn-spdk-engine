@@ -1,4 +1,4 @@
-module github.com/keithalucas/longhorn-spdk
+module github.com/longhorn/longhorn-spdk
 
 go 1.13
 

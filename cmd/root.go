@@ -19,7 +19,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/keithalucas/longhorn-spdk/pkg/jsonrpc"
+	"github.com/longhorn/longhorn-spdk/pkg/jsonrpc"
 	"github.com/spf13/cobra"
 )
 
