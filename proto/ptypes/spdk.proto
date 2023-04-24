@@ -1,0 +1,114 @@
+syntax="proto3";
+
+package ptypes;
+
+import "google/protobuf/empty.proto";
+
+service SPDKService {
+    rpc ReplicaCreate(ReplicaCreateRequest) returns (Replica);
+    rpc ReplicaDelete(ReplicaDeleteRequest) returns (google.protobuf.Empty);
+    rpc ReplicaGet(ReplicaGetRequest) returns (Replica);
+    rpc ReplicaSnapshotCreate(SnapshotRequest) returns (Replica);
+    rpc ReplicaSnapshotDelete(SnapshotRequest) returns (google.protobuf.Empty);
+
+
+    rpc EngineCreate(EngineCreateRequest) returns (Engine);
+    rpc EngineDelete(EngineDeleteRequest) returns (google.protobuf.Empty);
+    rpc EngineGet(EngineGetRequest) returns (Engine);
+    rpc EngineSnapshotCreate(SnapshotRequest) returns (Engine);
+    rpc EngineSnapshotDelete(SnapshotRequest) returns (google.protobuf.Empty);
+
+    rpc VersionDetailGet(google.protobuf.Empty) returns(VersionDetailGetReply);
+}
+
+message Lvol {
+    string name = 1;
+    string uuid = 2;
+    uint64 spec_size = 3;
+    uint64 actual_size = 4;
+    string parent = 5;
+    map<string, bool> children = 6;
+}
+
+message Replica {
+    string name = 1;
+    string uuid = 2;
+    string lvs_name = 3;
+    string lvs_uuid = 4;
+    uint64 spec_size = 5;
+    uint64 actual_size = 6;
+    map<string, Lvol> snapshots = 7;
+    bool rebuilding = 8;
+}
+
+message ReplicaCreateRequest {
+    string name = 1;
+    string lvs_name = 2;
+    string lvs_uuid = 3;
+    uint64 spec_size = 4;
+    bool expose_required = 5;
+}
+
+message ReplicaDeleteRequest {
+    string name = 1;
+    bool cleanup_required = 2;
+}
+
+message ReplicaGetRequest {
+    string name = 1;
+}
+
+enum ReplicaMode {
+    WO = 0;
+    RW = 1;
+    ERR = 2;
+}
+
+message Engine {
+    string name = 1;
+    string uuid = 2;
+    uint64 spec_size = 3;
+    uint64 actual_size = 4;
+    string ip = 5;
+    int32 port = 6;
+    map<string, string> replica_address_map = 7;
+    map<string, ReplicaMode> replica_mode_map = 8;
+    string endpoint = 9;
+}
+
+message EngineCreateRequest {
+    string name = 1;
+    uint64 spec_size = 2;
+    map<string, string> replica_address_map = 3;
+    string frontend = 4;
+}
+
+message EngineDeleteRequest {
+    string name = 1;
+}
+
+message EngineGetRequest {
+    string name = 1;
+}
+
+message SnapshotRequest {
+    string name = 1;
+    string snapshot_name = 2;
+}
+
+message VersionOutput {
+    string version = 1;
+    string gitCommit = 2;
+    string buildDate = 3;
+
+    int64 cliAPIVersion = 4;
+    int64 cliAPIMinVersion = 5;
+    int64 controllerAPIVersion = 6;
+    int64 controllerAPIMinVersion = 7;
+    int64 dataFormatVersion = 8;
+    int64 dataFormatMinVersion = 9;
+}
+
+message VersionDetailGetReply {
+    VersionOutput version = 1;
+}
