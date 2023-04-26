@@ -7,3 +7,8 @@ const (
 	ModeRW  = Mode("RW")
 	ModeERR = Mode("ERR")
 )
+
+const (
+	FrontendSPDKTCPNvmf     = "spdk-tcp-nvmf"
+	FrontendSPDKTCPBlockdev = "spdk-tcp-blockdev"
+)

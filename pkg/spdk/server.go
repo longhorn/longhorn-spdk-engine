@@ -157,21 +157,29 @@ func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *ptypes.Snapshot
 }
 
 func (s *Server) EngineCreate(ctx context.Context, req *ptypes.EngineCreateRequest) (ret *ptypes.Engine, err error) {
-	return nil, nil
+	portStart, _, err := s.portAllocator.AllocateRange(1)
+	if err != nil {
+		return nil, err
+	}
+
+	return SvcEngineCreate(s.spdkClient, req.Name, req.Frontend, req.ReplicaAddressMap, portStart)
 }
 
-func (s *Server) EngineDelete(ctx context.Context, req *ptypes.EngineCreateRequest) (ret *empty.Empty, err error) {
-	return nil, nil
+func (s *Server) EngineDelete(ctx context.Context, req *ptypes.EngineDeleteRequest) (ret *empty.Empty, err error) {
+	if err = SvcEngineDelete(s.spdkClient, req.Name); err != nil {
+		return nil, err
+	}
+	return &empty.Empty{}, nil
 }
 
 func (s *Server) EngineGet(ctx context.Context, req *ptypes.EngineCreateRequest) (ret *ptypes.Engine, err error) {
-	return nil, nil
+	return SvcEngineGet(s.spdkClient, req.Name)
 }
 
 func (s *Server) EngineSnapshotCreate(ctx context.Context, req *ptypes.SnapshotRequest) (ret *ptypes.Engine, err error) {
-	return nil, nil
+	return SvcEngineSnapshotCreate(s.spdkClient, req.Name, req.SnapshotName)
 }
 
 func (s *Server) EngineSnapshotDelete(ctx context.Context, req *ptypes.SnapshotRequest) (ret *ptypes.Engine, err error) {
-	return nil, nil
+	return SvcEngineSnapshotDelete(s.spdkClient, req.Name, req.SnapshotName)
 }
