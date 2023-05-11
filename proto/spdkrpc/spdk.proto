@@ -45,8 +45,11 @@ message Replica {
     string lvs_uuid = 4;
     uint64 spec_size = 5;
     uint64 actual_size = 6;
-    map<string, Lvol> snapshots = 7;
-    bool rebuilding = 8;
+    string ip = 7;
+    int32 port_start = 8;
+    int32 port_end = 9;
+    map<string, Lvol> snapshots = 10;
+    bool rebuilding = 11;
 }
 
 message ReplicaCreateRequest {

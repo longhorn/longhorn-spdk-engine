@@ -13,6 +13,9 @@ type Replica struct {
 	SpecSize   uint64           `json:"spec_size"`
 	ActualSize uint64           `json:"actual_size"`
 	Snapshots  map[string]*Lvol `json:"snapshots"`
+	IP         string           `json:"ip"`
+	PortStart  int32            `json:"port_start"`
+	PortEnd    int32            `json:"port_end"`
 }
 
 type Lvol struct {
@@ -43,6 +46,9 @@ func ProtoReplicaToReplica(r *spdkrpc.Replica) *Replica {
 		SpecSize:   r.SpecSize,
 		ActualSize: r.ActualSize,
 		Snapshots:  map[string]*Lvol{},
+		IP:         r.Ip,
+		PortStart:  r.PortStart,
+		PortEnd:    r.PortEnd,
 	}
 	for snapName, snapProtoLvol := range r.Snapshots {
 		res.Snapshots[snapName] = ProtoLvolToLvol(snapProtoLvol)
