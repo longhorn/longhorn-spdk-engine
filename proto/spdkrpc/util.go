@@ -1,4 +1,4 @@
-package ptypes
+package spdkrpc
 
 import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"

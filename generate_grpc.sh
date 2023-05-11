@@ -13,4 +13,4 @@ fi
 # proto lint check
 #buf check lint
 
-protoc -I proto/ptypes/ -I proto/vendor/protobuf/src/ proto/ptypes/spdk.proto --go_out=plugins=grpc:proto/ptypes/
+protoc -I proto/spdkrpc/ -I proto/vendor/protobuf/src/ proto/spdkrpc/spdk.proto --go_out=plugins=grpc:proto/spdkrpc/

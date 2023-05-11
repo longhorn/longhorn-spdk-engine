@@ -11,7 +11,7 @@ import (
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
-	"github.com/longhorn/longhorn-spdk-engine/proto/ptypes"
+	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
 
 const (
@@ -20,7 +20,7 @@ const (
 
 type SPDKServiceContext struct {
 	cc      *grpc.ClientConn
-	service ptypes.SPDKServiceClient
+	service spdkrpc.SPDKServiceClient
 }
 
 func (c SPDKServiceContext) Close() error {
@@ -30,7 +30,7 @@ func (c SPDKServiceContext) Close() error {
 	return c.cc.Close()
 }
 
-func (c *SPDKClient) getSPDKServiceClient() ptypes.SPDKServiceClient {
+func (c *SPDKClient) getSPDKServiceClient() spdkrpc.SPDKServiceClient {
 	return c.service
 }
 
@@ -48,7 +48,7 @@ func NewSPDKClient() (*SPDKClient, error) {
 
 		return SPDKServiceContext{
 			cc:      connection,
-			service: ptypes.NewSPDKServiceClient(connection),
+			service: spdkrpc.NewSPDKServiceClient(connection),
 		}, nil
 	}
 
@@ -72,7 +72,7 @@ func (c *SPDKClient) ReplicaCreate(name, lvsName, lvsUUID string, specSize uint6
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
 	defer cancel()
 
-	resp, err := client.ReplicaCreate(ctx, &ptypes.ReplicaCreateRequest{
+	resp, err := client.ReplicaCreate(ctx, &spdkrpc.ReplicaCreateRequest{
 		Name:           name,
 		LvsName:        lvsName,
 		LvsUuid:        lvsUUID,
@@ -95,7 +95,7 @@ func (c *SPDKClient) ReplicaDelete(name string, cleanupRequired bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
 	defer cancel()
 
-	_, err := client.ReplicaDelete(ctx, &ptypes.ReplicaDeleteRequest{
+	_, err := client.ReplicaDelete(ctx, &spdkrpc.ReplicaDeleteRequest{
 		Name:            name,
 		CleanupRequired: cleanupRequired,
 	})
@@ -111,7 +111,7 @@ func (c *SPDKClient) ReplicaGet(name string) (*api.Replica, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
 	defer cancel()
 
-	resp, err := client.ReplicaGet(ctx, &ptypes.ReplicaGetRequest{
+	resp, err := client.ReplicaGet(ctx, &spdkrpc.ReplicaGetRequest{
 		Name: name,
 	})
 	if err != nil {
@@ -129,7 +129,7 @@ func (c *SPDKClient) EngineCreate(name, frontend string, specSize uint64, replic
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
 	defer cancel()
 
-	resp, err := client.EngineCreate(ctx, &ptypes.EngineCreateRequest{
+	resp, err := client.EngineCreate(ctx, &spdkrpc.EngineCreateRequest{
 		Name:              name,
 		SpecSize:          specSize,
 		ReplicaAddressMap: replicaAddressMap,
@@ -151,7 +151,7 @@ func (c *SPDKClient) EngineDelete(name string, cleanupRequired bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
 	defer cancel()
 
-	_, err := client.EngineDelete(ctx, &ptypes.EngineDeleteRequest{
+	_, err := client.EngineDelete(ctx, &spdkrpc.EngineDeleteRequest{
 		Name: name,
 	})
 	return errors.Wrapf(err, "failed to delete SPDK engine %v", name)
@@ -166,7 +166,7 @@ func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
 	defer cancel()
 
-	resp, err := client.EngineGet(ctx, &ptypes.EngineGetRequest{
+	resp, err := client.EngineGet(ctx, &spdkrpc.EngineGetRequest{
 		Name: name,
 	})
 	if err != nil {
