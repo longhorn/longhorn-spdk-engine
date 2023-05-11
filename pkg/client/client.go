@@ -174,3 +174,50 @@ func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
 	}
 	return api.ProtoEngineToEngine(resp), nil
 }
+
+func (c *SPDKClient) DiskCreate(diskName, diskPath string, blockSize int64) (*spdkrpc.Disk, error) {
+	if diskName == "" || diskPath == "" {
+		return nil, fmt.Errorf("failed to create disk: missing required parameter")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	return client.DiskCreate(ctx, &spdkrpc.DiskCreateRequest{
+		DiskName:  diskName,
+		DiskPath:  diskPath,
+		BlockSize: blockSize,
+	})
+}
+
+func (c *SPDKClient) DiskGet(diskName, diskPath string) (*spdkrpc.Disk, error) {
+	if diskName == "" || diskPath == "" {
+		return nil, fmt.Errorf("failed to get disk info: missing required parameter")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	return client.DiskGet(ctx, &spdkrpc.DiskGetRequest{
+		DiskName: diskName,
+		DiskPath: diskPath,
+	})
+}
+
+func (c *SPDKClient) DiskDelete(diskName, diskUUID string) error {
+	if diskName == "" || diskUUID == "" {
+		return fmt.Errorf("failed to delete disk: missing required parameter")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.DiskDelete(ctx, &spdkrpc.DiskDeleteRequest{
+		DiskName: diskName,
+		DiskUuid: diskUUID,
+	})
+	return err
+}
