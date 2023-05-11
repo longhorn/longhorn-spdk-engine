@@ -144,7 +144,7 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.Snapsho
 	return r.SnapshotCreate(s.spdkClient, req.Name)
 }
 
-func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Replica, err error) {
+func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *empty.Empty, err error) {
 	s.RLock()
 	r := s.replicaMap[req.Name]
 	s.RUnlock()
@@ -153,7 +153,8 @@ func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.Snapsho
 		return nil, fmt.Errorf("replica %s is not found during snapshot delete", req.Name)
 	}
 
-	return r.SnapshotDelete(s.spdkClient, req.Name)
+	_, err = r.SnapshotDelete(s.spdkClient, req.Name)
+	return &empty.Empty{}, err
 }
 
 func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequest) (ret *spdkrpc.Engine, err error) {
@@ -180,6 +181,14 @@ func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.Snapshot
 	return SvcEngineSnapshotCreate(s.spdkClient, req.Name, req.SnapshotName)
 }
 
-func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Engine, err error) {
-	return SvcEngineSnapshotDelete(s.spdkClient, req.Name, req.SnapshotName)
+func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *empty.Empty, err error) {
+	_, err = SvcEngineSnapshotDelete(s.spdkClient, req.Name, req.SnapshotName)
+	return &empty.Empty{}, err
+}
+
+func (s *Server) VersionDetailGet(context.Context, *empty.Empty) (*spdkrpc.VersionDetailGetReply, error) {
+	// TODO: Implement this
+	return &spdkrpc.VersionDetailGetReply{
+		Version: &spdkrpc.VersionOutput{},
+	}, nil
 }
