@@ -11,6 +11,7 @@ import (
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
+	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
@@ -22,16 +23,20 @@ type Replica struct {
 	ChainLength int
 	SnapshotMap map[string]*Lvol
 
-	Name     string
-	UUID     string
-	Alias    string
-	LvsName  string
-	LvsUUID  string
-	SpecSize uint64
-	IP       string
-	Port     int32
+	Name      string
+	UUID      string
+	Alias     string
+	LvsName   string
+	LvsUUID   string
+	SpecSize  uint64
+	IP        string
+	PortStart int32
+	PortEnd   int32
 
-	State ReplicaState
+	State     ReplicaState
+	IsExposed bool
+
+	portAllocator *util.Bitmap
 
 	log logrus.FieldLogger
 }
@@ -63,6 +68,9 @@ func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 		LvsUuid:   r.LvsUUID,
 		SpecSize:  r.SpecSize,
 		Snapshots: map[string]*spdkrpc.Lvol{},
+		Ip:        r.IP,
+		PortStart: r.PortStart,
+		PortEnd:   r.PortEnd,
 	}
 	for name, lvol := range r.SnapshotMap {
 		res.Snapshots[name] = ServiceLvolToProtoLvol(lvol)
@@ -330,12 +338,12 @@ func constructSnapshotMap(replicaName string, rootSvcLvol *Lvol, bdevLvolMap map
 	return res, nil
 }
 
-func (r *Replica) Create(spdkClient *spdkclient.Client, port int32, exposeRequired bool) (ret *spdkrpc.Replica, err error) {
+func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Replica, err error) {
 	r.Lock()
 	defer r.Unlock()
 
 	if r.State != ReplicaStatePending && r.State != ReplicaStateStopped {
-		return nil, fmt.Errorf("invalid state %s for replica %s start", r.Name, r.State)
+		return nil, fmt.Errorf("invalid state %s for replica %s creation", r.Name, r.State)
 	}
 
 	defer func() {
@@ -345,7 +353,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, port int32, exposeRequir
 	}()
 
 	if r.ChainLength < 1 {
-		return nil, fmt.Errorf("invalid chain length %d for replica start", r.ChainLength)
+		return nil, fmt.Errorf("invalid chain length %d for replica creation", r.ChainLength)
 	}
 	headSvcLvol := r.ActiveChain[r.ChainLength-1]
 
@@ -372,39 +380,55 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, port int32, exposeRequir
 	if err != nil {
 		return nil, err
 	}
+	r.IP = podIP
+
+	r.PortStart, r.PortEnd, err = superiorPortAllocator.AllocateRange(types.DefaultReplicaReservedPortCount)
+	if err != nil {
+		return nil, err
+	}
+	// Always reserved the 1st port for replica expose and the rest for rebuilding
+	r.portAllocator = util.NewBitmap(r.PortStart+1, r.PortEnd)
+
 	if exposeRequired {
-		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.UUID, podIP, string(r.Port)); err != nil {
+		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.UUID, podIP, string(r.PortStart)); err != nil {
 			return nil, err
 		}
+		r.IsExposed = true
 	}
-	r.IP = podIP
-	r.Port = port
 	r.State = ReplicaStateStarted
 
 	return ServiceReplicaToProtoReplica(r), nil
 }
 
-func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool) (err error) {
+func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, superiorPortAllocator *util.Bitmap) (err error) {
 	r.Lock()
 	defer r.Unlock()
 
-	exposeStopped := false
 	defer func() {
 		if err != nil {
 			r.State = ReplicaStateError
 		} else {
 			r.State = ReplicaStateStopped
 		}
-		if exposeStopped {
-			r.IP = ""
-			r.Port = 0
+		// The port can be released once the rebuilding and expose are stopped
+		if !r.IsExposed && r.PortStart != 0 {
+			if releaseErr := superiorPortAllocator.ReleaseRange(r.PortStart, r.PortEnd); releaseErr != nil {
+				r.log.Errorf("Failed to release port %d to %d at the end of replica deletion: %v", r.PortStart, r.PortEnd, releaseErr)
+				return
+			}
+			r.portAllocator = nil
+			r.PortStart, r.PortEnd = 0, 0
 		}
 	}()
 
-	if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return err
+	// TODO: Need to stop all in-progress rebuilding first
+
+	if r.IsExposed {
+		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return err
+		}
+		r.IsExposed = false
 	}
-	exposeStopped = true
 
 	if !cleanupRequired {
 		return nil
@@ -417,6 +441,7 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool) (e
 		if _, err := spdkClient.BdevLvolDelete(lvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return err
 		}
+		delete(r.SnapshotMap, lvol.Name)
 	}
 
 	return nil

@@ -105,12 +105,7 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 	r := s.replicaMap[req.Name]
 	s.Unlock()
 
-	portStart, _, err := s.portAllocator.AllocateRange(1)
-	if err != nil {
-		return nil, err
-	}
-
-	return r.Create(s.spdkClient, portStart, req.ExposeRequired)
+	return r.Create(s.spdkClient, req.ExposeRequired, s.portAllocator)
 }
 
 func (s *Server) ReplicaDelete(ctx context.Context, req *spdkrpc.ReplicaDeleteRequest) (ret *empty.Empty, err error) {
@@ -120,7 +115,7 @@ func (s *Server) ReplicaDelete(ctx context.Context, req *spdkrpc.ReplicaDeleteRe
 	s.RUnlock()
 
 	if r != nil {
-		if err := r.Delete(s.spdkClient, req.CleanupRequired); err != nil {
+		if err := r.Delete(s.spdkClient, req.CleanupRequired, s.portAllocator); err != nil {
 			return nil, err
 		}
 	}
