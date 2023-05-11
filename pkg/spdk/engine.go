@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
 
 	"github.com/longhorn/go-spdk-helper/pkg/nvme"
@@ -243,6 +244,6 @@ func SvcEngineSnapshotCreate(spdkClient *spdkclient.Client, name, snapshotName s
 	return nil, fmt.Errorf("unimplemented")
 }
 
-func SvcEngineSnapshotDelete(spdkClient *spdkclient.Client, name, snapshotName string) (res *spdkrpc.Engine, err error) {
+func SvcEngineSnapshotDelete(spdkClient *spdkclient.Client, name, snapshotName string) (res *empty.Empty, err error) {
 	return nil, fmt.Errorf("unimplemented")
 }
