@@ -172,7 +172,7 @@ func (s *Server) EngineDelete(ctx context.Context, req *ptypes.EngineDeleteReque
 	return &empty.Empty{}, nil
 }
 
-func (s *Server) EngineGet(ctx context.Context, req *ptypes.EngineCreateRequest) (ret *ptypes.Engine, err error) {
+func (s *Server) EngineGet(ctx context.Context, req *ptypes.EngineGetRequest) (ret *ptypes.Engine, err error) {
 	return SvcEngineGet(s.spdkClient, req.Name)
 }
 
