@@ -1,6 +1,6 @@
 syntax="proto3";
 
-package ptypes;
+package spdkrpc;
 
 import "google/protobuf/empty.proto";
 

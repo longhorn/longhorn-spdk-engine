@@ -13,7 +13,7 @@ import (
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
-	"github.com/longhorn/longhorn-spdk-engine/proto/ptypes"
+	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
 
 const (
@@ -89,7 +89,7 @@ func (s *Server) monitoringReplicas() {
 	}
 }
 
-func (s *Server) ReplicaCreate(ctx context.Context, req *ptypes.ReplicaCreateRequest) (ret *ptypes.Replica, err error) {
+func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRequest) (ret *spdkrpc.Replica, err error) {
 	s.Lock()
 	if s.replicaMap[req.Name] == nil {
 		s.replicaMap[req.Name] = NewReplica(req.Name, req.LvsName, req.LvsUuid, req.SpecSize)
@@ -105,7 +105,7 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *ptypes.ReplicaCreateReq
 	return r.Create(s.spdkClient, portStart, req.ExposeRequired)
 }
 
-func (s *Server) ReplicaDelete(ctx context.Context, req *ptypes.ReplicaDeleteRequest) (ret *empty.Empty, err error) {
+func (s *Server) ReplicaDelete(ctx context.Context, req *spdkrpc.ReplicaDeleteRequest) (ret *empty.Empty, err error) {
 	s.RLock()
 	r := s.replicaMap[req.Name]
 	delete(s.replicaMap, req.Name)
@@ -120,7 +120,7 @@ func (s *Server) ReplicaDelete(ctx context.Context, req *ptypes.ReplicaDeleteReq
 	return &empty.Empty{}, nil
 }
 
-func (s *Server) ReplicaGet(ctx context.Context, req *ptypes.ReplicaGetRequest) (ret *ptypes.Replica, err error) {
+func (s *Server) ReplicaGet(ctx context.Context, req *spdkrpc.ReplicaGetRequest) (ret *spdkrpc.Replica, err error) {
 	s.RLock()
 	r := s.replicaMap[req.Name]
 	s.RUnlock()
@@ -132,7 +132,7 @@ func (s *Server) ReplicaGet(ctx context.Context, req *ptypes.ReplicaGetRequest) 
 	return r.Get()
 }
 
-func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *ptypes.SnapshotRequest) (ret *ptypes.Replica, err error) {
+func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Replica, err error) {
 	s.RLock()
 	r := s.replicaMap[req.Name]
 	s.RUnlock()
@@ -144,7 +144,7 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *ptypes.Snapshot
 	return r.SnapshotCreate(s.spdkClient, req.Name)
 }
 
-func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *ptypes.SnapshotRequest) (ret *ptypes.Replica, err error) {
+func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Replica, err error) {
 	s.RLock()
 	r := s.replicaMap[req.Name]
 	s.RUnlock()
@@ -156,7 +156,7 @@ func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *ptypes.Snapshot
 	return r.SnapshotDelete(s.spdkClient, req.Name)
 }
 
-func (s *Server) EngineCreate(ctx context.Context, req *ptypes.EngineCreateRequest) (ret *ptypes.Engine, err error) {
+func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequest) (ret *spdkrpc.Engine, err error) {
 	portStart, _, err := s.portAllocator.AllocateRange(1)
 	if err != nil {
 		return nil, err
@@ -165,21 +165,21 @@ func (s *Server) EngineCreate(ctx context.Context, req *ptypes.EngineCreateReque
 	return SvcEngineCreate(s.spdkClient, req.Name, req.Frontend, req.ReplicaAddressMap, portStart)
 }
 
-func (s *Server) EngineDelete(ctx context.Context, req *ptypes.EngineDeleteRequest) (ret *empty.Empty, err error) {
+func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequest) (ret *empty.Empty, err error) {
 	if err = SvcEngineDelete(s.spdkClient, req.Name); err != nil {
 		return nil, err
 	}
 	return &empty.Empty{}, nil
 }
 
-func (s *Server) EngineGet(ctx context.Context, req *ptypes.EngineGetRequest) (ret *ptypes.Engine, err error) {
+func (s *Server) EngineGet(ctx context.Context, req *spdkrpc.EngineGetRequest) (ret *spdkrpc.Engine, err error) {
 	return SvcEngineGet(s.spdkClient, req.Name)
 }
 
-func (s *Server) EngineSnapshotCreate(ctx context.Context, req *ptypes.SnapshotRequest) (ret *ptypes.Engine, err error) {
+func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Engine, err error) {
 	return SvcEngineSnapshotCreate(s.spdkClient, req.Name, req.SnapshotName)
 }
 
-func (s *Server) EngineSnapshotDelete(ctx context.Context, req *ptypes.SnapshotRequest) (ret *ptypes.Engine, err error) {
+func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Engine, err error) {
 	return SvcEngineSnapshotDelete(s.spdkClient, req.Name, req.SnapshotName)
 }

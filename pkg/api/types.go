@@ -2,7 +2,7 @@ package api
 
 import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
-	"github.com/longhorn/longhorn-spdk-engine/proto/ptypes"
+	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
 
 type Replica struct {
@@ -24,7 +24,7 @@ type Lvol struct {
 	Children   map[string]bool `json:"children"`
 }
 
-func ProtoLvolToLvol(l *ptypes.Lvol) *Lvol {
+func ProtoLvolToLvol(l *spdkrpc.Lvol) *Lvol {
 	return &Lvol{
 		Name:       l.Name,
 		UUID:       l.Uuid,
@@ -34,7 +34,7 @@ func ProtoLvolToLvol(l *ptypes.Lvol) *Lvol {
 		Children:   l.Children,
 	}
 }
-func ProtoReplicaToReplica(r *ptypes.Replica) *Replica {
+func ProtoReplicaToReplica(r *spdkrpc.Replica) *Replica {
 	res := &Replica{
 		Name:       r.Name,
 		UUID:       r.Uuid,
@@ -63,7 +63,7 @@ type Engine struct {
 	Endpoint          string                `json:"endpoint"`
 }
 
-func ProtoEngineToEngine(e *ptypes.Engine) *Engine {
+func ProtoEngineToEngine(e *spdkrpc.Engine) *Engine {
 	res := &Engine{
 		Name:              e.Name,
 		UUID:              e.Uuid,
@@ -76,7 +76,7 @@ func ProtoEngineToEngine(e *ptypes.Engine) *Engine {
 		Endpoint:          e.Endpoint,
 	}
 	for rName, mode := range e.ReplicaModeMap {
-		res.ReplicaModeMap[rName] = ptypes.GRPCReplicaModeToReplicaMode(mode)
+		res.ReplicaModeMap[rName] = spdkrpc.GRPCReplicaModeToReplicaMode(mode)
 	}
 
 	return res

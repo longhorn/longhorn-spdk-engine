@@ -12,7 +12,7 @@ import (
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
-	"github.com/longhorn/longhorn-spdk-engine/proto/ptypes"
+	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
 
 type Replica struct {
@@ -55,14 +55,14 @@ type Lvol struct {
 	Children   map[string]*Lvol
 }
 
-func ServiceReplicaToProtoReplica(r *Replica) *ptypes.Replica {
-	res := &ptypes.Replica{
+func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
+	res := &spdkrpc.Replica{
 		Name:      r.Name,
 		Uuid:      r.UUID,
 		LvsName:   r.LvsName,
 		LvsUuid:   r.LvsUUID,
 		SpecSize:  r.SpecSize,
-		Snapshots: map[string]*ptypes.Lvol{},
+		Snapshots: map[string]*spdkrpc.Lvol{},
 	}
 	for name, lvol := range r.SnapshotMap {
 		res.Snapshots[name] = ServiceLvolToProtoLvol(lvol)
@@ -71,8 +71,8 @@ func ServiceReplicaToProtoReplica(r *Replica) *ptypes.Replica {
 	return res
 }
 
-func ServiceLvolToProtoLvol(lvol *Lvol) *ptypes.Lvol {
-	res := &ptypes.Lvol{
+func ServiceLvolToProtoLvol(lvol *Lvol) *spdkrpc.Lvol {
+	res := &spdkrpc.Lvol{
 		Name:       lvol.Name,
 		Uuid:       lvol.UUID,
 		SpecSize:   lvol.SpecSize,
@@ -330,7 +330,7 @@ func constructSnapshotMap(replicaName string, rootSvcLvol *Lvol, bdevLvolMap map
 	return res, nil
 }
 
-func (r *Replica) Create(spdkClient *spdkclient.Client, port int32, exposeRequired bool) (ret *ptypes.Replica, err error) {
+func (r *Replica) Create(spdkClient *spdkclient.Client, port int32, exposeRequired bool) (ret *spdkrpc.Replica, err error) {
 	r.Lock()
 	defer r.Unlock()
 
@@ -422,13 +422,13 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool) (e
 	return nil
 }
 
-func (r *Replica) Get() (pReplica *ptypes.Replica, err error) {
+func (r *Replica) Get() (pReplica *spdkrpc.Replica, err error) {
 	r.RLock()
 	defer r.RUnlock()
 	return ServiceReplicaToProtoReplica(r), nil
 }
 
-func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string) (pReplica *ptypes.Replica, err error) {
+func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string) (pReplica *spdkrpc.Replica, err error) {
 	r.Lock()
 	defer r.Unlock()
 
@@ -476,7 +476,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	return ServiceReplicaToProtoReplica(r), err
 }
 
-func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) (pReplica *ptypes.Replica, err error) {
+func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) (pReplica *spdkrpc.Replica, err error) {
 	r.Lock()
 	defer r.Unlock()
 
