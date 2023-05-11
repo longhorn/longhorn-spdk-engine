@@ -2,8 +2,10 @@ package spdk
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
@@ -179,7 +181,8 @@ func (r *Replica) Construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	return nil
 }
 
-func (r *Replica) ValidateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo) (err error) {
+func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
+	bdevLvolMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
 	r.Lock()
 	defer r.Unlock()
 
@@ -226,7 +229,40 @@ func (r *Replica) ValidateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo) 
 		}
 	}
 
-	// TODO: Need to validate IP and Port if the replica is exposed
+	if r.IP == "" {
+		return fmt.Errorf("found invalid IP %s for replica %s", r.IP, r.Name)
+	}
+
+	if r.IsExposed {
+		return nil
+	}
+
+	if r.PortStart == 0 || r.PortEnd == 0 {
+		return fmt.Errorf("found invalid Ports [%d, %d] for the exposed replica %s", r.PortStart, r.PortEnd, r.Name)
+	}
+
+	nqn := helpertypes.GetNQN(r.Name)
+	subsystem := subsystemMap[nqn]
+	if subsystem == nil || len(subsystem.ListenAddresses) == 0 {
+		return fmt.Errorf("cannot find the Nvmf subsystem with NQN %s for the exposed replica %s", nqn, r.Name)
+	}
+	exposedPort := 0
+	for _, listenAddr := range subsystem.ListenAddresses {
+		if listenAddr.Adrfam != spdktypes.NvmeAddressFamilyIPv4 || listenAddr.Trtype != spdktypes.NvmeTransportTypeTCP {
+			continue
+		}
+		exposedPort, err = strconv.Atoi(listenAddr.Trsvcid)
+		if err != nil {
+			return err
+		}
+		break
+	}
+	if int32(exposedPort) != r.PortStart {
+		if stopErr := spdkClient.StopExposeBdev(nqn); stopErr != nil {
+			return errors.Wrapf(stopErr, "failed to stop the replica expose after finding mismatching between the actual exposed port %d and the recorded port %d for the exposed replica %s", exposedPort, r.PortStart, r.Name)
+		}
+		return fmt.Errorf("found mismatching between the actual exposed port %d and the recorded port %d for the exposed replica %s", exposedPort, r.PortStart, r.Name)
+	}
 
 	return nil
 }

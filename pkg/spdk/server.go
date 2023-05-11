@@ -73,6 +73,11 @@ func (s *Server) monitoringReplicas() {
 				logrus.Errorf("SPDK Server: failed to get lvol bdevs for replica cache update, will retry later: %v", err)
 				continue
 			}
+			subsystemList, err := s.spdkClient.NvmfGetSubsystems("", "")
+			if err != nil {
+				logrus.Errorf("SPDK Server: failed to get nvmf subsystems for replica cache update, will retry later: %v", err)
+				continue
+			}
 			bdevLvolMap := map[string]*spdktypes.BdevInfo{}
 			for idx := range bdevLvolList {
 				bdevLvol := &bdevLvolList[idx]
@@ -81,10 +86,15 @@ func (s *Server) monitoringReplicas() {
 				}
 				bdevLvolMap[spdktypes.GetLvolNameFromAlias(bdevLvol.Aliases[0])] = bdevLvol
 			}
+			subsystemMap := map[string]*spdktypes.NvmfSubsystem{}
+			for idx := range subsystemList {
+				subsystem := &subsystemList[idx]
+				subsystemMap[subsystem.Nqn] = subsystem
+			}
 
 			s.Lock()
 			for _, r := range s.replicaMap {
-				r.ValidateAndUpdate(bdevLvolMap)
+				r.ValidateAndUpdate(s.spdkClient, bdevLvolMap, subsystemMap)
 			}
 			s.Unlock()
 		}
