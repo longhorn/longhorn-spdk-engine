@@ -148,7 +148,7 @@ func SvcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engi
 	res.Ip = podIP
 
 	nqn := helpertypes.GetNQN(name)
-	subsystemList, err := spdkClient.NvmfGetSubsystems("")
+	subsystemList, err := spdkClient.NvmfGetSubsystems("", "")
 	if err != nil {
 		return nil, err
 	}
