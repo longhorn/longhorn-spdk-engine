@@ -45,6 +45,7 @@ type NvmfDeleteSubsystemRequest struct {
 }
 
 type NvmfGetSubsystemsRequest struct {
+	Nqn     string `json:"nqn,omitempty"`
 	TgtName string `json:"tgt_name,omitempty"`
 }
 

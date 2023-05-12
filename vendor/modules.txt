@@ -20,7 +20,7 @@ github.com/golang/protobuf/ptypes/timestamp
 # github.com/kr/text v0.1.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/go-spdk-helper v0.0.0-20230510145702-5bee0a77e437
+# github.com/longhorn/go-spdk-helper v0.0.0-20230511072325-7af99589dd44
 ## explicit; go 1.17
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
 github.com/longhorn/go-spdk-helper/pkg/nvme
