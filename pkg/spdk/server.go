@@ -132,6 +132,16 @@ func (s *Server) ReplicaGet(ctx context.Context, req *spdkrpc.ReplicaGetRequest)
 	return r.Get()
 }
 
+func (s *Server) ReplicaList(ctx context.Context, req *empty.Empty) (*spdkrpc.ReplicaListResponse, error) {
+	// TODO: Implement this
+	return &spdkrpc.ReplicaListResponse{}, nil
+}
+
+func (s *Server) ReplicaWatch(req *empty.Empty, srv spdkrpc.SPDKService_ReplicaWatchServer) error {
+	// TODO: Implement this
+	return nil
+}
+
 func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Replica, err error) {
 	s.RLock()
 	r := s.replicaMap[req.Name]
@@ -175,6 +185,16 @@ func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequ
 
 func (s *Server) EngineGet(ctx context.Context, req *spdkrpc.EngineGetRequest) (ret *spdkrpc.Engine, err error) {
 	return SvcEngineGet(s.spdkClient, req.Name)
+}
+
+func (s *Server) EngineList(ctx context.Context, req *empty.Empty) (*spdkrpc.EngineListResponse, error) {
+	// TODO: Implement this
+	return &spdkrpc.EngineListResponse{}, nil
+}
+
+func (s *Server) EngineWatch(req *empty.Empty, srv spdkrpc.SPDKService_EngineWatchServer) error {
+	// TODO: Implement this
+	return nil
 }
 
 func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Engine, err error) {
