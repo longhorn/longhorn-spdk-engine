@@ -5,10 +5,12 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/golang/protobuf/ptypes/empty"
-	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 
+	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	"github.com/longhorn/go-spdk-helper/pkg/nvme"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
@@ -20,67 +22,139 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
 
-func svcEngineCreate(spdkClient *spdkclient.Client, name, frontend string, bdevAddressMap map[string]string, port int32) (ret *spdkrpc.Engine, err error) {
-	if frontend != types.FrontendSPDKTCPBlockdev && frontend != types.FrontendSPDKTCPNvmf {
-		return nil, fmt.Errorf("invalid frontend %s", frontend)
+type Engine struct {
+	sync.RWMutex
+
+	Name               string
+	VolumeName         string
+	SpecSize           uint64
+	ActualSize         uint64
+	ReplicaAddressMap  map[string]string
+	ReplicaBdevNameMap map[string]string
+	ReplicaModeMap     map[string]types.Mode
+	IP                 string
+	Port               int32
+	Frontend           string
+	Endpoint           string
+
+	log logrus.FieldLogger
+}
+
+func NewEngine(engineName, volumeName, frontend string, specSize uint64) *Engine {
+	log := logrus.StandardLogger().WithFields(logrus.Fields{
+		"engineName": engineName,
+		"volumeName": volumeName,
+		"frontend":   frontend,
+	})
+
+	roundedSpecSize := util.RoundUp(specSize, helpertypes.MiB)
+	if roundedSpecSize != specSize {
+		log.Infof("Rounded up spec size from %v to %v since the spec size should be multiple of MiB", specSize, roundedSpecSize)
 	}
+	log.WithField("specSize", roundedSpecSize)
+
+	return &Engine{
+		Name:               engineName,
+		VolumeName:         volumeName,
+		Frontend:           frontend,
+		SpecSize:           specSize,
+		ReplicaAddressMap:  map[string]string{},
+		ReplicaBdevNameMap: map[string]string{},
+		ReplicaModeMap:     map[string]types.Mode{},
+
+		log: log,
+	}
+}
+
+func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localReplicaBdevMap map[string]string, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Engine, err error) {
+	e.Lock()
+	defer e.Unlock()
 
 	podIP, err := util.GetIPForPod()
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: May need to do cleanup when there is an error
-
 	replicaBdevList := []string{}
-	for bdevName, addr := range bdevAddressMap {
-		replicaIP, replicaPort, err := net.SplitHostPort(addr)
+	for replicaName, replicaAddr := range replicaAddressMap {
+		bdevName, err := getBdevNameForReplica(spdkClient, localReplicaBdevMap, replicaName, replicaAddr, podIP)
 		if err != nil {
-			return nil, errors.Wrapf(err, "invalid bdev %s address %s in engine %s creation", bdevName, addr, name)
-		}
-		if replicaIP == podIP {
-			replicaBdevList = append(replicaBdevList, bdevName)
+			e.log.WithError(err).Errorf("Failed to get bdev from replica %s with address %s, will skip it and continue", replicaName, replicaAddr)
+			e.ReplicaModeMap[replicaName] = types.ModeERR
+			e.ReplicaBdevNameMap[replicaName] = ""
 			continue
 		}
-		nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(bdevName, helpertypes.GetNQN(bdevName), replicaIP, replicaPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4)
-		if err != nil {
-			return nil, err
-		}
-		if len(nvmeBdevNameList) != 1 {
-			return nil, fmt.Errorf("attaching bdev %s with address %s as a NVMe bdev does not get one result: %+v", bdevName, addr, nvmeBdevNameList)
-		}
-		replicaBdevList = append(replicaBdevList, nvmeBdevNameList[0])
+		e.ReplicaModeMap[replicaName] = types.ModeRW
+		e.ReplicaBdevNameMap[replicaName] = bdevName
+		replicaBdevList = append(replicaBdevList, bdevName)
 	}
+	e.ReplicaAddressMap = replicaAddressMap
 
-	if _, err := spdkClient.BdevRaidCreate(name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
+	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
 		return nil, err
 	}
 
-	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(name), name, podIP, strconv.Itoa(int(port))); err != nil {
-		return nil, err
-	}
-
-	nqn := helpertypes.GetNQN(name)
-	volumeName := util.GetVolumeNameFromEngineName(name)
-	initiator, err := nvme.NewInitiator(volumeName, nqn, nvme.HostProc)
+	nqn := helpertypes.GetNQN(e.Name)
+	port, _, err := superiorPortAllocator.AllocateRange(1)
 	if err != nil {
 		return nil, err
 	}
+	if err := spdkClient.StartExposeBdev(nqn, e.Name, podIP, strconv.Itoa(int(port))); err != nil {
+		return nil, err
+	}
+	e.IP = podIP
+	e.Port = port
 
-	if frontend == types.FrontendSPDKTCPBlockdev {
+	switch e.Frontend {
+	case types.FrontendSPDKTCPBlockdev:
+		initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
+		if err != nil {
+			return nil, err
+		}
 		if err := initiator.Start(podIP, strconv.Itoa(int(port))); err != nil {
 			return nil, err
 		}
+		e.Endpoint = initiator.GetEndpoint()
+	case types.FrontendSPDKTCPNvmf:
+		e.Endpoint = GetNvmfEndpoint(nqn, e.IP, e.Port)
+	default:
+		return nil, fmt.Errorf("unknown frontend type %s", e.Frontend)
+
 	}
 
-	return svcEngineGet(spdkClient, name)
+	return e.getWithoutLock(), nil
 }
 
-func svcEngineDelete(spdkClient *spdkclient.Client, name string) (err error) {
-	nqn := helpertypes.GetNQN(name)
-	volumeName := util.GetVolumeNameFromEngineName(name)
+func getBdevNameForReplica(spdkClient *spdkclient.Client, localReplicaBdevMap map[string]string, replicaName, replicaAddress, podIP string) (bdevName string, err error) {
+	replicaIP, replicaPort, err := net.SplitHostPort(replicaAddress)
+	if err != nil {
+		return "", err
+	}
+	if replicaIP == podIP {
+		if localReplicaBdevMap[replicaName] == "" {
+			return "", fmt.Errorf("cannot to find local replica %s from the local replica bdev map", replicaName)
 
-	initiator, err := nvme.NewInitiator(volumeName, nqn, nvme.HostProc)
+		}
+		return localReplicaBdevMap[replicaName], nil
+	}
+
+	nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(replicaName, helpertypes.GetNQN(replicaName), replicaIP, replicaPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4)
+	if err != nil {
+		return "", err
+	}
+	if len(nvmeBdevNameList) != 1 {
+		return "", fmt.Errorf("got zero or multiple results when attaching replica %s with address %s as a NVMe bdev: %+v", replicaName, replicaAddress, nvmeBdevNameList)
+	}
+	return nvmeBdevNameList[0], nil
+}
+
+func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *util.Bitmap) (err error) {
+	e.Lock()
+	defer e.Unlock()
+
+	nqn := helpertypes.GetNQN(e.Name)
+
+	initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
 	if err != nil {
 		return err
 	}
@@ -92,42 +166,30 @@ func svcEngineDelete(spdkClient *spdkclient.Client, name string) (err error) {
 		return err
 	}
 
-	bdevRaidList, err := spdkClient.BdevRaidGet(name, 0)
-	if err != nil {
-		return err
+	if e.Port != 0 {
+		if err := superiorPortAllocator.ReleaseRange(e.Port, e.Port); err != nil {
+			return err
+		}
+		e.Port = 0
 	}
-	switch len(bdevRaidList) {
-	case 0:
-		return nil
-	case 1:
-	default:
-		return fmt.Errorf("found multiple raid bdev during engine %v deletion", name)
-	}
-	bdevRaid := bdevRaidList[0]
 
-	if _, err := spdkClient.BdevRaidDelete(name); err != nil {
+	if _, err := spdkClient.BdevRaidDelete(e.Name); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return err
 	}
 
-	// TODO: How to figure out the rest attached nvme controllers and continue if one of the detaching fails
-
-	bdevNvmeList, err := spdkClient.BdevNvmeGet("", 0)
-	if err != nil {
-		return err
-	}
-	bdevNvmeMap := map[string]spdktypes.BdevInfo{}
-	for _, bdevNvme := range bdevNvmeList {
-		bdevNvmeMap[bdevNvme.Name] = bdevNvme
-	}
-
-	for _, baseBdev := range bdevRaid.DriverSpecific.Raid.BaseBdevsList {
-		bdevNvme, exists := bdevNvmeMap[baseBdev.Name]
-		if !exists {
-			// This replica must be a local lvol
+	for replicaName, replicaAddress := range e.ReplicaAddressMap {
+		replicaIP, _, err := net.SplitHostPort(replicaAddress)
+		if err != nil {
+			return err
+		}
+		if replicaIP == e.IP {
 			continue
 		}
-
-		if _, err := spdkClient.BdevNvmeDetachController(helperutil.GetNvmeControllerNameFromNamespaceName(bdevNvme.Name)); err != nil {
+		bdevName := e.ReplicaBdevNameMap[replicaName]
+		if bdevName == "" {
+			continue
+		}
+		if _, err := spdkClient.BdevNvmeDetachController(helperutil.GetNvmeControllerNameFromNamespaceName(bdevName)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return err
 		}
 	}
@@ -135,118 +197,165 @@ func svcEngineDelete(spdkClient *spdkclient.Client, name string) (err error) {
 	return nil
 }
 
-func svcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engine, err error) {
+func (e *Engine) Get() (res *spdkrpc.Engine) {
+	e.RLock()
+	defer e.RUnlock()
+
+	return e.getWithoutLock()
+}
+
+func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 	res = &spdkrpc.Engine{
-		Name:              name,
-		ReplicaAddressMap: map[string]string{},
+		Name:              e.Name,
+		SpecSize:          e.SpecSize,
+		ActualSize:        e.ActualSize,
+		ReplicaAddressMap: e.ReplicaAddressMap,
 		ReplicaModeMap:    map[string]spdkrpc.ReplicaMode{},
+		Ip:                e.IP,
+		Port:              e.Port,
+		Frontend:          e.Frontend,
+		Endpoint:          e.Endpoint,
 	}
+
+	for replicaName, replicaMode := range e.ReplicaModeMap {
+		res.ReplicaModeMap[replicaName] = spdkrpc.ReplicaModeToGRPCReplicaMode(replicaMode)
+	}
+
+	return res
+}
+
+func (e *Engine) ValidateAndUpdate(
+	bdevMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
+	e.Lock()
+	defer e.Unlock()
 
 	podIP, err := util.GetIPForPod()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	res.Ip = podIP
+	if e.IP != podIP {
+		return fmt.Errorf("found mismatching between engine IP %s and pod IP %s for engine %s", e.IP, podIP, e.Name)
+	}
 
-	nqn := helpertypes.GetNQN(name)
-	subsystemList, err := spdkClient.NvmfGetSubsystems("", "")
-	if err != nil {
-		return nil, err
-	}
-	var subsystem *spdktypes.NvmfSubsystem
-	for _, s := range subsystemList {
-		if s.Nqn == nqn {
-			subsystem = &s
-			break
-		}
-	}
+	nqn := helpertypes.GetNQN(e.Name)
+	subsystem := subsystemMap[nqn]
 	if subsystem == nil || len(subsystem.ListenAddresses) == 0 {
-		return nil, fmt.Errorf("cannot find the Nvmf subsystem for engine %s", name)
+		return fmt.Errorf("cannot find the Nvmf subsystem for engine %s", e.Name)
 	}
+
+	port := 0
 	for _, listenAddr := range subsystem.ListenAddresses {
 		if !strings.EqualFold(string(listenAddr.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
 			!strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
 			continue
 		}
-		port, err := strconv.Atoi(listenAddr.Trsvcid)
-		if err != nil {
-			return nil, err
+		if port, err = strconv.Atoi(listenAddr.Trsvcid); err != nil {
+			return err
 		}
-		res.Port = int32(port)
+		if e.Port == int32(port) {
+			break
+		}
 	}
-	if res.Port == 0 {
-		return nil, fmt.Errorf("cannot detect the port from Nvmf subsystem for engine %s", name)
-	}
-
-	bdevRaidList, err := spdkClient.BdevRaidGet(name, 0)
-	if err != nil {
-		return nil, err
-	}
-	if len(bdevRaidList) != 1 {
-		return nil, fmt.Errorf("found multiple or zero raid bdevs in engine %v creation: %+v", name, bdevRaidList)
-	}
-	bdevRaid := bdevRaidList[0]
-	bdevRaidInfo := bdevRaid.DriverSpecific.Raid
-	res.Uuid = bdevRaid.UUID
-	res.SpecSize = bdevRaid.NumBlocks * uint64(bdevRaid.BlockSize)
-
-	bdevNvmeList, err := spdkClient.BdevNvmeGet("", 0)
-	if err != nil {
-		return nil, err
-	}
-	bdevNvmeMap := map[string]spdktypes.BdevInfo{}
-	for _, bdevNvme := range bdevNvmeList {
-		bdevNvmeMap[bdevNvme.Name] = bdevNvme
+	if port == 0 || e.Port != int32(port) {
+		return fmt.Errorf("cannot find a matching listener with port %d from Nvmf subsystem for engine %s", e.Port, e.Name)
 	}
 
-	// TODO: Verify Mode
-	for _, baseBdev := range bdevRaidInfo.BaseBdevsList {
-		bdevNvme, exists := bdevNvmeMap[baseBdev.Name]
-		if !exists {
-			// This replica must be a local lvol
-			replicaName := spdktypes.GetLvolNameFromAlias(baseBdev.Name)
-			res.ReplicaAddressMap[replicaName] = ""
-			res.ReplicaModeMap[replicaName] = spdkrpc.ReplicaMode_RW
+	switch e.Frontend {
+	case types.FrontendSPDKTCPBlockdev:
+		initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
+		if err != nil {
+			return err
+		}
+		if err := initiator.LoadNVMeDeviceInfo(); err != nil {
+			return err
+		}
+
+		if err := initiator.LoadEndpoint(); err != nil {
+			return err
+		}
+		blockDevEndpoint := initiator.GetEndpoint()
+		if e.Endpoint != "" && e.Endpoint != blockDevEndpoint {
+			return fmt.Errorf("found mismatching between engine endpoint %s and actual block device endpoint %s for engine %s", e.Endpoint, blockDevEndpoint, e.Name)
+		}
+		e.Endpoint = blockDevEndpoint
+	case types.FrontendSPDKTCPNvmf:
+		nvmfEndpoint := GetNvmfEndpoint(nqn, e.IP, e.Port)
+		if e.Endpoint != "" && e.Endpoint != nvmfEndpoint {
+			return fmt.Errorf("found mismatching between engine endpoint %s and actual nvmf endpoint %s for engine %s", e.Endpoint, nvmfEndpoint, e.Name)
+		}
+		e.Endpoint = nvmfEndpoint
+	default:
+		return fmt.Errorf("unknown frontend type %s", e.Frontend)
+	}
+
+	bdevRaid := bdevMap[e.Name]
+	if spdktypes.GetBdevType(bdevRaid) != spdktypes.BdevTypeRaid {
+		return fmt.Errorf("cannot find a raid bdev for engine %v", e.Name)
+	}
+	bdevRaidSize := bdevRaid.NumBlocks * uint64(bdevRaid.BlockSize)
+	if e.SpecSize != bdevRaidSize {
+		return fmt.Errorf("found mismatching between engine spec size %d and actual raid bdev size %d for engine %s", e.SpecSize, bdevRaidSize, e.Name)
+	}
+
+	for replicaName, bdevName := range e.ReplicaBdevNameMap {
+		mode, err := e.validateAndUpdateReplicaMode(replicaName, bdevMap[bdevName])
+		if err != nil {
+			e.log.WithError(err).Errorf("Replica %s is invalid, will update the mode from %s to %s", replicaName, e.ReplicaModeMap[replicaName], types.ModeERR)
+			e.ReplicaModeMap[replicaName] = types.ModeERR
 			continue
 		}
-
-		if len(*bdevNvme.DriverSpecific.Nvme) < 1 {
-			return nil, fmt.Errorf("found a remote base bdev %v that does not contain nvme info", bdevNvme.Name)
+		if e.ReplicaModeMap[replicaName] != mode {
+			e.log.Debugf("Replica %s mode is updated from %s to %s", replicaName, e.ReplicaModeMap[replicaName], mode)
+			e.ReplicaModeMap[replicaName] = mode
 		}
-		nvmeInfo := (*bdevNvme.DriverSpecific.Nvme)[0]
-		if !strings.EqualFold(string(nvmeInfo.Trid.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
-			!strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
-			return nil, fmt.Errorf("found a remote base bdev %v that contains invalid address family %s and transport type %s", bdevNvme.Name, nvmeInfo.Trid.Adrfam, nvmeInfo.Trid.Trtype)
-		}
-		replicaName := helperutil.GetNvmeControllerNameFromNamespaceName(bdevNvme.Name)
-		res.ReplicaAddressMap[replicaName] = fmt.Sprintf("%s:%s", nvmeInfo.Trid.Traddr, nvmeInfo.Trid.Trsvcid)
-		res.ReplicaModeMap[replicaName] = spdkrpc.ReplicaMode_RW
 	}
 
-	volumeName := util.GetVolumeNameFromEngineName(name)
-
-	initiator, err := nvme.NewInitiator(volumeName, nqn, nvme.HostProc)
-	if err != nil {
-		return nil, err
-	}
-	// Failed to load the NVMe device info, probably the frontend is spdk-tcp-nvmf and the initiator is not started.
-	if err := initiator.LoadNVMeDeviceInfo(); err != nil {
-		res.Endpoint = fmt.Sprintf("%s://%s:%d", nqn, res.Ip, res.Port)
-		return res, nil
-	}
-
-	if err := initiator.LoadEndpoint(); err != nil {
-		return nil, err
-	}
-	res.Endpoint = initiator.GetEndpoint()
-
-	return res, nil
+	return nil
 }
 
-func svcEngineSnapshotCreate(spdkClient *spdkclient.Client, name, snapshotName string) (res *spdkrpc.Engine, err error) {
+func (e *Engine) validateAndUpdateReplicaMode(replicaName string, bdev *spdktypes.BdevInfo) (mode types.Mode, err error) {
+	if bdev == nil {
+		return types.ModeERR, fmt.Errorf("cannot find a bdev for replica %s", replicaName)
+	}
+	bdevSpecSize := bdev.NumBlocks * uint64(bdev.BlockSize)
+	if e.SpecSize != bdevSpecSize {
+		return types.ModeERR, fmt.Errorf("found mismatching between replica %s bdev spec size %d and the engine spec size %d for engine %s", replicaName, bdevSpecSize, e.SpecSize, e.Name)
+	}
+	switch spdktypes.GetBdevType(bdev) {
+	case spdktypes.BdevTypeLvol:
+		replicaIP, _, err := net.SplitHostPort(e.ReplicaAddressMap[replicaName])
+		if err != nil {
+			return types.ModeERR, err
+		}
+		if e.IP != replicaIP {
+			return types.ModeERR, fmt.Errorf("found mismatching between replica %s IP %s and the engine IP %s for engine %s", replicaName, replicaIP, e.IP, e.Name)
+		}
+	case spdktypes.BdevTypeNvme:
+		if len(*bdev.DriverSpecific.Nvme) != 1 {
+			return types.ModeERR, fmt.Errorf("found zero or multiple nvme info in a remote nvme base bdev %v for replica %s", bdev.Name, replicaName)
+		}
+		nvmeInfo := (*bdev.DriverSpecific.Nvme)[0]
+		if !strings.EqualFold(string(nvmeInfo.Trid.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
+			!strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
+			return types.ModeERR, fmt.Errorf("found invalid address family %s and transport type %s in a remote nvme base bdev %s for replica %s", nvmeInfo.Trid.Adrfam, nvmeInfo.Trid.Trtype, bdev.Name, replicaName)
+		}
+		bdevAddr := net.JoinHostPort(nvmeInfo.Trid.Traddr, nvmeInfo.Trid.Trsvcid)
+		if e.ReplicaAddressMap[replicaName] != bdevAddr {
+			return types.ModeERR, fmt.Errorf("found mismatching between replica %s bdev address %s and the nvme bdev actual address %s", replicaName, e.ReplicaAddressMap[replicaName], bdevAddr)
+		}
+		// TODO: Validate NVMe controller state
+		// TODO: Verify Mode WO
+	default:
+		return types.ModeERR, fmt.Errorf("found invalid bdev type %v for replica %s ", spdktypes.GetBdevType(bdev), replicaName)
+	}
+
+	return types.ModeRW, nil
+}
+
+func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, name, snapshotName string) (res *spdkrpc.Engine, err error) {
 	return nil, fmt.Errorf("unimplemented")
 }
 
-func svcEngineSnapshotDelete(spdkClient *spdkclient.Client, name, snapshotName string) (res *empty.Empty, err error) {
+func (e *Engine) SnapshotDelete(spdkClient *spdkclient.Client, name, snapshotName string) (res *empty.Empty, err error) {
 	return nil, fmt.Errorf("unimplemented")
 }
