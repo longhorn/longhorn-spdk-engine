@@ -81,21 +81,23 @@ enum ReplicaMode {
 
 message Engine {
     string name = 1;
-    string uuid = 2;
+    string volume_name = 2;
     uint64 spec_size = 3;
     uint64 actual_size = 4;
     string ip = 5;
     int32 port = 6;
     map<string, string> replica_address_map = 7;
     map<string, ReplicaMode> replica_mode_map = 8;
-    string endpoint = 9;
+    string frontend = 9;
+    string endpoint = 10;
 }
 
 message EngineCreateRequest {
     string name = 1;
-    uint64 spec_size = 2;
-    map<string, string> replica_address_map = 3;
-    string frontend = 4;
+    string volume_name = 2;
+    uint64 spec_size = 3;
+    map<string, string> replica_address_map = 4;
+    string frontend = 5;
 }
 
 message EngineDeleteRequest {
