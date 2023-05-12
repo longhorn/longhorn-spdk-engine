@@ -118,6 +118,16 @@ func (c *SPDKClient) ReplicaGet(name string) (*api.Replica, error) {
 	return api.ProtoReplicaToReplica(resp), nil
 }
 
+func (c *SPDKClient) ReplicaList() (map[string]*api.Replica, error) {
+	// TODO: implement
+	return nil, nil
+}
+
+func (c *SPDKClient) ReplicaWatch(ctx context.Context) (*api.ReplicaStream, error) {
+	// TODO: implement
+	return nil, nil
+}
+
 func (c *SPDKClient) EngineCreate(name, frontend string, specSize uint64, replicaAddressMap map[string]string) (*api.Engine, error) {
 	if name == "" || len(replicaAddressMap) == 0 {
 		return nil, fmt.Errorf("failed to start SPDK engine: missing required parameter")
@@ -171,6 +181,16 @@ func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
 		return nil, errors.Wrapf(err, "failed to get SPDK engine %v", name)
 	}
 	return api.ProtoEngineToEngine(resp), nil
+}
+
+func (c *SPDKClient) EngineList() (map[string]*api.Engine, error) {
+	// TODO: implement
+	return nil, nil
+}
+
+func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error) {
+	// TODO: implement
+	return nil, nil
 }
 
 func (c *SPDKClient) DiskCreate(diskName, diskPath string, blockSize int64) (*spdkrpc.Disk, error) {

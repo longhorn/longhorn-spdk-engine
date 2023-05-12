@@ -94,3 +94,33 @@ type DiskInfo struct {
 	BlockSize   int64
 	ClusterSize int64
 }
+
+type ReplicaStream struct {
+	stream spdkrpc.SPDKService_ReplicaWatchClient
+}
+
+func NewReplicaStream(stream spdkrpc.SPDKService_ReplicaWatchClient) *ReplicaStream {
+	return &ReplicaStream{
+		stream,
+	}
+}
+
+func (s *ReplicaStream) Recv() (*Replica, error) {
+	resp, err := s.stream.Recv()
+	return ProtoReplicaToReplica(resp), err
+}
+
+type EngineStream struct {
+	stream spdkrpc.SPDKService_EngineWatchClient
+}
+
+func NewEngineStream(stream spdkrpc.SPDKService_EngineWatchClient) *EngineStream {
+	return &EngineStream{
+		stream,
+	}
+}
+
+func (s *EngineStream) Recv() (*Engine, error) {
+	resp, err := s.stream.Recv()
+	return ProtoEngineToEngine(resp), err
+}
