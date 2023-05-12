@@ -117,8 +117,9 @@ func DuplicateDevice(dev *KernelDevice, dest string) error {
 	if dest == "" {
 		return fmt.Errorf("found empty destination for device duplication")
 	}
-	if _, err := os.Stat(filepath.Dir(dest)); os.IsNotExist(err) {
-		if err := os.MkdirAll(dest, 0755); err != nil {
+	dir := filepath.Dir(dest)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0755); err != nil {
 			logrus.Fatalf("device %v: Cannot create directory for %v", dev.Name, dest)
 		}
 	}
