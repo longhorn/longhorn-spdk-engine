@@ -8,8 +8,6 @@ import (
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 
-	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
-
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
@@ -39,7 +37,7 @@ type SPDKClient struct {
 	SPDKServiceContext
 }
 
-func NewSPDKClient() (*SPDKClient, error) {
+func NewSPDKClient(serviceUrl string) (*SPDKClient, error) {
 	getSPDKServiceContext := func(serviceUrl string) (SPDKServiceContext, error) {
 		connection, err := grpc.Dial(serviceUrl, grpc.WithInsecure())
 		if err != nil {
@@ -52,13 +50,13 @@ func NewSPDKClient() (*SPDKClient, error) {
 		}, nil
 	}
 
-	serviceContext, err := getSPDKServiceContext(helpertypes.LocalIP)
+	serviceContext, err := getSPDKServiceContext(serviceUrl)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SPDKClient{
-		serviceURL:         helpertypes.LocalIP,
+		serviceURL:         serviceUrl,
 		SPDKServiceContext: serviceContext,
 	}, nil
 }
