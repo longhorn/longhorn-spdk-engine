@@ -159,13 +159,13 @@ func getDiskPath(path string) string {
 }
 
 func getDeviceNumber(filename string) (string, error) {
-	fi, err := os.Stat(filename)
+	fileInfo, err := os.Stat(filename)
 	if err != nil {
 		return "", err
 	}
-	dev := fi.Sys().(*syscall.Stat_t).Dev
-	major := int(dev >> 8)
-	minor := int(dev & 0xff)
+	dev := fileInfo.Sys().(*syscall.Stat_t).Rdev
+	major := int(dev / 256)
+	minor := int(dev % 256)
 	return fmt.Sprintf("%d-%d", major, minor), nil
 }
 
