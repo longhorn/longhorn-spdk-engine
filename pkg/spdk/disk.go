@@ -122,7 +122,7 @@ func (s *Server) DiskGet(ctx context.Context, req *spdkrpc.DiskGetRequest) (*spd
 	defer s.RUnlock()
 
 	// Check if the disk exists
-	bdevs, err := s.spdkClient.BdevAioGet(req.DiskName, 3000)
+	bdevs, err := s.spdkClient.BdevAioGet(req.DiskName, 0)
 	if err != nil {
 		resp, parseErr := parseErrorMessage(err.Error())
 		if parseErr != nil || !isNoSuchDevice(resp.Message) {
