@@ -25,3 +25,7 @@ func GetVolumeNameFromEngineName(engineName string) string {
 	reg := regexp.MustCompile(fmt.Sprintf(`([^"]*)%s-[A-Za-z0-9]{%d,%d}$`, EngineSuffix, EngineRandomIDLenth, EngineRandomIDLenth))
 	return reg.ReplaceAllString(engineName, "${1}")
 }
+
+func BytesToMiB(bytes uint64) uint64 {
+	return bytes / 1024 / 1024
+}
