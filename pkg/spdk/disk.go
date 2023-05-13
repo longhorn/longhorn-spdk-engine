@@ -9,13 +9,152 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 
+	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	"github.com/longhorn/go-spdk-helper/pkg/util"
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
+
+const (
+	defaultClusterSize = 1 * 1024 * 1024 // 1MB
+	defaultBlockSize   = 4096            // 4KB
+
+	hostPrefix = "/host"
+)
+
+func SvcDiskCreate(spdkClient *spdkclient.Client, diskName, diskPath string, blockSize int64) (ret *spdkrpc.Disk, err error) {
+	log := logrus.WithFields(logrus.Fields{
+		"diskName":  diskName,
+		"diskPath":  diskPath,
+		"blockSize": blockSize,
+	})
+
+	log.Info("Creating disk")
+	defer func() {
+		if err != nil {
+			log.WithError(err).Error("Failed to create disk")
+		} else {
+			log.Info("Created disk")
+		}
+	}()
+
+	if diskName == "" || diskPath == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "disk name and disk path are required")
+	}
+
+	if err := validateDiskCreation(spdkClient, diskPath); err != nil {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, errors.Wrap(err, "failed to validate disk create request").Error())
+	}
+
+	if blockSize <= 0 {
+		blockSize = int64(defaultBlockSize)
+		log.Infof("Using default block size %v", blockSize)
+	}
+
+	uuid, err := addBlockDevice(spdkClient, diskName, diskPath, blockSize)
+	if err != nil {
+		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to add block device").Error())
+	}
+
+	return lvstoreToDisk(spdkClient, diskPath, "", uuid)
+}
+
+func SvcDiskDelete(spdkClient *spdkclient.Client, diskName, diskUUID string) (ret *emptypb.Empty, err error) {
+	log := logrus.WithFields(logrus.Fields{
+		"diskName": diskName,
+		"diskUUID": diskUUID,
+	})
+
+	log.Info("Deleting disk")
+	defer func() {
+		if err != nil {
+			log.WithError(err).Error("Failed to delete disk")
+		} else {
+			log.Info("Deleted disk")
+		}
+	}()
+
+	if diskName == "" || diskUUID == "" {
+		return &empty.Empty{}, grpcstatus.Error(grpccodes.InvalidArgument, "disk name and disk UUID are required")
+	}
+
+	aioBdevName := ""
+	lvstores, err := spdkClient.BdevLvolGetLvstore("", diskUUID)
+	if err != nil {
+		resp, parseErr := parseErrorMessage(err.Error())
+		if parseErr != nil || !isNoSuchDevice(resp.Message) {
+			return nil, errors.Wrapf(err, "failed to get lvstore with UUID %v", diskUUID)
+		}
+		log.Warnf("Cannot find lvstore with UUID %v", diskUUID)
+		aioBdevName = diskName
+	} else {
+		lvstore := &lvstores[0]
+		if lvstore.Name != diskName {
+			log.Warnf("Disk name %v does not match lvstore name %v", diskName, lvstore.Name)
+			return nil, grpcstatus.Errorf(grpccodes.NotFound, "disk name %v does not match lvstore name %v", diskName, lvstore.Name)
+		}
+		aioBdevName = lvstore.BaseBdev
+	}
+
+	if _, err := spdkClient.BdevAioDelete(aioBdevName); err != nil {
+		return nil, errors.Wrapf(err, "failed to delete AIO bdev %v", aioBdevName)
+	}
+	return &empty.Empty{}, nil
+}
+
+func SvcDiskGet(spdkClient *spdkclient.Client, diskName, diskPath string) (ret *spdkrpc.Disk, err error) {
+	log := logrus.WithFields(logrus.Fields{
+		"diskName": diskName,
+		"diskPath": diskPath,
+	})
+
+	log.Info("Getting disk info")
+	defer func() {
+		if err != nil {
+			log.WithError(err).Error("Failed to get disk info")
+		} else {
+			log.Info("Got disk info")
+		}
+	}()
+
+	if diskName == "" || diskPath == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "disk name and disk path are required")
+	}
+
+	// Check if the disk exists
+	bdevs, err := spdkClient.BdevAioGet(diskName, 0)
+	if err != nil {
+		resp, parseErr := parseErrorMessage(err.Error())
+		if parseErr != nil || !isNoSuchDevice(resp.Message) {
+			return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err, "failed to get AIO bdev with name %v", diskName).Error())
+		}
+	}
+	if len(bdevs) == 0 {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find AIO bdev with name %v", diskName)
+	}
+
+	var targetBdev *spdktypes.BdevInfo
+	for i, bdev := range bdevs {
+		if bdev.DriverSpecific != nil ||
+			bdev.DriverSpecific.Aio.FileName == getDiskPath(diskPath) {
+			targetBdev = &bdevs[i]
+			break
+		}
+	}
+	if targetBdev == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, errors.Wrapf(err, "failed to get AIO bdev name for disk path %v", diskPath).Error())
+	}
+
+	return lvstoreToDisk(spdkClient, diskPath, diskName, "")
+}
 
 func getDiskPath(path string) string {
 	return filepath.Join(hostPrefix, path)
@@ -55,29 +194,29 @@ func getDiskDeviceSize(path string) (int64, error) {
 	return pos, nil
 }
 
-func (s *Server) validateDiskCreateRequest(req *spdkrpc.DiskCreateRequest) error {
-	ok, err := isBlockDevice(req.DiskPath)
+func validateDiskCreation(spdkClient *spdkclient.Client, diskPath string) error {
+	ok, err := isBlockDevice(diskPath)
 	if err != nil {
 		return errors.Wrap(err, "failed to check if disk is a block device")
 	}
 	if !ok {
-		return errors.Wrapf(err, "disk %v is not a block device", req.DiskPath)
+		return errors.Wrapf(err, "disk %v is not a block device", diskPath)
 	}
 
-	size, err := getDiskDeviceSize(req.DiskPath)
+	size, err := getDiskDeviceSize(diskPath)
 	if err != nil {
 		return errors.Wrap(err, "failed to get disk size")
 	}
 	if size == 0 {
-		return fmt.Errorf("disk %v size is 0", req.DiskPath)
+		return fmt.Errorf("disk %v size is 0", diskPath)
 	}
 
-	diskID, err := getDiskID(getDiskPath(req.DiskPath))
+	diskID, err := getDiskID(getDiskPath(diskPath))
 	if err != nil {
 		return errors.Wrap(err, "failed to get disk device number")
 	}
 
-	bdevs, err := s.spdkClient.BdevAioGet("", 0)
+	bdevs, err := spdkClient.BdevAioGet("", 0)
 	if err != nil {
 		return errors.Wrap(err, "failed to get AIO bdevs")
 	}
@@ -89,14 +228,14 @@ func (s *Server) validateDiskCreateRequest(req *spdkrpc.DiskCreateRequest) error
 		}
 
 		if id == diskID {
-			return fmt.Errorf("disk %v is already used by AIO bdev %v", req.DiskPath, bdev.Name)
+			return fmt.Errorf("disk %v is already used by AIO bdev %v", diskPath, bdev.Name)
 		}
 	}
 
 	return nil
 }
 
-func (s *Server) addBlockDevice(diskName, diskPath string, blockSize uint64) (string, error) {
+func addBlockDevice(spdkClient *spdkclient.Client, diskName, diskPath string, blockSize int64) (string, error) {
 	log := logrus.WithFields(logrus.Fields{
 		"diskName":  diskName,
 		"diskPath":  diskPath,
@@ -104,7 +243,7 @@ func (s *Server) addBlockDevice(diskName, diskPath string, blockSize uint64) (st
 	})
 
 	log.Infof("Creating AIO bdev %v with block size %v", diskName, blockSize)
-	bdevName, err := s.spdkClient.BdevAioCreate(getDiskPath(diskPath), diskName, blockSize)
+	bdevName, err := spdkClient.BdevAioCreate(getDiskPath(diskPath), diskName, uint64(blockSize))
 	if err != nil {
 		resp, parseErr := parseErrorMessage(err.Error())
 		if parseErr != nil || !isFileExists(resp.Message) {
@@ -116,7 +255,7 @@ func (s *Server) addBlockDevice(diskName, diskPath string, blockSize uint64) (st
 
 	// Name of the lvstore is the same as the name of the aio bdev
 	lvstoreName := bdevName
-	lvstores, err := s.spdkClient.BdevLvolGetLvstore("", "")
+	lvstores, err := spdkClient.BdevLvolGetLvstore("", "")
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to get lvstores")
 	}
@@ -132,7 +271,7 @@ func (s *Server) addBlockDevice(diskName, diskPath string, blockSize uint64) (st
 		}
 
 		log.Infof("Renaming the existing lvstore %v to %v", lvstore.Name, lvstoreName)
-		renamed, err := s.spdkClient.BdevLvolRenameLvstore(lvstore.Name, lvstoreName)
+		renamed, err := spdkClient.BdevLvolRenameLvstore(lvstore.Name, lvstoreName)
 		if err != nil {
 			return "", errors.Wrapf(err, "failed to rename lvstore from %v to %v", lvstore.Name, lvstoreName)
 		}
@@ -142,11 +281,11 @@ func (s *Server) addBlockDevice(diskName, diskPath string, blockSize uint64) (st
 		return lvstore.UUID, nil
 	}
 
-	return s.spdkClient.BdevLvolCreateLvstore(lvstoreName, diskName, defaultClusterSize)
+	return spdkClient.BdevLvolCreateLvstore(lvstoreName, diskName, defaultClusterSize)
 }
 
-func (s *Server) lvstoreToDisk(diskPath, lvstoreName, lvstoreUUID string) (*spdkrpc.Disk, error) {
-	lvstores, err := s.spdkClient.BdevLvolGetLvstore(lvstoreName, lvstoreUUID)
+func lvstoreToDisk(spdkClient *spdkclient.Client, diskPath, lvstoreName, lvstoreUUID string) (*spdkrpc.Disk, error) {
+	lvstores, err := spdkClient.BdevLvolGetLvstore(lvstoreName, lvstoreUUID)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get lvstore with name %v and UUID %v", lvstoreName, lvstoreUUID)
 	}
