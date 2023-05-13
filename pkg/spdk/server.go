@@ -5,10 +5,8 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/ptypes/empty"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
-	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
@@ -21,11 +19,6 @@ import (
 
 const (
 	MonitorInterval = 3 * time.Second
-
-	defaultClusterSize = 4 * 1024 * 1024 // 4MB
-	defaultBlockSize   = 4096            // 4KB
-
-	hostPrefix = "/host"
 )
 
 type Server struct {
@@ -217,128 +210,16 @@ func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.Snapshot
 	return &empty.Empty{}, err
 }
 
-func (s *Server) DiskCreate(ctx context.Context, req *spdkrpc.DiskCreateRequest) (*spdkrpc.Disk, error) {
-	log := logrus.WithFields(logrus.Fields{
-		"diskName":  req.DiskName,
-		"diskPath":  req.DiskPath,
-		"blockSize": req.BlockSize,
-	})
-
-	log.Info("Creating disk")
-
-	if req.DiskName == "" || req.DiskPath == "" {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "disk name and disk path are required")
-	}
-
-	s.Lock()
-	defer s.Unlock()
-
-	if err := s.validateDiskCreateRequest(req); err != nil {
-		log.WithError(err).Error("Failed to validate disk create request")
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, errors.Wrap(err, "failed to validate disk create request").Error())
-	}
-
-	blockSize := uint64(defaultBlockSize)
-	if req.BlockSize > 0 {
-		log.Infof("Using custom block size %v", req.BlockSize)
-		blockSize = uint64(req.BlockSize)
-	}
-
-	uuid, err := s.addBlockDevice(req.DiskName, req.DiskPath, blockSize)
-	if err != nil {
-		log.WithError(err).Error("Failed to add block device")
-		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to add block device").Error())
-	}
-
-	return s.lvstoreToDisk(req.DiskPath, "", uuid)
+func (s *Server) DiskCreate(ctx context.Context, req *spdkrpc.DiskCreateRequest) (ret *spdkrpc.Disk, err error) {
+	return SvcDiskCreate(s.spdkClient, req.DiskName, req.DiskPath, req.BlockSize)
 }
 
-func (s *Server) DiskDelete(ctx context.Context, req *spdkrpc.DiskDeleteRequest) (*emptypb.Empty, error) {
-	log := logrus.WithFields(logrus.Fields{
-		"diskName": req.DiskName,
-		"diskUUID": req.DiskUuid,
-	})
-
-	log.Info("Deleting disk")
-
-	if req.DiskName == "" || req.DiskUuid == "" {
-		return &empty.Empty{}, grpcstatus.Error(grpccodes.InvalidArgument, "disk name and disk UUID are required")
-	}
-
-	s.Lock()
-	defer s.Unlock()
-
-	lvstores, err := s.spdkClient.BdevLvolGetLvstore("", req.DiskUuid)
-	if err != nil {
-		resp, parseErr := parseErrorMessage(err.Error())
-		if parseErr != nil || !isNoSuchDevice(resp.Message) {
-			return nil, errors.Wrapf(err, "failed to get lvstore with UUID %v", req.DiskUuid)
-		}
-		log.WithError(err).Errorf("Cannot find lvstore with UUID %v", req.DiskUuid)
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find lvstore with UUID %v", req.DiskUuid)
-	}
-
-	lvstore := &lvstores[0]
-
-	if lvstore.Name != req.DiskName {
-		log.Warnf("Disk name %v does not match lvstore name %v", req.DiskName, lvstore.Name)
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, "disk name %v does not match lvstore name %v", req.DiskName, lvstore.Name)
-	}
-
-	_, err = s.spdkClient.BdevAioDelete(lvstore.BaseBdev)
-	if err != nil {
-		log.WithError(err).Errorf("Failed to delete AIO bdev %v", lvstore.BaseBdev)
-		return nil, errors.Wrapf(err, "failed to delete AIO bdev %v", lvstore.BaseBdev)
-	}
-	return &empty.Empty{}, nil
+func (s *Server) DiskDelete(ctx context.Context, req *spdkrpc.DiskDeleteRequest) (ret *emptypb.Empty, err error) {
+	return SvcDiskDelete(s.spdkClient, req.DiskName, req.DiskUuid)
 }
 
-func (s *Server) DiskGet(ctx context.Context, req *spdkrpc.DiskGetRequest) (*spdkrpc.Disk, error) {
-	log := logrus.WithFields(logrus.Fields{
-		"diskName": req.DiskName,
-		"diskPath": req.DiskPath,
-	})
-
-	log.Info("Getting disk info")
-
-	if req.DiskName == "" || req.DiskPath == "" {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "disk name and disk path are required")
-	}
-
-	s.RLock()
-	defer s.RUnlock()
-
-	// Check if the disk exists
-	bdevs, err := s.spdkClient.BdevAioGet(req.DiskName, 0)
-	if err != nil {
-		resp, parseErr := parseErrorMessage(err.Error())
-		if parseErr != nil || !isNoSuchDevice(resp.Message) {
-			log.WithError(err).Errorf("Failed to get AIO bdev with name %v", req.DiskName)
-			return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err, "failed to get AIO bdev with name %v", req.DiskName).Error())
-		}
-	}
-	if len(bdevs) == 0 {
-		log.WithError(err).Errorf("Cannot find AIO bdev with name %v", req.DiskName)
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find AIO bdev with name %v", req.DiskName)
-	}
-
-	diskPath := getDiskPath(req.DiskPath)
-
-	var targetBdev *spdktypes.BdevInfo
-	for i, bdev := range bdevs {
-		if bdev.DriverSpecific != nil ||
-			bdev.DriverSpecific.Aio != nil ||
-			bdev.DriverSpecific.Aio.FileName == diskPath {
-			targetBdev = &bdevs[i]
-			break
-		}
-	}
-	if targetBdev == nil {
-		log.WithError(err).Errorf("Failed to get AIO bdev name for disk path %v", diskPath)
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, errors.Wrapf(err, "failed to get AIO bdev name for disk path %v", diskPath).Error())
-	}
-
-	return s.lvstoreToDisk(req.DiskPath, req.DiskName, "")
+func (s *Server) DiskGet(ctx context.Context, req *spdkrpc.DiskGetRequest) (ret *spdkrpc.Disk, err error) {
+	return SvcDiskGet(s.spdkClient, req.DiskName, req.DiskPath)
 }
 
 func (s *Server) VersionDetailGet(context.Context, *empty.Empty) (*spdkrpc.VersionDetailGetReply, error) {
