@@ -43,7 +43,7 @@ func DetectHTTPServerAvailability(url string, waitIntervalInSecond int, shouldAv
 		resp, err := cli.Get(url)
 		if resp != nil && resp.Body != nil {
 			if err := resp.Body.Close(); err != nil {
-				logrus.WithError(err).Error("failed to close the response body during the HTTP server detection")
+				logrus.WithError(err).Error("Failed to close the response body during the HTTP server detection")
 			}
 		}
 		if err != nil && !shouldAvailable {
@@ -62,7 +62,7 @@ func GetIPForPod() (ip string, err error) {
 	var storageIP string
 	if ip, err := GetLocalIPv4fromInterface(StorageNetworkInterface); err != nil {
 		storageIP = os.Getenv(EnvPodIP)
-		logrus.WithError(err).Debugf("failed to get IP from %v interface, fallback to use the default pod IP %v", StorageNetworkInterface, storageIP)
+		logrus.WithError(err).Debugf("Failed to get IP from %v interface, fallback to use the default pod IP %v", StorageNetworkInterface, storageIP)
 	} else {
 		storageIP = ip
 	}

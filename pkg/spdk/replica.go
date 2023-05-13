@@ -316,7 +316,7 @@ func constructSnapshotMap(replicaName string, rootSvcLvol *Lvol, bdevLvolMap map
 		}
 		for _, childName := range bdevLvolMap[curSvcLvol.Name].DriverSpecific.Lvol.Clones {
 			if bdevLvolMap[childName] == nil {
-				return nil, fmt.Errorf("cannot find child lvol %v for lvol %v during the snapshot map construction", curSvcLvol.Name)
+				return nil, fmt.Errorf("cannot find child lvol %v for lvol %v during the snapshot map construction", childName, curSvcLvol.Name)
 			}
 			tmpSvcLvol := curSvcLvol.Children[childName]
 			if tmpSvcLvol == nil {
@@ -352,7 +352,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, port int32, exposeRequir
 	// Create bdev lvol if the replica is the new one
 	if r.State == ReplicaStatePending {
 		r.log.Infof("Creating a lvol bdev for the new replica")
-		if _, err := spdkClient.BdevLvolCreate(r.LvsName, r.Name, "", r.SpecSize, "", true); err != nil {
+		if _, err := spdkClient.BdevLvolCreate(r.LvsName, r.Name, "", util.BytesToMiB(r.SpecSize), "", true); err != nil {
 			return nil, err
 		}
 		bdevLvolList, err := spdkClient.BdevLvolGet(r.Alias, 0)
