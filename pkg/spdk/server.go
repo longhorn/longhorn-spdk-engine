@@ -1,7 +1,6 @@
 package spdk
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -100,9 +99,12 @@ func (s *Server) monitoringReplicas() {
 
 func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRequest) (ret *spdkrpc.Replica, err error) {
 	s.Lock()
-	if s.replicaMap[req.Name] == nil {
-		s.replicaMap[req.Name] = NewReplica(req.Name, req.LvsName, req.LvsUuid, req.SpecSize)
+	if _, ok := s.replicaMap[req.Name]; ok {
+		s.Unlock()
+		return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "replica %v already exists", req.Name)
 	}
+
+	s.replicaMap[req.Name] = NewReplica(req.Name, req.LvsName, req.LvsUuid, req.SpecSize)
 	r := s.replicaMap[req.Name]
 	s.Unlock()
 
@@ -135,7 +137,7 @@ func (s *Server) ReplicaGet(ctx context.Context, req *spdkrpc.ReplicaGetRequest)
 	s.RUnlock()
 
 	if r == nil {
-		return nil, fmt.Errorf("replica %s is not found during get", req.Name)
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %v", req.Name)
 	}
 
 	return r.Get()
@@ -157,7 +159,7 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.Snapsho
 	s.RUnlock()
 
 	if r == nil {
-		return nil, fmt.Errorf("replica %s is not found during snapshot create", req.Name)
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot create", req.Name)
 	}
 
 	return r.SnapshotCreate(s.spdkClient, req.Name)
@@ -169,7 +171,7 @@ func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.Snapsho
 	s.RUnlock()
 
 	if r == nil {
-		return nil, fmt.Errorf("replica %s is not found during snapshot delete", req.Name)
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot delete", req.Name)
 	}
 
 	_, err = r.SnapshotDelete(s.spdkClient, req.Name)
