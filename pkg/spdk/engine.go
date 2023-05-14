@@ -55,7 +55,7 @@ func SvcEngineCreate(spdkClient *spdkclient.Client, name, frontend string, repli
 		return nil, err
 	}
 
-	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(name), name, podIP, string(port)); err != nil {
+	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(name), name, podIP, strconv.Itoa(int(port))); err != nil {
 		return nil, err
 	}
 
@@ -67,7 +67,7 @@ func SvcEngineCreate(spdkClient *spdkclient.Client, name, frontend string, repli
 	}
 
 	if frontend == types.FrontendSPDKTCPBlockdev {
-		if err := initiator.Start(podIP, string(port)); err != nil {
+		if err := initiator.Start(podIP, strconv.Itoa(int(port))); err != nil {
 			return nil, err
 		}
 	}
