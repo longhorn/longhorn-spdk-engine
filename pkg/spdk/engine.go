@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
@@ -163,7 +164,8 @@ func SvcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engi
 		return nil, fmt.Errorf("cannot find the Nvmf subsystem for engine %s", name)
 	}
 	for _, listenAddr := range subsystem.ListenAddresses {
-		if listenAddr.Adrfam != spdktypes.NvmeAddressFamilyIPv4 || listenAddr.Trtype != spdktypes.NvmeTransportTypeTCP {
+		if !strings.EqualFold(string(listenAddr.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
+			!strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
 			continue
 		}
 		port, err := strconv.Atoi(listenAddr.Trsvcid)
@@ -212,7 +214,8 @@ func SvcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engi
 			return nil, fmt.Errorf("found a remote base bdev %v that does not contain nvme info", bdevNvme.Name)
 		}
 		nvmeInfo := (*bdevNvme.DriverSpecific.Nvme)[0]
-		if nvmeInfo.Trid.Adrfam != spdktypes.NvmeAddressFamilyIPv4 || nvmeInfo.Trid.Trtype != spdktypes.NvmeTransportTypeTCP {
+		if !strings.EqualFold(string(nvmeInfo.Trid.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
+			!strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
 			return nil, fmt.Errorf("found a remote base bdev %v that contains invalid address family %s and transport type %s", bdevNvme.Name, nvmeInfo.Trid.Adrfam, nvmeInfo.Trid.Trtype)
 		}
 		replicaName := helperutil.GetNvmeControllerNameFromNamespaceName(bdevNvme.Name)
