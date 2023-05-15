@@ -1,12 +1,16 @@
 package spdk
 
 import (
+	"fmt"
+	"net"
 	"sync"
 	"time"
 
 	"github.com/golang/protobuf/ptypes/empty"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
+	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
@@ -177,18 +181,23 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 		return nil, err
 	}
 
-	return SvcEngineCreate(s.spdkClient, req.Name, req.Frontend, req.ReplicaAddressMap, portStart)
+	bdevAddressMap, err := s.replicaAddressMapToBdevAddressMap(portStart, req.ReplicaAddressMap)
+	if err != nil {
+		return nil, err
+	}
+
+	return svcEngineCreate(s.spdkClient, req.Name, req.Frontend, bdevAddressMap, portStart)
 }
 
 func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequest) (ret *empty.Empty, err error) {
-	if err = SvcEngineDelete(s.spdkClient, req.Name); err != nil {
+	if err = svcEngineDelete(s.spdkClient, req.Name); err != nil {
 		return nil, err
 	}
 	return &empty.Empty{}, nil
 }
 
 func (s *Server) EngineGet(ctx context.Context, req *spdkrpc.EngineGetRequest) (ret *spdkrpc.Engine, err error) {
-	return SvcEngineGet(s.spdkClient, req.Name)
+	return svcEngineGet(s.spdkClient, req.Name)
 }
 
 func (s *Server) EngineList(ctx context.Context, req *empty.Empty) (*spdkrpc.EngineListResponse, error) {
@@ -202,24 +211,53 @@ func (s *Server) EngineWatch(req *empty.Empty, srv spdkrpc.SPDKService_EngineWat
 }
 
 func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Engine, err error) {
-	return SvcEngineSnapshotCreate(s.spdkClient, req.Name, req.SnapshotName)
+	return svcEngineSnapshotCreate(s.spdkClient, req.Name, req.SnapshotName)
 }
 
 func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *empty.Empty, err error) {
-	_, err = SvcEngineSnapshotDelete(s.spdkClient, req.Name, req.SnapshotName)
+	_, err = svcEngineSnapshotDelete(s.spdkClient, req.Name, req.SnapshotName)
 	return &empty.Empty{}, err
 }
 
 func (s *Server) DiskCreate(ctx context.Context, req *spdkrpc.DiskCreateRequest) (ret *spdkrpc.Disk, err error) {
-	return SvcDiskCreate(s.spdkClient, req.DiskName, req.DiskPath, req.BlockSize)
+	return svcDiskCreate(s.spdkClient, req.DiskName, req.DiskPath, req.BlockSize)
+}
+
+func (s *Server) replicaAddressMapToBdevAddressMap(port int32, replicaAddressMap map[string]string) (map[string]string, error) {
+	podIP, err := util.GetIPForPod()
+	if err != nil {
+		return nil, err
+	}
+
+	bdevAddressMap := make(map[string]string)
+	for replicaName, replicaAddr := range replicaAddressMap {
+		replicaIP, _, err := net.SplitHostPort(replicaAddr)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid replica %s address %s in engine creation", replicaName, replicaAddr)
+		}
+		if replicaIP == podIP {
+			s.RLock()
+			r, ok := s.replicaMap[replicaName]
+			if !ok {
+				s.RUnlock()
+				return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s in engine creation", replicaName)
+			}
+			bdevName := fmt.Sprintf("%s/%s", r.LvsName, replicaName)
+			bdevAddressMap[bdevName] = replicaAddr
+			s.RUnlock()
+			continue
+		}
+		bdevAddressMap[replicaName] = replicaAddr
+	}
+	return bdevAddressMap, nil
 }
 
 func (s *Server) DiskDelete(ctx context.Context, req *spdkrpc.DiskDeleteRequest) (ret *emptypb.Empty, err error) {
-	return SvcDiskDelete(s.spdkClient, req.DiskName, req.DiskUuid)
+	return svcDiskDelete(s.spdkClient, req.DiskName, req.DiskUuid)
 }
 
 func (s *Server) DiskGet(ctx context.Context, req *spdkrpc.DiskGetRequest) (ret *spdkrpc.Disk, err error) {
-	return SvcDiskGet(s.spdkClient, req.DiskName, req.DiskPath)
+	return svcDiskGet(s.spdkClient, req.DiskName, req.DiskPath)
 }
 
 func (s *Server) VersionDetailGet(context.Context, *empty.Empty) (*spdkrpc.VersionDetailGetReply, error) {
