@@ -154,12 +154,19 @@ func (s *Server) ReplicaGet(ctx context.Context, req *spdkrpc.ReplicaGetRequest)
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %v", req.Name)
 	}
 
-	return r.Get()
+	return r.Get(), nil
 }
 
 func (s *Server) ReplicaList(ctx context.Context, req *empty.Empty) (*spdkrpc.ReplicaListResponse, error) {
-	// TODO: Implement this
-	return &spdkrpc.ReplicaListResponse{}, nil
+	res := map[string]*spdkrpc.Replica{}
+
+	s.RLock()
+	for replicaName, r := range s.replicaMap {
+		res[replicaName] = r.Get()
+	}
+	s.RUnlock()
+
+	return &spdkrpc.ReplicaListResponse{Replicas: res}, nil
 }
 
 func (s *Server) ReplicaWatch(req *empty.Empty, srv spdkrpc.SPDKService_ReplicaWatchServer) error {
