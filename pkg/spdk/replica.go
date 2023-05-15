@@ -483,10 +483,10 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 	return nil
 }
 
-func (r *Replica) Get() (pReplica *spdkrpc.Replica, err error) {
+func (r *Replica) Get() (pReplica *spdkrpc.Replica) {
 	r.RLock()
 	defer r.RUnlock()
-	return ServiceReplicaToProtoReplica(r), nil
+	return ServiceReplicaToProtoReplica(r)
 }
 
 func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string) (pReplica *spdkrpc.Replica, err error) {
