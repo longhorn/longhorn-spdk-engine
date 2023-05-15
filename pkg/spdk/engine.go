@@ -205,8 +205,9 @@ func svcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engi
 		if !exists {
 			// This replica must be a local lvol
 			replicaName := spdktypes.GetLvolNameFromAlias(baseBdev.Name)
-			res.ReplicaAddressMap[replicaName] = ""
-			res.ReplicaModeMap[replicaName] = spdkrpc.ReplicaMode_RW
+			address := fmt.Sprintf("%s:0", podIP)
+			res.ReplicaAddressMap[replicaName] = address
+			res.ReplicaModeMap[address] = spdkrpc.ReplicaMode_RW
 			continue
 		}
 
@@ -219,8 +220,9 @@ func svcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engi
 			return nil, fmt.Errorf("found a remote base bdev %v that contains invalid address family %s and transport type %s", bdevNvme.Name, nvmeInfo.Trid.Adrfam, nvmeInfo.Trid.Trtype)
 		}
 		replicaName := helperutil.GetNvmeControllerNameFromNamespaceName(bdevNvme.Name)
-		res.ReplicaAddressMap[replicaName] = fmt.Sprintf("%s:%s", nvmeInfo.Trid.Traddr, nvmeInfo.Trid.Trsvcid)
-		res.ReplicaModeMap[replicaName] = spdkrpc.ReplicaMode_RW
+		address := fmt.Sprintf("%s:%s", nvmeInfo.Trid.Traddr, nvmeInfo.Trid.Trsvcid)
+		res.ReplicaAddressMap[replicaName] = address
+		res.ReplicaModeMap[address] = spdkrpc.ReplicaMode_RW
 	}
 
 	volumeName := util.GetVolumeNameFromEngineName(name)
