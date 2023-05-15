@@ -112,6 +112,13 @@ func (s *Server) verifyReplicas() error {
 }
 
 func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRequest) (ret *spdkrpc.Replica, err error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+	if req.LvsName == "" || req.LvsUuid == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "lvs name and lvs UUID are required")
+	}
+
 	s.Lock()
 	defer s.Unlock()
 
@@ -175,6 +182,10 @@ func (s *Server) ReplicaWatch(req *empty.Empty, srv spdkrpc.SPDKService_ReplicaW
 }
 
 func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Replica, err error) {
+	if req.Name == "" || req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and snapshot name are required")
+	}
+
 	s.Lock()
 	defer s.Unlock()
 
@@ -188,6 +199,10 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.Snapsho
 }
 
 func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *empty.Empty, err error) {
+	if req.Name == "" || req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and snapshot name are required")
+	}
+
 	s.Lock()
 	defer s.Unlock()
 
