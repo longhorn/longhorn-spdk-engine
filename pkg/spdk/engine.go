@@ -20,7 +20,7 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
 
-func SvcEngineCreate(spdkClient *spdkclient.Client, name, frontend string, replicaAddressMap map[string]string, port int32) (ret *spdkrpc.Engine, err error) {
+func svcEngineCreate(spdkClient *spdkclient.Client, name, frontend string, bdevAddressMap map[string]string, port int32) (ret *spdkrpc.Engine, err error) {
 	if frontend != types.FrontendSPDKTCPBlockdev && frontend != types.FrontendSPDKTCPNvmf {
 		return nil, fmt.Errorf("invalid frontend %s", frontend)
 	}
@@ -33,21 +33,21 @@ func SvcEngineCreate(spdkClient *spdkclient.Client, name, frontend string, repli
 	// TODO: May need to do cleanup when there is an error
 
 	replicaBdevList := []string{}
-	for replicaName, replicaAddr := range replicaAddressMap {
-		replicaIP, replicaPort, err := net.SplitHostPort(replicaAddr)
+	for bdevName, addr := range bdevAddressMap {
+		replicaIP, replicaPort, err := net.SplitHostPort(addr)
 		if err != nil {
-			return nil, errors.Wrapf(err, "invalid replica %s address %s in engine %s creation", replicaName, replicaAddr, name)
+			return nil, errors.Wrapf(err, "invalid bdev %s address %s in engine %s creation", bdevName, addr, name)
 		}
 		if replicaIP == podIP {
-			replicaBdevList = append(replicaBdevList, replicaName)
+			replicaBdevList = append(replicaBdevList, bdevName)
 			continue
 		}
-		nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(replicaName, helpertypes.GetNQN(replicaName), replicaIP, replicaPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4)
+		nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(bdevName, helpertypes.GetNQN(bdevName), replicaIP, replicaPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4)
 		if err != nil {
 			return nil, err
 		}
 		if len(nvmeBdevNameList) != 1 {
-			return nil, fmt.Errorf("attaching replica %s with address %s as a NVMe bdev does not get one result: %+v", replicaName, replicaAddr, nvmeBdevNameList)
+			return nil, fmt.Errorf("attaching bdev %s with address %s as a NVMe bdev does not get one result: %+v", bdevName, addr, nvmeBdevNameList)
 		}
 		replicaBdevList = append(replicaBdevList, nvmeBdevNameList[0])
 	}
@@ -73,10 +73,10 @@ func SvcEngineCreate(spdkClient *spdkclient.Client, name, frontend string, repli
 		}
 	}
 
-	return SvcEngineGet(spdkClient, name)
+	return svcEngineGet(spdkClient, name)
 }
 
-func SvcEngineDelete(spdkClient *spdkclient.Client, name string) (err error) {
+func svcEngineDelete(spdkClient *spdkclient.Client, name string) (err error) {
 	nqn := helpertypes.GetNQN(name)
 	volumeName := util.GetVolumeNameFromEngineName(name)
 
@@ -135,7 +135,7 @@ func SvcEngineDelete(spdkClient *spdkclient.Client, name string) (err error) {
 	return nil
 }
 
-func SvcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engine, err error) {
+func svcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engine, err error) {
 	res = &spdkrpc.Engine{
 		Name:              name,
 		ReplicaAddressMap: map[string]string{},
@@ -243,10 +243,10 @@ func SvcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engi
 	return res, nil
 }
 
-func SvcEngineSnapshotCreate(spdkClient *spdkclient.Client, name, snapshotName string) (res *spdkrpc.Engine, err error) {
+func svcEngineSnapshotCreate(spdkClient *spdkclient.Client, name, snapshotName string) (res *spdkrpc.Engine, err error) {
 	return nil, fmt.Errorf("unimplemented")
 }
 
-func SvcEngineSnapshotDelete(spdkClient *spdkclient.Client, name, snapshotName string) (res *empty.Empty, err error) {
+func svcEngineSnapshotDelete(spdkClient *spdkclient.Client, name, snapshotName string) (res *empty.Empty, err error) {
 	return nil, fmt.Errorf("unimplemented")
 }

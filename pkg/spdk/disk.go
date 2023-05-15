@@ -30,7 +30,7 @@ const (
 	hostPrefix = "/host"
 )
 
-func SvcDiskCreate(spdkClient *spdkclient.Client, diskName, diskPath string, blockSize int64) (ret *spdkrpc.Disk, err error) {
+func svcDiskCreate(spdkClient *spdkclient.Client, diskName, diskPath string, blockSize int64) (ret *spdkrpc.Disk, err error) {
 	log := logrus.WithFields(logrus.Fields{
 		"diskName":  diskName,
 		"diskPath":  diskPath,
@@ -67,7 +67,7 @@ func SvcDiskCreate(spdkClient *spdkclient.Client, diskName, diskPath string, blo
 	return lvstoreToDisk(spdkClient, diskPath, "", uuid)
 }
 
-func SvcDiskDelete(spdkClient *spdkclient.Client, diskName, diskUUID string) (ret *emptypb.Empty, err error) {
+func svcDiskDelete(spdkClient *spdkclient.Client, diskName, diskUUID string) (ret *emptypb.Empty, err error) {
 	log := logrus.WithFields(logrus.Fields{
 		"diskName": diskName,
 		"diskUUID": diskUUID,
@@ -110,7 +110,7 @@ func SvcDiskDelete(spdkClient *spdkclient.Client, diskName, diskUUID string) (re
 	return &empty.Empty{}, nil
 }
 
-func SvcDiskGet(spdkClient *spdkclient.Client, diskName, diskPath string) (ret *spdkrpc.Disk, err error) {
+func svcDiskGet(spdkClient *spdkclient.Client, diskName, diskPath string) (ret *spdkrpc.Disk, err error) {
 	log := logrus.WithFields(logrus.Fields{
 		"diskName": diskName,
 		"diskPath": diskPath,
