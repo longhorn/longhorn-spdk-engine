@@ -130,7 +130,11 @@ func (s *Server) ReplicaDelete(ctx context.Context, req *spdkrpc.ReplicaDeleteRe
 	defer s.Unlock()
 
 	r := s.replicaMap[req.Name]
-	delete(s.replicaMap, req.Name)
+	defer func() {
+		if err == nil && req.CleanupRequired {
+			delete(s.replicaMap, req.Name)
+		}
+	}()
 
 	if r != nil {
 		if err := r.Delete(s.spdkClient, req.CleanupRequired, s.portAllocator); err != nil {
