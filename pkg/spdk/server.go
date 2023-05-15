@@ -68,35 +68,9 @@ func (s *Server) monitoringReplicas() {
 			logrus.Info("SPDK Server: stopped monitoring replicas due to the context done")
 			done = true
 		case <-ticker.C:
-			bdevLvolList, err := s.spdkClient.BdevLvolGet("", 0)
-			if err != nil {
-				logrus.Errorf("SPDK Server: failed to get lvol bdevs for replica cache update, will retry later: %v", err)
-				continue
+			if err := s.verifyReplicas(); err != nil {
+				logrus.WithError(err).Errorf("SPDK Server: failed to verify and update replica cache, will retry later")
 			}
-			subsystemList, err := s.spdkClient.NvmfGetSubsystems("", "")
-			if err != nil {
-				logrus.Errorf("SPDK Server: failed to get nvmf subsystems for replica cache update, will retry later: %v", err)
-				continue
-			}
-			bdevLvolMap := map[string]*spdktypes.BdevInfo{}
-			for idx := range bdevLvolList {
-				bdevLvol := &bdevLvolList[idx]
-				if len(bdevLvol.Aliases) == 0 {
-					continue
-				}
-				bdevLvolMap[spdktypes.GetLvolNameFromAlias(bdevLvol.Aliases[0])] = bdevLvol
-			}
-			subsystemMap := map[string]*spdktypes.NvmfSubsystem{}
-			for idx := range subsystemList {
-				subsystem := &subsystemList[idx]
-				subsystemMap[subsystem.Nqn] = subsystem
-			}
-
-			s.Lock()
-			for _, r := range s.replicaMap {
-				r.ValidateAndUpdate(s.spdkClient, bdevLvolMap, subsystemMap)
-			}
-			s.Unlock()
 		}
 		if done {
 			break
@@ -104,25 +78,59 @@ func (s *Server) monitoringReplicas() {
 	}
 }
 
+func (s *Server) verifyReplicas() error {
+	s.Lock()
+	defer s.Unlock()
+
+	bdevLvolList, err := s.spdkClient.BdevLvolGet("", 0)
+	if err != nil {
+		return err
+	}
+	subsystemList, err := s.spdkClient.NvmfGetSubsystems("", "")
+	if err != nil {
+		return err
+	}
+	bdevLvolMap := map[string]*spdktypes.BdevInfo{}
+	for idx := range bdevLvolList {
+		bdevLvol := &bdevLvolList[idx]
+		if len(bdevLvol.Aliases) == 0 {
+			continue
+		}
+		bdevLvolMap[spdktypes.GetLvolNameFromAlias(bdevLvol.Aliases[0])] = bdevLvol
+	}
+	subsystemMap := map[string]*spdktypes.NvmfSubsystem{}
+	for idx := range subsystemList {
+		subsystem := &subsystemList[idx]
+		subsystemMap[subsystem.Nqn] = subsystem
+	}
+
+	for _, r := range s.replicaMap {
+		r.ValidateAndUpdate(s.spdkClient, bdevLvolMap, subsystemMap)
+	}
+
+	return nil
+}
+
 func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRequest) (ret *spdkrpc.Replica, err error) {
 	s.Lock()
+	defer s.Unlock()
+
 	if _, ok := s.replicaMap[req.Name]; ok {
-		s.Unlock()
 		return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "replica %v already exists", req.Name)
 	}
 
 	s.replicaMap[req.Name] = NewReplica(req.Name, req.LvsName, req.LvsUuid, req.SpecSize)
 	r := s.replicaMap[req.Name]
-	s.Unlock()
 
 	return r.Create(s.spdkClient, req.ExposeRequired, s.portAllocator)
 }
 
 func (s *Server) ReplicaDelete(ctx context.Context, req *spdkrpc.ReplicaDeleteRequest) (ret *empty.Empty, err error) {
-	s.RLock()
+	s.Lock()
+	defer s.Unlock()
+
 	r := s.replicaMap[req.Name]
 	delete(s.replicaMap, req.Name)
-	s.RUnlock()
 
 	if r != nil {
 		if err := r.Delete(s.spdkClient, req.CleanupRequired, s.portAllocator); err != nil {
@@ -156,9 +164,10 @@ func (s *Server) ReplicaWatch(req *empty.Empty, srv spdkrpc.SPDKService_ReplicaW
 }
 
 func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Replica, err error) {
-	s.RLock()
+	s.Lock()
+	defer s.Unlock()
+
 	r := s.replicaMap[req.Name]
-	s.RUnlock()
 
 	if r == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot create", req.Name)
@@ -168,9 +177,10 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.Snapsho
 }
 
 func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *empty.Empty, err error) {
-	s.RLock()
+	s.Lock()
+	defer s.Unlock()
+
 	r := s.replicaMap[req.Name]
-	s.RUnlock()
 
 	if r == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot delete", req.Name)
