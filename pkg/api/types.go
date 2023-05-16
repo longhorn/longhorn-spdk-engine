@@ -59,26 +59,28 @@ func ProtoReplicaToReplica(r *spdkrpc.Replica) *Replica {
 
 type Engine struct {
 	Name              string                `json:"name"`
-	UUID              string                `json:"uuid"`
+	VolumeName        string                `json:"volumeName"`
 	SpecSize          uint64                `json:"spec_size"`
 	ActualSize        uint64                `json:"actual_size"`
 	IP                string                `json:"ip"`
 	Port              int32                 `json:"port"`
 	ReplicaAddressMap map[string]string     `json:"replica_address_map"`
 	ReplicaModeMap    map[string]types.Mode `json:"replica_mode_map"`
+	Frontend          string                `json:"frontend"`
 	Endpoint          string                `json:"endpoint"`
 }
 
 func ProtoEngineToEngine(e *spdkrpc.Engine) *Engine {
 	res := &Engine{
 		Name:              e.Name,
-		UUID:              e.Uuid,
+		VolumeName:        e.VolumeName,
 		SpecSize:          e.SpecSize,
 		ActualSize:        e.ActualSize,
 		IP:                e.Ip,
 		Port:              e.Port,
 		ReplicaAddressMap: e.ReplicaAddressMap,
 		ReplicaModeMap:    map[string]types.Mode{},
+		Frontend:          e.Frontend,
 		Endpoint:          e.Endpoint,
 	}
 	for rName, mode := range e.ReplicaModeMap {

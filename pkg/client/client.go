@@ -141,8 +141,8 @@ func (c *SPDKClient) ReplicaWatch(ctx context.Context) (*api.ReplicaStream, erro
 	return nil, nil
 }
 
-func (c *SPDKClient) EngineCreate(name, frontend string, specSize uint64, replicaAddressMap map[string]string) (*api.Engine, error) {
-	if name == "" || len(replicaAddressMap) == 0 {
+func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string) (*api.Engine, error) {
+	if name == "" || volumeName == "" || frontend == "" || len(replicaAddressMap) == 0 {
 		return nil, fmt.Errorf("failed to start SPDK engine: missing required parameter")
 	}
 
@@ -152,6 +152,7 @@ func (c *SPDKClient) EngineCreate(name, frontend string, specSize uint64, replic
 
 	resp, err := client.EngineCreate(ctx, &spdkrpc.EngineCreateRequest{
 		Name:              name,
+		VolumeName:        volumeName,
 		SpecSize:          specSize,
 		ReplicaAddressMap: replicaAddressMap,
 		Frontend:          frontend,
@@ -163,7 +164,7 @@ func (c *SPDKClient) EngineCreate(name, frontend string, specSize uint64, replic
 	return api.ProtoEngineToEngine(resp), nil
 }
 
-func (c *SPDKClient) EngineDelete(name string, cleanupRequired bool) error {
+func (c *SPDKClient) EngineDelete(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to delete SPDK engine: missing required parameter name")
 	}
