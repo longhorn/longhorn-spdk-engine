@@ -19,12 +19,15 @@ const (
 	RetryCounts   = 5
 	RetryInterval = 3 * time.Second
 
+	waitDeviceTimeout = 30 * time.Second
+
 	HostProc = "/host/proc"
 )
 
 type Initiator struct {
 	Name               string
 	SubsystemNQN       string
+	UUID               string
 	TransportAddress   string
 	TransportServiceID string
 
@@ -134,7 +137,13 @@ func (i *Initiator) Start(transportAddress, transportServiceID string) (err erro
 		return fmt.Errorf("failed to start NVMe initiator %s within %d * %vsec retrys", i.Name, RetryCounts, RetryInterval.Seconds())
 	}
 
-	if err := i.loadNVMeDeviceInfoWithoutLock(); err != nil {
+	for t := 0; t < int(waitDeviceTimeout.Seconds()); t++ {
+		if err = i.loadNVMeDeviceInfoWithoutLock(); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil {
 		return errors.Wrapf(err, "failed to load device info after starting NVMe initiator %s", i.Name)
 	}
 
@@ -234,15 +243,13 @@ func (i *Initiator) loadNVMeDeviceInfoWithoutLock() error {
 		"transportServiceID": i.TransportServiceID,
 	})
 
-	devices, err := util.GetKnownDevices(i.executor)
+	devicePath := fmt.Sprintf("/dev/%s", i.NamespaceName)
+	dev, err := util.DetectDevice(devicePath, i.executor)
 	if err != nil {
-		return err
-	}
-	i.dev = devices[i.NamespaceName]
-	if i.dev == nil {
 		return fmt.Errorf("cannot find the device for NVMe initiator %s with namespace name %s", i.Name, i.NamespaceName)
 	}
 
+	i.dev = dev
 	return nil
 }
 

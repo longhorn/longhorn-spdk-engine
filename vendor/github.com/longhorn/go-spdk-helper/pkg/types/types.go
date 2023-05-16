@@ -10,7 +10,8 @@ const (
 
 	MiB = 1 << 20
 
-	FrontendSPDKTCPBlockDev = "spdk-tcp-blockdev"
+	FrontendSPDKTCPNvmf     = "spdk-tcp-nvmf"
+	FrontendSPDKTCPBlockdev = "spdk-tcp-blockdev"
 )
 
 func GetNQN(name string) string {
