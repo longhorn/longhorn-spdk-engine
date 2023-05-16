@@ -55,9 +55,13 @@ func (c *Client) BdevAioDelete(name string) (deleted bool, err error) {
 	return deleted, json.Unmarshal(cmdOutput, &deleted)
 }
 
-// BdevAioGet will list all aio bdevs if a name is not specified.
+// BdevAioGet will list all AIO bdevs if a name is not specified.
 //
-//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the aio exists or not.
+//	"name": Optional. Name of an AIO bdev.
+//          For an AIO bdev, there is no alias nor UUID.
+//		 	If this is not specified, the function will list all AIO bdevs.
+//
+//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the AIO bdev exists or not.
 func (c *Client) BdevAioGet(name string, timeout uint64) (bdevAioInfoList []spdktypes.BdevInfo, err error) {
 	req := spdktypes.BdevGetBdevsRequest{
 		Name:    name,
@@ -194,12 +198,13 @@ func (c *Client) BdevLvolDelete(name string) (deleted bool, err error) {
 	return deleted, json.Unmarshal(cmdOutput, &deleted)
 }
 
-// BdevLvolGet gets information about bdev lvols.
+// BdevLvolGet gets information about lvol bdevs if a name is not specified.
 //
-//	"name": Optional. UUID or alias of the logical volume. The alias of a lvol is <LVSTORE NAME>/<LVOL NAME>.
-//		 	If this is not specified, the function will list all block devices.
+//	"name": Optional. UUID or alias of a logical volume (lvol) bdev.
+//         	The alias of a lvol bdev is <LVSTORE NAME>/<LVOL NAME>. And the name of a lvol bdev is UUID.
+//		 	If this is not specified, the function will list all lvol bdevs.
 //
-//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the lvol exists or not.
+//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the lvol bdev exists or not.
 func (c *Client) BdevLvolGet(name string, timeout uint64) (bdevLvolInfoList []spdktypes.BdevInfo, err error) {
 	req := spdktypes.BdevGetBdevsRequest{
 		Name:    name,
@@ -343,12 +348,13 @@ func (c *Client) BdevRaidDelete(name string) (deleted bool, err error) {
 	return deleted, json.Unmarshal(cmdOutput, &deleted)
 }
 
-// BdevRaidGet gets information about raid bdevs.
+// BdevRaidGet gets information about RAID bdevs if a name is not specified.
 //
-//	"name": Optional. UUID or name of the raid.
-//		 	If this is not specified, the function will list all raid bdevs.
+//	"name": Optional. Name of a RAID bdev.
+//          For a RAID bdev, there is no alias nor UUID.
+//		 	If this is not specified, the function will list all RAID bdevs.
 //
-//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the raid exists or not.
+//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the RAID bdev exists or not.
 func (c *Client) BdevRaidGet(name string, timeout uint64) (bdevRaidInfoList []spdktypes.BdevInfo, err error) {
 	req := spdktypes.BdevGetBdevsRequest{
 		Name:    name,
@@ -463,13 +469,13 @@ func (c *Client) BdevNvmeGetControllers(name string) (controllerInfoList []spdkt
 	return controllerInfoList, json.Unmarshal(cmdOutput, &controllerInfoList)
 }
 
-// BdevNvmeGet gets information about bdev NVMe of attached controllers.
+// BdevNvmeGet gets information about NVMe bdevs if a name is not specified.
 //
-//	"name": Optional. UUID or name of the bdev NVMe. The alias of a bdev NVMe is UUID while <LVSTORE NAME>/<LVOL NAME>.
-//		 	The name is `<Nvme Controller Name>n1`.
-//		 	If this is not specified, the function will list all bdev NVMe.
+//	"name": Optional. UUID or name of a NVMe bdev.
+//	        For a NVMe bdev, the name is `<NVMe namespace name>`, which is typically `<NVMe Controller Name>n1`. And the only alias is UUID.
+//		 	If this is not specified, the function will list all NVMe bdevs.
 //
-//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the nvme exists or not.
+//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the NVMe bdev exists or not.
 func (c *Client) BdevNvmeGet(name string, timeout uint64) (bdevNvmeInfoList []spdktypes.BdevInfo, err error) {
 	req := spdktypes.BdevGetBdevsRequest{
 		Name:    name,
