@@ -359,3 +359,28 @@ func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, name, snapshotNam
 func (e *Engine) SnapshotDelete(spdkClient *spdkclient.Client, name, snapshotName string) (res *empty.Empty, err error) {
 	return nil, fmt.Errorf("unimplemented")
 }
+
+func ServiceEngineToProtoEngine(e *Engine) *spdkrpc.Engine {
+	replicaAddressMap := map[string]string{}
+	for replicaName, address := range e.ReplicaAddressMap {
+		replicaAddressMap[replicaName] = address
+	}
+
+	replicaModeMap := map[string]spdkrpc.ReplicaMode{}
+	for replicaName, replicaMode := range e.ReplicaModeMap {
+		replicaModeMap[replicaName] = spdkrpc.ReplicaModeToGRPCReplicaMode(replicaMode)
+	}
+
+	return &spdkrpc.Engine{
+		Name:              e.Name,
+		VolumeName:        e.VolumeName,
+		SpecSize:          e.SpecSize,
+		ActualSize:        e.ActualSize,
+		Ip:                e.IP,
+		Port:              e.Port,
+		ReplicaAddressMap: replicaAddressMap,
+		ReplicaModeMap:    replicaModeMap,
+		Frontend:          e.Frontend,
+		Endpoint:          e.Endpoint,
+	}
+}

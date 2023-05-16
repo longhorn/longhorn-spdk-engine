@@ -126,19 +126,25 @@ func (c *SPDKClient) ReplicaList() (map[string]*api.Replica, error) {
 
 	resp, err := client.ReplicaList(ctx, &empty.Empty{})
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to list SPDK replicas")
+		return nil, err
 	}
 
-	res := map[string]*api.Replica{}
-	for replicaName, r := range resp.Replicas {
-		res[replicaName] = api.ProtoReplicaToReplica(r)
+	replicas := map[string]*api.Replica{}
+	for _, replica := range resp.Replicas {
+		replicas[replica.Name] = api.ProtoReplicaToReplica(replica)
 	}
-	return res, nil
+
+	return replicas, nil
 }
 
 func (c *SPDKClient) ReplicaWatch(ctx context.Context) (*api.ReplicaStream, error) {
-	// TODO: implement
-	return nil, nil
+	client := c.getSPDKServiceClient()
+	stream, err := client.ReplicaWatch(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open replica update stream")
+	}
+
+	return api.NewReplicaStream(stream), nil
 }
 
 func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string) (*api.Engine, error) {
@@ -204,19 +210,25 @@ func (c *SPDKClient) EngineList() (map[string]*api.Engine, error) {
 
 	resp, err := client.EngineList(ctx, &empty.Empty{})
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to list SPDK engines")
+		return nil, err
 	}
 
-	res := map[string]*api.Engine{}
-	for engineName, e := range resp.Engines {
-		res[engineName] = api.ProtoEngineToEngine(e)
+	engines := map[string]*api.Engine{}
+	for _, engine := range resp.Engines {
+		engines[engine.Name] = api.ProtoEngineToEngine(engine)
 	}
-	return res, nil
+
+	return engines, nil
 }
 
 func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error) {
-	// TODO: implement
-	return nil, nil
+	client := c.getSPDKServiceClient()
+	stream, err := client.EngineWatch(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open engine update stream")
+	}
+
+	return api.NewEngineStream(stream), nil
 }
 
 func (c *SPDKClient) DiskCreate(diskName, diskPath string, blockSize int64) (*spdkrpc.Disk, error) {

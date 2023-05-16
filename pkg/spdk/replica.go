@@ -296,7 +296,7 @@ func compareSvcLvols(prev, cur *Lvol, checkChildren, checkActualSize bool) error
 
 func (r *Replica) validateReplicaInfoWithoutLock(headBdevLvol *spdktypes.BdevInfo) (err error) {
 	if headBdevLvol == nil {
-		return fmt.Errorf("found nil head bdev lvol for replica %s", r.Name)
+		return fmt.Errorf("find nil head bdev lvol for replica %s", r.Name)
 	}
 	if headBdevLvol.DriverSpecific.Lvol.Snapshot {
 		return fmt.Errorf("found the head bdev lvol is a snapshot lvol for replica %s", r.Name)
@@ -320,19 +320,19 @@ func constructActiveChain(replicaName string, bdevLvolMap map[string]*spdktypes.
 
 	headBdevLvol := bdevLvolMap[replicaName]
 	if headBdevLvol == nil {
-		return nil, fmt.Errorf("found nil head bdev lvol for replica %s", replicaName)
+		return nil, fmt.Errorf("cannot find the head bdev lvol from the bdev lvol map for replica %s", replicaName)
 	}
 	headSvcLvol := BdevLvolInfoToServiceLvol(headBdevLvol)
 	// TODO: Considering the clone, this function or `constructSnapshotMap` may need to construct the children map for the head
 
-	for childSvcLvol, curBdevLvol := headSvcLvol, bdevLvolMap[headBdevLvol.DriverSpecific.Lvol.BaseSnapshot]; curBdevLvol != nil; {
-		curSvcLvol := BdevLvolInfoToServiceLvol(curBdevLvol)
-		curSvcLvol.Children[childSvcLvol.Name] = childSvcLvol
-		childSvcLvol.Parent = curSvcLvol.Name
-		newChain = append(newChain, curSvcLvol)
+	for prevSvcLvol, curBdevLvol := headSvcLvol, bdevLvolMap[headBdevLvol.DriverSpecific.Lvol.BaseSnapshot]; curBdevLvol != nil; {
+		curvSvcLvol := BdevLvolInfoToServiceLvol(curBdevLvol)
+		curvSvcLvol.Children[prevSvcLvol.Name] = prevSvcLvol
+		prevSvcLvol.Parent = curvSvcLvol.Name
+		newChain = append(newChain, curvSvcLvol)
 
-		childSvcLvol = curSvcLvol
-		curBdevLvol = bdevLvolMap[curBdevLvol.DriverSpecific.Lvol.BaseSnapshot]
+		prevSvcLvol = curvSvcLvol
+		curBdevLvol = bdevLvolMap[headBdevLvol.DriverSpecific.Lvol.BaseSnapshot]
 	}
 
 	// Need to flip r.ActiveSnapshotChain since the oldest should be the first entry

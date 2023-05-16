@@ -14,3 +14,10 @@ const (
 
 	DefaultReplicaReservedPortCount = 5
 )
+
+type InstanceType string
+
+const (
+	InstanceTypeReplica = InstanceType("replica")
+	InstanceTypeEngine  = InstanceType("engine")
+)
