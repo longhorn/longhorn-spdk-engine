@@ -74,10 +74,7 @@ func (c *Client) BdevAioGet(name string, timeout uint64) (bdevAioInfoList []spdk
 	}
 
 	for _, b := range bdevInfoList {
-		if b.ProductName != spdktypes.BdevProductNameAio {
-			continue
-		}
-		if b.DriverSpecific.Aio == nil {
+		if spdktypes.GetBdevType(&b) != spdktypes.BdevTypeAio {
 			continue
 		}
 		bdevAioInfoList = append(bdevAioInfoList, b)
@@ -220,10 +217,7 @@ func (c *Client) BdevLvolGet(name string, timeout uint64) (bdevLvolInfoList []sp
 
 	bdevLvolInfoList = []spdktypes.BdevInfo{}
 	for _, b := range bdevInfoList {
-		if b.ProductName != spdktypes.BdevProductNameLvol {
-			continue
-		}
-		if b.DriverSpecific.Lvol == nil {
+		if spdktypes.GetBdevType(&b) != spdktypes.BdevTypeLvol {
 			continue
 		}
 		bdevLvolInfoList = append(bdevLvolInfoList, b)
@@ -372,10 +366,7 @@ func (c *Client) BdevRaidGet(name string, timeout uint64) (bdevRaidInfoList []sp
 
 	bdevRaidInfoList = []spdktypes.BdevInfo{}
 	for _, b := range bdevInfoList {
-		if b.ProductName != spdktypes.BdevProductNameRaid {
-			continue
-		}
-		if b.DriverSpecific.Raid == nil {
+		if spdktypes.GetBdevType(&b) != spdktypes.BdevTypeRaid {
 			continue
 		}
 		// For the result of bdev_get_bdevs, this field is empty.
@@ -496,10 +487,7 @@ func (c *Client) BdevNvmeGet(name string, timeout uint64) (bdevNvmeInfoList []sp
 
 	bdevNvmeInfoList = []spdktypes.BdevInfo{}
 	for _, b := range bdevInfoList {
-		if b.ProductName != spdktypes.BdevProductNameNvme {
-			continue
-		}
-		if b.DriverSpecific.Nvme == nil {
+		if spdktypes.GetBdevType(&b) != spdktypes.BdevTypeNvme {
 			continue
 		}
 		bdevNvmeInfoList = append(bdevNvmeInfoList, b)
