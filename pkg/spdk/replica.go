@@ -426,7 +426,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, sup
 	r.portAllocator = util.NewBitmap(r.PortStart+1, r.PortEnd)
 
 	if exposeRequired {
-		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.UUID, podIP, string(r.PortStart)); err != nil {
+		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.UUID, podIP, strconv.Itoa(int(r.PortStart))); err != nil {
 			return nil, err
 		}
 		r.IsExposed = true
