@@ -198,8 +198,20 @@ func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
 }
 
 func (c *SPDKClient) EngineList() (map[string]*api.Engine, error) {
-	// TODO: implement
-	return nil, nil
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	resp, err := client.EngineList(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list SPDK engines")
+	}
+
+	res := map[string]*api.Engine{}
+	for engineName, e := range resp.Engines {
+		res[engineName] = api.ProtoEngineToEngine(e)
+	}
+	return res, nil
 }
 
 func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error) {
