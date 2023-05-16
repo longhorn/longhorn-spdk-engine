@@ -3,6 +3,7 @@ package spdk
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -248,7 +249,8 @@ func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
 	}
 	exposedPort := 0
 	for _, listenAddr := range subsystem.ListenAddresses {
-		if listenAddr.Adrfam != spdktypes.NvmeAddressFamilyIPv4 || listenAddr.Trtype != spdktypes.NvmeTransportTypeTCP {
+		if !strings.EqualFold(string(listenAddr.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
+			!strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
 			continue
 		}
 		exposedPort, err = strconv.Atoi(listenAddr.Trsvcid)
