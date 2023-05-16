@@ -233,7 +233,7 @@ func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
 		return fmt.Errorf("found invalid IP %s for replica %s", r.IP, r.Name)
 	}
 
-	if r.IsExposed {
+	if !r.IsExposed {
 		return nil
 	}
 
