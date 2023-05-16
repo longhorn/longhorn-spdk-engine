@@ -205,7 +205,7 @@ func svcEngineGet(spdkClient *spdkclient.Client, name string) (res *spdkrpc.Engi
 		if !exists {
 			// This replica must be a local lvol
 			replicaName := spdktypes.GetLvolNameFromAlias(baseBdev.Name)
-			res.ReplicaAddressMap[replicaName] = ""
+			res.ReplicaAddressMap[replicaName] = net.JoinHostPort(podIP, "0")
 			res.ReplicaModeMap[replicaName] = spdkrpc.ReplicaMode_RW
 			continue
 		}
