@@ -9,6 +9,34 @@ const (
 	BdevProductNameNvme = BdevProductName("NVMe disk")
 )
 
+type BdevType string
+
+const (
+	BdevTypeAio  = "aio"
+	BdevTypeLvol = "lvol"
+	BdevTypeRaid = "raid"
+	BdevTypeNvme = "nvme"
+)
+
+func GetBdevType(bdev *BdevInfo) BdevType {
+	if bdev == nil {
+		return ""
+	}
+	if bdev.ProductName == BdevProductNameAio && bdev.DriverSpecific.Aio != nil {
+		return BdevTypeAio
+	}
+	if bdev.ProductName == BdevProductNameLvol && bdev.DriverSpecific.Lvol != nil {
+		return BdevTypeLvol
+	}
+	if bdev.ProductName == BdevProductNameRaid && bdev.DriverSpecific.Raid != nil {
+		return BdevTypeRaid
+	}
+	if bdev.ProductName == BdevProductNameNvme && bdev.DriverSpecific.Nvme != nil {
+		return BdevTypeNvme
+	}
+	return ""
+}
+
 type BdevInfoBasic struct {
 	Name        string          `json:"name"`
 	Aliases     []string        `json:"aliases"`
