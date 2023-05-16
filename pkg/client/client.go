@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 
@@ -119,8 +120,20 @@ func (c *SPDKClient) ReplicaGet(name string) (*api.Replica, error) {
 }
 
 func (c *SPDKClient) ReplicaList() (map[string]*api.Replica, error) {
-	// TODO: implement
-	return nil, nil
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	resp, err := client.ReplicaList(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list SPDK replicas")
+	}
+
+	res := map[string]*api.Replica{}
+	for replicaName, r := range resp.Replicas {
+		res[replicaName] = api.ProtoReplicaToReplica(r)
+	}
+	return res, nil
 }
 
 func (c *SPDKClient) ReplicaWatch(ctx context.Context) (*api.ReplicaStream, error) {
