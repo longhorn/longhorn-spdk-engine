@@ -39,10 +39,13 @@ type Engine struct {
 
 	State types.InstanceState
 
+	// UpdateCh should not be protected by the engine lock
+	UpdateCh chan interface{}
+
 	log logrus.FieldLogger
 }
 
-func NewEngine(engineName, volumeName, frontend string, specSize uint64) *Engine {
+func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}) *Engine {
 	log := logrus.StandardLogger().WithFields(logrus.Fields{
 		"engineName": engineName,
 		"volumeName": volumeName,
@@ -65,6 +68,8 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64) *Engine
 		ReplicaModeMap:     map[string]types.Mode{},
 
 		State: types.InstanceStatePending,
+
+		UpdateCh: engineUpdateCh,
 
 		log: log,
 	}
