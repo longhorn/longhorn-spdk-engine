@@ -42,6 +42,8 @@ type Replica struct {
 	IsExposed bool
 
 	portAllocator *util.Bitmap
+	// UpdateCh should not be protected by the replica lock
+	UpdateCh chan interface{}
 
 	log logrus.FieldLogger
 }
@@ -103,7 +105,7 @@ func BdevLvolInfoToServiceLvol(bdev *spdktypes.BdevInfo) *Lvol {
 	}
 }
 
-func NewReplica(replicaName, lvsName, lvsUUID string, specSize uint64) *Replica {
+func NewReplica(replicaName, lvsName, lvsUUID string, specSize uint64, updateCh chan interface{}) *Replica {
 	log := logrus.StandardLogger().WithFields(logrus.Fields{
 		"replicaName": replicaName,
 		"lvsName":     lvsName,
@@ -133,6 +135,8 @@ func NewReplica(replicaName, lvsName, lvsUUID string, specSize uint64) *Replica 
 		LvsUUID:     lvsUUID,
 		SpecSize:    roundedSpecSize,
 		State:       types.InstanceStatePending,
+
+		UpdateCh: updateCh,
 
 		log: log,
 	}

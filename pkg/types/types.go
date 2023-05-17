@@ -23,3 +23,10 @@ const (
 	InstanceStateRunning = "running"
 	InstanceStateError   = "error"
 )
+
+type InstanceType string
+
+const (
+	InstanceTypeReplica = InstanceType("replica")
+	InstanceTypeEngine  = InstanceType("engine")
+)

@@ -137,8 +137,13 @@ func (c *SPDKClient) ReplicaList() (map[string]*api.Replica, error) {
 }
 
 func (c *SPDKClient) ReplicaWatch(ctx context.Context) (*api.ReplicaStream, error) {
-	// TODO: implement
-	return nil, nil
+	client := c.getSPDKServiceClient()
+	stream, err := client.ReplicaWatch(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open replica watch stream")
+	}
+
+	return api.NewReplicaStream(stream), nil
 }
 
 func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string) (*api.Engine, error) {
@@ -215,8 +220,13 @@ func (c *SPDKClient) EngineList() (map[string]*api.Engine, error) {
 }
 
 func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error) {
-	// TODO: implement
-	return nil, nil
+	client := c.getSPDKServiceClient()
+	stream, err := client.EngineWatch(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open engine watch stream")
+	}
+
+	return api.NewEngineStream(stream), nil
 }
 
 func (c *SPDKClient) DiskCreate(diskName, diskPath string, blockSize int64) (*spdkrpc.Disk, error) {

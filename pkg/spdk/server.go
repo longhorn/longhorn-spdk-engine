@@ -1,6 +1,7 @@
 package spdk
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
+	"github.com/longhorn/longhorn-spdk-engine/pkg/util/broadcaster"
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
 
@@ -33,12 +35,25 @@ type Server struct {
 
 	replicaMap map[string]*Replica
 	engineMap  map[string]*Engine
+
+	broadcasters map[types.InstanceType]*broadcaster.Broadcaster
+	broadcastChs map[types.InstanceType]chan interface{}
+	updateChs    map[types.InstanceType]chan interface{}
 }
 
 func NewServer(ctx context.Context, portStart, portEnd int32) (*Server, error) {
 	cli, err := spdkclient.NewClient()
 	if err != nil {
 		return nil, err
+	}
+
+	broadcasters := map[types.InstanceType]*broadcaster.Broadcaster{}
+	broadcastChs := map[types.InstanceType]chan interface{}{}
+	updateChs := map[types.InstanceType]chan interface{}{}
+	for _, t := range []types.InstanceType{types.InstanceTypeReplica, types.InstanceTypeEngine} {
+		broadcasters[t] = &broadcaster.Broadcaster{}
+		broadcastChs[t] = make(chan interface{})
+		updateChs[t] = make(chan interface{})
 	}
 
 	s := &Server{
@@ -49,10 +64,22 @@ func NewServer(ctx context.Context, portStart, portEnd int32) (*Server, error) {
 
 		replicaMap: map[string]*Replica{},
 		engineMap:  map[string]*Engine{},
+
+		broadcasters: broadcasters,
+		broadcastChs: broadcastChs,
+		updateChs:    updateChs,
+	}
+
+	if _, err := s.broadcasters[types.InstanceTypeReplica].Subscribe(ctx, s.replicaBroadcastConnector); err != nil {
+		return nil, err
+	}
+	if _, err := s.broadcasters[types.InstanceTypeEngine].Subscribe(ctx, s.engineBroadcastConnector); err != nil {
+		return nil, err
 	}
 
 	// TODO: There is no need to maintain the replica map in cache when we can use one SPDK JSON API call to fetch the Lvol tree/chain info
 	go s.monitoring()
+	go s.broadcasting()
 
 	return s, nil
 }
@@ -118,6 +145,42 @@ func (s *Server) verify() error {
 	return nil
 }
 
+func (s *Server) broadcasting() {
+	done := false
+	for {
+		select {
+		case <-s.ctx.Done():
+			logrus.Info("SPDK Server: stopped broadcasting instances due to the context done")
+			done = true
+		case <-s.updateChs[types.InstanceTypeReplica]:
+			s.broadcastChs[types.InstanceTypeReplica] <- nil
+		case <-s.updateChs[types.InstanceTypeEngine]:
+			s.broadcastChs[types.InstanceTypeEngine] <- nil
+		}
+		if done {
+			break
+		}
+	}
+}
+
+func (s *Server) Subscribe(instanceType types.InstanceType) (<-chan interface{}, error) {
+	switch instanceType {
+	case types.InstanceTypeEngine:
+		return s.broadcasters[types.InstanceTypeEngine].Subscribe(context.TODO(), s.engineBroadcastConnector)
+	case types.InstanceTypeReplica:
+		return s.broadcasters[types.InstanceTypeReplica].Subscribe(context.TODO(), s.replicaBroadcastConnector)
+	}
+	return nil, fmt.Errorf("invalid instance type %v for subscription", instanceType)
+}
+
+func (s *Server) replicaBroadcastConnector() (chan interface{}, error) {
+	return s.broadcastChs[types.InstanceTypeReplica], nil
+}
+
+func (s *Server) engineBroadcastConnector() (chan interface{}, error) {
+	return s.broadcastChs[types.InstanceTypeEngine], nil
+}
+
 func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRequest) (ret *spdkrpc.Replica, err error) {
 	if req.Name == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
@@ -130,7 +193,7 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 	defer s.Unlock()
 
 	if _, ok := s.replicaMap[req.Name]; !ok {
-		s.replicaMap[req.Name] = NewReplica(req.Name, req.LvsName, req.LvsUuid, req.SpecSize)
+		s.replicaMap[req.Name] = NewReplica(req.Name, req.LvsName, req.LvsUuid, req.SpecSize, s.updateChs[types.InstanceTypeReplica])
 	}
 	r := s.replicaMap[req.Name]
 
@@ -182,7 +245,36 @@ func (s *Server) ReplicaList(ctx context.Context, req *empty.Empty) (*spdkrpc.Re
 }
 
 func (s *Server) ReplicaWatch(req *empty.Empty, srv spdkrpc.SPDKService_ReplicaWatchServer) error {
-	// TODO: Implement this
+	responseCh, err := s.Subscribe(types.InstanceTypeReplica)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if err != nil {
+			logrus.WithError(err).Error("SPDK service replica watch errored out")
+		} else {
+			logrus.Info("SPDK service replica watch ended successfully")
+		}
+	}()
+	logrus.Info("Started new SPDK service update watch")
+
+	done := false
+	for {
+		select {
+		case <-s.ctx.Done():
+			logrus.Info("SPDK Server: stopped replica watch due to the context done")
+			done = true
+		case <-responseCh:
+			if err := srv.Send(&empty.Empty{}); err != nil {
+				return err
+			}
+		}
+		if done {
+			break
+		}
+	}
+
 	return nil
 }
 
@@ -239,7 +331,7 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 		return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "engine %v already exists", req.Name)
 	}
 
-	s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize)
+	s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine])
 	e := s.engineMap[req.Name]
 
 	return e.Create(s.spdkClient, req.ReplicaAddressMap, s.getLocalReplicaBdevMap(req.ReplicaAddressMap), s.portAllocator)
@@ -304,7 +396,36 @@ func (s *Server) EngineList(ctx context.Context, req *empty.Empty) (*spdkrpc.Eng
 }
 
 func (s *Server) EngineWatch(req *empty.Empty, srv spdkrpc.SPDKService_EngineWatchServer) error {
-	// TODO: Implement this
+	responseCh, err := s.Subscribe(types.InstanceTypeEngine)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if err != nil {
+			logrus.WithError(err).Error("SPDK service engine watch errored out")
+		} else {
+			logrus.Info("SPDK service engine watch ended successfully")
+		}
+	}()
+	logrus.Info("Started new SPDK service update watch")
+
+	done := false
+	for {
+		select {
+		case <-s.ctx.Done():
+			logrus.Info("SPDK Server: stopped engine watch due to the context done")
+			done = true
+		case <-responseCh:
+			if err := srv.Send(&empty.Empty{}); err != nil {
+				return err
+			}
+		}
+		if done {
+			break
+		}
+	}
+
 	return nil
 }
 
