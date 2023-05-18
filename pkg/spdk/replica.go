@@ -2,6 +2,8 @@ package spdk
 
 import (
 	"fmt"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,22 +38,13 @@ type Replica struct {
 	PortStart int32
 	PortEnd   int32
 
-	State     ReplicaState
+	State     types.InstanceState
 	IsExposed bool
 
 	portAllocator *util.Bitmap
 
 	log logrus.FieldLogger
 }
-
-type ReplicaState string
-
-const (
-	ReplicaStatePending = "pending"
-	ReplicaStateStopped = "stopped"
-	ReplicaStateStarted = "started"
-	ReplicaStateError   = "error"
-)
 
 type Lvol struct {
 	Name       string
@@ -139,7 +132,7 @@ func NewReplica(replicaName, lvsName, lvsUUID string, specSize uint64) *Replica 
 		LvsName:     lvsName,
 		LvsUUID:     lvsUUID,
 		SpecSize:    roundedSpecSize,
-		State:       ReplicaStatePending,
+		State:       types.InstanceStatePending,
 
 		log: log,
 	}
@@ -151,12 +144,12 @@ func (r *Replica) Construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	r.Lock()
 	defer func() {
 		if err != nil {
-			r.State = ReplicaStateError
+			r.State = types.InstanceStateError
 		}
 		r.Unlock()
 	}()
 
-	if r.State != ReplicaStatePending {
+	if r.State != types.InstanceStatePending {
 		return fmt.Errorf("invalid state %s for replica %s construct", r.Name, r.State)
 	}
 
@@ -176,7 +169,7 @@ func (r *Replica) Construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	r.ActiveChain = newChain
 	r.ChainLength = len(r.ActiveChain)
 	r.SnapshotMap = newSnapshotMap
-	r.State = ReplicaStateStopped
+	r.State = types.InstanceStateStopped
 	r.log.WithField("uuid", r.UUID)
 
 	return nil
@@ -185,14 +178,19 @@ func (r *Replica) Construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
 	bdevLvolMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
 	r.Lock()
-	defer r.Unlock()
-
 	defer func() {
-		if err != nil {
-			r.State = ReplicaStateError
-			r.log.Errorf("Found error during validation and update: %v", err)
+		if err != nil && r.State != types.InstanceStateError {
+			r.State = types.InstanceStateError
+			r.log.Errorf("Found error during replica validation and update: %v", err)
 		}
+
+		r.Unlock()
 	}()
+
+	// Stop syncing with the SPDK TGT server if the replica does not contain any valid SPDK components.
+	if r.State != types.InstanceStateRunning && r.State != types.InstanceStateStopped {
+		return nil
+	}
 
 	if err := r.validateReplicaInfoWithoutLock(bdevLvolMap[r.Name]); err != nil {
 		return err
@@ -234,12 +232,14 @@ func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
 		return fmt.Errorf("found invalid IP %s for replica %s", r.IP, r.Name)
 	}
 
-	if !r.IsExposed {
-		return nil
+	if r.State == types.InstanceStateRunning {
+		if r.PortStart == 0 || r.PortEnd == 0 || r.PortStart > r.PortEnd {
+			return fmt.Errorf("found invalid Ports [%d, %d] for the running replica %s", r.PortStart, r.PortEnd, r.Name)
+		}
 	}
 
-	if r.PortStart == 0 || r.PortEnd == 0 {
-		return fmt.Errorf("found invalid Ports [%d, %d] for the exposed replica %s", r.PortStart, r.PortEnd, r.Name)
+	if !r.IsExposed {
+		return nil
 	}
 
 	nqn := helpertypes.GetNQN(r.Name)
@@ -380,13 +380,16 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, sup
 	r.Lock()
 	defer r.Unlock()
 
-	if r.State != ReplicaStatePending && r.State != ReplicaStateStopped {
-		return nil, fmt.Errorf("invalid state %s for replica %s creation", r.Name, r.State)
+	if r.State == types.InstanceStateRunning {
+		return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "replica %v already exists and running", r.Name)
+	}
+	if r.State != types.InstanceStatePending && r.State != types.InstanceStateStopped {
+		return nil, fmt.Errorf("invalid state %s for replica %s creation", r.State, r.Name)
 	}
 
 	defer func() {
-		if err != nil {
-			r.State = ReplicaStateError
+		if err != nil && r.State != types.InstanceStateError {
+			r.State = types.InstanceStateError
 		}
 	}()
 
@@ -396,7 +399,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, sup
 	headSvcLvol := r.ActiveChain[r.ChainLength-1]
 
 	// Create bdev lvol if the replica is the new one
-	if r.State == ReplicaStatePending {
+	if r.State == types.InstanceStatePending {
 		r.log.Infof("Creating a lvol bdev for the new replica")
 		if _, err := spdkClient.BdevLvolCreate(r.LvsName, r.Name, "", util.BytesToMiB(r.SpecSize), "", true); err != nil {
 			return nil, err
@@ -410,7 +413,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, sup
 		}
 		headSvcLvol.UUID = bdevLvolList[0].UUID
 		r.UUID = bdevLvolList[0].UUID
-		r.State = ReplicaStateStopped
+		r.State = types.InstanceStateStopped
 		r.log.WithField("uuid", r.UUID)
 	}
 
@@ -433,30 +436,31 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, sup
 		}
 		r.IsExposed = true
 	}
-	r.State = ReplicaStateStarted
+	r.State = types.InstanceStateRunning
 
 	return ServiceReplicaToProtoReplica(r), nil
 }
 
 func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, superiorPortAllocator *util.Bitmap) (err error) {
 	r.Lock()
-	defer r.Unlock()
-
 	defer func() {
 		if err != nil {
-			r.State = ReplicaStateError
-		} else {
-			r.State = ReplicaStateStopped
+			r.State = types.InstanceStateError
 		}
 		// The port can be released once the rebuilding and expose are stopped
-		if !r.IsExposed && r.PortStart != 0 {
+		if r.PortStart != 0 {
 			if releaseErr := superiorPortAllocator.ReleaseRange(r.PortStart, r.PortEnd); releaseErr != nil {
 				r.log.Errorf("Failed to release port %d to %d at the end of replica deletion: %v", r.PortStart, r.PortEnd, releaseErr)
 				return
 			}
 			r.portAllocator = nil
 			r.PortStart, r.PortEnd = 0, 0
+			if r.State == types.InstanceStateRunning {
+				r.State = types.InstanceStateStopped
+			}
 		}
+
+		r.Unlock()
 	}()
 
 	// TODO: Need to stop all in-progress rebuilding first
@@ -495,13 +499,13 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	r.Lock()
 	defer r.Unlock()
 
-	if r.State != ReplicaStateStopped && r.State != ReplicaStateStarted {
+	if r.State != types.InstanceStateStopped && r.State != types.InstanceStateRunning {
 		return nil, fmt.Errorf("invalid state %v for replica %s snapshot creation", r.State, r.Name)
 	}
 
 	defer func() {
-		if err != nil {
-			r.State = ReplicaStateError
+		if err != nil && r.State != types.InstanceStateError {
+			r.State = types.InstanceStateError
 		}
 	}()
 
@@ -543,7 +547,7 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	r.Lock()
 	defer r.Unlock()
 
-	if r.State != ReplicaStateStopped && r.State != ReplicaStateStarted {
+	if r.State != types.InstanceStateStopped && r.State != types.InstanceStateRunning {
 		return nil, fmt.Errorf("invalid state %v for replica %s snapshot deletion", r.State, r.Name)
 	}
 
@@ -556,8 +560,8 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	}
 
 	defer func() {
-		if err != nil {
-			r.State = ReplicaStateError
+		if err != nil && r.State != types.InstanceStateError {
+			r.State = types.InstanceStateError
 		}
 	}()
 
@@ -565,12 +569,11 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 		return nil, fmt.Errorf("invalid chain length %d for replica snapshot delete", r.ChainLength)
 	}
 
-	r.removeLvolFromSnapshotMapWithoutLock(lvolName)
-	r.removeLvolFromActiveChainWithoutLock(lvolName)
-
 	if _, err := spdkClient.BdevLvolDelete(lvolName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return nil, err
 	}
+	r.removeLvolFromSnapshotMapWithoutLock(lvolName)
+	r.removeLvolFromActiveChainWithoutLock(lvolName)
 
 	return ServiceReplicaToProtoReplica(r), nil
 }
