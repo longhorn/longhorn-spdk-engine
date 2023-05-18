@@ -129,14 +129,9 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 	s.Lock()
 	defer s.Unlock()
 
-	if r, ok := s.replicaMap[req.Name]; ok {
-		if r.State == ReplicaStateStarted {
-			return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "replica %v already exists", req.Name)
-		}
-	} else {
+	if _, ok := s.replicaMap[req.Name]; !ok {
 		s.replicaMap[req.Name] = NewReplica(req.Name, req.LvsName, req.LvsUuid, req.SpecSize)
 	}
-
 	r := s.replicaMap[req.Name]
 
 	return r.Create(s.spdkClient, req.ExposeRequired, s.portAllocator)
