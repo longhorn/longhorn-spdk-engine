@@ -172,18 +172,22 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 		e.Unlock()
 	}()
 
-	nqn := helpertypes.GetNQN(e.Name)
+	if e.Endpoint != "" {
+		nqn := helpertypes.GetNQN(e.Name)
 
-	initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
-	if err != nil {
-		return err
-	}
-	if err := initiator.Stop(); err != nil {
-		return err
-	}
+		initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
+		if err != nil {
+			return err
+		}
+		if err := initiator.Stop(); err != nil {
+			return err
+		}
 
-	if err := spdkClient.StopExposeBdev(nqn); err != nil {
-		return err
+		if err := spdkClient.StopExposeBdev(nqn); err != nil {
+			return err
+		}
+
+		e.Endpoint = ""
 	}
 
 	if e.Port != 0 {
@@ -197,21 +201,37 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 		return err
 	}
 
-	for replicaName, replicaAddress := range e.ReplicaAddressMap {
-		replicaIP, _, err := net.SplitHostPort(replicaAddress)
-		if err != nil {
+	for replicaName := range e.ReplicaAddressMap {
+		if err := e.removeReplica(spdkClient, replicaName); err != nil {
+			if e.ReplicaModeMap[replicaName] != types.ModeERR {
+				e.ReplicaModeMap[replicaName] = types.ModeERR
+			}
 			return err
 		}
-		if replicaIP == e.IP {
-			continue
-		}
-		bdevName := e.ReplicaBdevNameMap[replicaName]
-		if bdevName == "" {
-			continue
-		}
-		if _, err := spdkClient.BdevNvmeDetachController(helperutil.GetNvmeControllerNameFromNamespaceName(bdevName)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-			return err
-		}
+
+		delete(e.ReplicaAddressMap, replicaName)
+		delete(e.ReplicaBdevNameMap, replicaName)
+		delete(e.ReplicaModeMap, replicaName)
+	}
+
+	return nil
+}
+
+func (e *Engine) removeReplica(spdkClient *spdkclient.Client, replicaName string) (err error) {
+	replicaIP, _, err := net.SplitHostPort(e.ReplicaAddressMap[replicaName])
+	if err != nil {
+		return err
+	}
+	if replicaIP == e.IP {
+		return nil
+	}
+
+	bdevName := e.ReplicaBdevNameMap[replicaName]
+	if bdevName == "" {
+		return nil
+	}
+	if _, err := spdkClient.BdevNvmeDetachController(helperutil.GetNvmeControllerNameFromNamespaceName(bdevName)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return err
 	}
 
 	return nil
