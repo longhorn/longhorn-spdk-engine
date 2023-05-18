@@ -151,6 +151,8 @@ func (r *Replica) Construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 			r.State = types.InstanceStateError
 		}
 		r.Unlock()
+
+		// It's better to let the server send the update signal
 	}()
 
 	if r.State != types.InstanceStatePending {
@@ -181,14 +183,19 @@ func (r *Replica) Construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 
 func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
 	bdevLvolMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
+	updateRequired := false
 	r.Lock()
 	defer func() {
 		if err != nil && r.State != types.InstanceStateError {
 			r.State = types.InstanceStateError
-			r.log.Errorf("Found error during replica validation and update: %v", err)
+			r.log.Errorf("Found error during validation and update: %v", err)
+			updateRequired = true
 		}
-
 		r.Unlock()
+
+		if updateRequired {
+			r.UpdateCh <- nil
+		}
 	}()
 
 	// Stop syncing with the SPDK TGT server if the replica does not contain any valid SPDK components.
@@ -213,8 +220,9 @@ func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
 			return err
 		}
 		// Then update the actual size for the head lvol
-		if svcLvol.Name == r.Name {
+		if svcLvol.Name == r.Name && svcLvol.ActualSize != newSvcLvol.ActualSize {
 			svcLvol.ActualSize = newSvcLvol.ActualSize
+			updateRequired = true
 		}
 	}
 
@@ -381,13 +389,23 @@ func constructSnapshotMap(replicaName string, rootSvcLvol *Lvol, bdevLvolMap map
 }
 
 func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Replica, err error) {
+	updateRequired := true
+
 	r.Lock()
-	defer r.Unlock()
+	defer func() {
+		r.Unlock()
+
+		if updateRequired {
+			r.UpdateCh <- nil
+		}
+	}()
 
 	if r.State == types.InstanceStateRunning {
+		updateRequired = false
 		return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "replica %v already exists and running", r.Name)
 	}
 	if r.State != types.InstanceStatePending && r.State != types.InstanceStateStopped {
+		updateRequired = false
 		return nil, fmt.Errorf("invalid state %s for replica %s creation", r.State, r.Name)
 	}
 
@@ -446,6 +464,8 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, sup
 }
 
 func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, superiorPortAllocator *util.Bitmap) (err error) {
+	updateRequired := false
+
 	r.Lock()
 	defer func() {
 		if err != nil {
@@ -462,9 +482,13 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 			if r.State == types.InstanceStateRunning {
 				r.State = types.InstanceStateStopped
 			}
+			updateRequired = true
 		}
-
 		r.Unlock()
+
+		if updateRequired {
+			r.UpdateCh <- nil
+		}
 	}()
 
 	// TODO: Need to stop all in-progress rebuilding first
@@ -474,6 +498,7 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 			return err
 		}
 		r.IsExposed = false
+		updateRequired = true
 	}
 
 	if !cleanupRequired {
@@ -483,6 +508,7 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 	if _, err := spdkClient.BdevLvolDelete(r.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return err
 	}
+	updateRequired = true
 	for _, lvol := range r.SnapshotMap {
 		if _, err := spdkClient.BdevLvolDelete(lvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return err
@@ -500,8 +526,16 @@ func (r *Replica) Get() (pReplica *spdkrpc.Replica) {
 }
 
 func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string) (pReplica *spdkrpc.Replica, err error) {
+	updateRequired := false
+
 	r.Lock()
-	defer r.Unlock()
+	defer func() {
+		r.Unlock()
+
+		if updateRequired {
+			r.UpdateCh <- nil
+		}
+	}()
 
 	if r.State != types.InstanceStateStopped && r.State != types.InstanceStateRunning {
 		return nil, fmt.Errorf("invalid state %v for replica %s snapshot creation", r.State, r.Name)
@@ -510,6 +544,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	defer func() {
 		if err != nil && r.State != types.InstanceStateError {
 			r.State = types.InstanceStateError
+			updateRequired = true
 		}
 	}()
 
@@ -533,7 +568,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	snapSvcLvol := BdevLvolInfoToServiceLvol(&bdevLvolList[0])
 	snapSvcLvol.Children[headSvcLvol.Name] = headSvcLvol
 
-	// Already contain one active snapshot before this snapshot creation
+	// Already contain active snapshots before this snapshot creation
 	if r.ChainLength > 1 {
 		prevSvcLvol := r.ActiveChain[r.ChainLength-2]
 		delete(prevSvcLvol.Children, headSvcLvol.Name)
@@ -543,13 +578,22 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	r.ChainLength++
 	r.SnapshotMap[snapSvcLvol.Name] = snapSvcLvol
 	headSvcLvol.Parent = snapSvcLvol.Name
+	updateRequired = true
 
 	return ServiceReplicaToProtoReplica(r), err
 }
 
 func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) (pReplica *spdkrpc.Replica, err error) {
+	updateRequired := false
+
 	r.Lock()
-	defer r.Unlock()
+	defer func() {
+		r.Unlock()
+
+		if updateRequired {
+			r.UpdateCh <- nil
+		}
+	}()
 
 	if r.State != types.InstanceStateStopped && r.State != types.InstanceStateRunning {
 		return nil, fmt.Errorf("invalid state %v for replica %s snapshot deletion", r.State, r.Name)
@@ -566,6 +610,7 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	defer func() {
 		if err != nil && r.State != types.InstanceStateError {
 			r.State = types.InstanceStateError
+			updateRequired = true
 		}
 	}()
 
@@ -578,6 +623,8 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	}
 	r.removeLvolFromSnapshotMapWithoutLock(lvolName)
 	r.removeLvolFromActiveChainWithoutLock(lvolName)
+
+	updateRequired = true
 
 	return ServiceReplicaToProtoReplica(r), nil
 }
