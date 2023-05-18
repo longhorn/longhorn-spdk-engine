@@ -76,10 +76,19 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 }
 
 func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localReplicaBdevMap map[string]string, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Engine, err error) {
+	requireUpdate := true
+
 	e.Lock()
-	defer e.Unlock()
+	defer func() {
+		e.Unlock()
+
+		if requireUpdate {
+			e.UpdateCh <- nil
+		}
+	}()
 
 	if e.State != types.InstanceStatePending {
+		requireUpdate = false
 		return nil, fmt.Errorf("invalid state %s for engine %s creation", e.State, e.Name)
 	}
 
@@ -169,12 +178,18 @@ func getBdevNameForReplica(spdkClient *spdkclient.Client, localReplicaBdevMap ma
 }
 
 func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *util.Bitmap) (err error) {
+	requireUpdate := false
+
 	e.Lock()
 	defer func() {
 		if err != nil && e.State != types.InstanceStateError {
 			e.State = types.InstanceStateError
 		}
 		e.Unlock()
+
+		if requireUpdate {
+			e.UpdateCh <- nil
+		}
 	}()
 
 	if e.Endpoint != "" {
@@ -193,6 +208,7 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 		}
 
 		e.Endpoint = ""
+		requireUpdate = true
 	}
 
 	if e.Port != 0 {
@@ -200,6 +216,7 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 			return err
 		}
 		e.Port = 0
+		requireUpdate = true
 	}
 
 	if _, err := spdkClient.BdevRaidDelete(e.Name); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
@@ -210,6 +227,7 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 		if err := e.removeReplica(spdkClient, replicaName); err != nil {
 			if e.ReplicaModeMap[replicaName] != types.ModeERR {
 				e.ReplicaModeMap[replicaName] = types.ModeERR
+				requireUpdate = true
 			}
 			return err
 		}
@@ -217,6 +235,7 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 		delete(e.ReplicaAddressMap, replicaName)
 		delete(e.ReplicaBdevNameMap, replicaName)
 		delete(e.ReplicaModeMap, replicaName)
+		requireUpdate = true
 	}
 
 	return nil
@@ -271,14 +290,21 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 
 func (e *Engine) ValidateAndUpdate(
 	bdevMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
+	updateRequired := false
+
 	e.Lock()
 	defer func() {
 		// TODO: we may not need to mark the engine as ERR for each error
 		if err != nil && e.State != types.InstanceStateError {
 			e.State = types.InstanceStateError
 			e.log.Errorf("Found error during engine validation and update: %v", err)
+			updateRequired = true
 		}
 		e.Unlock()
+
+		if updateRequired {
+			e.UpdateCh <- nil
+		}
 	}()
 
 	// Syncing with the SPDK TGT server only when the engine is running.
@@ -333,6 +359,7 @@ func (e *Engine) ValidateAndUpdate(
 		blockDevEndpoint := initiator.GetEndpoint()
 		if e.Endpoint == "" {
 			e.Endpoint = blockDevEndpoint
+			updateRequired = true
 		}
 		if e.Endpoint != blockDevEndpoint {
 			return fmt.Errorf("found mismatching between engine endpoint %s and actual block device endpoint %s for engine %s", e.Endpoint, blockDevEndpoint, e.Name)
@@ -341,6 +368,7 @@ func (e *Engine) ValidateAndUpdate(
 		nvmfEndpoint := GetNvmfEndpoint(nqn, e.IP, e.Port)
 		if e.Endpoint == "" {
 			e.Endpoint = nvmfEndpoint
+			updateRequired = true
 		}
 		if e.Endpoint != "" && e.Endpoint != nvmfEndpoint {
 			return fmt.Errorf("found mismatching between engine endpoint %s and actual nvmf endpoint %s for engine %s", e.Endpoint, nvmfEndpoint, e.Name)
@@ -365,13 +393,17 @@ func (e *Engine) ValidateAndUpdate(
 		}
 		mode, err := e.validateAndUpdateReplicaMode(replicaName, bdevMap[bdevName])
 		if err != nil {
-			e.log.WithError(err).Errorf("Replica %s is invalid, will update the mode from %s to %s", replicaName, e.ReplicaModeMap[replicaName], types.ModeERR)
-			e.ReplicaModeMap[replicaName] = types.ModeERR
+			if e.ReplicaModeMap[replicaName] != types.ModeERR {
+				e.log.WithError(err).Errorf("Replica %s is invalid, will update the mode from %s to %s", replicaName, e.ReplicaModeMap[replicaName], types.ModeERR)
+				e.ReplicaModeMap[replicaName] = types.ModeERR
+				updateRequired = true
+			}
 			continue
 		}
 		if e.ReplicaModeMap[replicaName] != mode {
 			e.log.Debugf("Replica %s mode is updated from %s to %s", replicaName, e.ReplicaModeMap[replicaName], mode)
 			e.ReplicaModeMap[replicaName] = mode
+			updateRequired = true
 		}
 		if e.ReplicaModeMap[replicaName] == types.ModeRW {
 			containValidReplica = true
@@ -379,6 +411,7 @@ func (e *Engine) ValidateAndUpdate(
 	}
 	if !containValidReplica {
 		e.State = types.InstanceStateError
+		updateRequired = true
 		// TODO: should we delete the engine automatically here?
 	}
 
