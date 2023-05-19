@@ -57,11 +57,11 @@ func (c *Client) BdevAioDelete(name string) (deleted bool, err error) {
 
 // BdevAioGet will list all AIO bdevs if a name is not specified.
 //
-//	"name": Optional. Name of an AIO bdev.
-//          For an AIO bdev, there is no alias nor UUID.
-//		 	If this is not specified, the function will list all AIO bdevs.
+//		"name": Optional. Name of an AIO bdev.
+//	         For an AIO bdev, there is no alias nor UUID.
+//			 	If this is not specified, the function will list all AIO bdevs.
 //
-//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the AIO bdev exists or not.
+//		"timeout": Optional. 0 by default, meaning the method returns immediately whether the AIO bdev exists or not.
 func (c *Client) BdevAioGet(name string, timeout uint64) (bdevAioInfoList []spdktypes.BdevInfo, err error) {
 	req := spdktypes.BdevGetBdevsRequest{
 		Name:    name,
@@ -133,6 +133,21 @@ func (c *Client) BdevLvolGetLvstore(lvsName, uuid string) (lvstoreInfoList []spd
 	return lvstoreInfoList, json.Unmarshal(cmdOutput, &lvstoreInfoList)
 }
 
+// BdevLvolGetLvols receives either lvs_name or UUID.
+func (c *Client) BdevLvolGetLvols(lvsName, uuid string) (lvolInfoList []spdktypes.LvolInfo, err error) {
+	req := spdktypes.BdevLvolGetLvstoreRequest{
+		LvsName: lvsName,
+		UUID:    uuid,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_lvol_get_lvols", req)
+	if err != nil {
+		return nil, err
+	}
+
+	return lvolInfoList, json.Unmarshal(cmdOutput, &lvolInfoList)
+}
+
 // BdevLvolRenameLvstore renames a logical volume store.
 func (c *Client) BdevLvolRenameLvstore(oldName, newName string) (renamed bool, err error) {
 	req := spdktypes.BdevLvolRenameLvstoreRequest{
@@ -200,11 +215,11 @@ func (c *Client) BdevLvolDelete(name string) (deleted bool, err error) {
 
 // BdevLvolGet gets information about lvol bdevs if a name is not specified.
 //
-//	"name": Optional. UUID or alias of a logical volume (lvol) bdev.
-//         	The alias of a lvol bdev is <LVSTORE NAME>/<LVOL NAME>. And the name of a lvol bdev is UUID.
-//		 	If this is not specified, the function will list all lvol bdevs.
+//		"name": Optional. UUID or alias of a logical volume (lvol) bdev.
+//	        	The alias of a lvol bdev is <LVSTORE NAME>/<LVOL NAME>. And the name of a lvol bdev is UUID.
+//			 	If this is not specified, the function will list all lvol bdevs.
 //
-//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the lvol bdev exists or not.
+//		"timeout": Optional. 0 by default, meaning the method returns immediately whether the lvol bdev exists or not.
 func (c *Client) BdevLvolGet(name string, timeout uint64) (bdevLvolInfoList []spdktypes.BdevInfo, err error) {
 	req := spdktypes.BdevGetBdevsRequest{
 		Name:    name,
@@ -350,11 +365,11 @@ func (c *Client) BdevRaidDelete(name string) (deleted bool, err error) {
 
 // BdevRaidGet gets information about RAID bdevs if a name is not specified.
 //
-//	"name": Optional. Name of a RAID bdev.
-//          For a RAID bdev, there is no alias nor UUID.
-//		 	If this is not specified, the function will list all RAID bdevs.
+//		"name": Optional. Name of a RAID bdev.
+//	         For a RAID bdev, there is no alias nor UUID.
+//			 	If this is not specified, the function will list all RAID bdevs.
 //
-//	"timeout": Optional. 0 by default, meaning the method returns immediately whether the RAID bdev exists or not.
+//		"timeout": Optional. 0 by default, meaning the method returns immediately whether the RAID bdev exists or not.
 func (c *Client) BdevRaidGet(name string, timeout uint64) (bdevRaidInfoList []spdktypes.BdevInfo, err error) {
 	req := spdktypes.BdevGetBdevsRequest{
 		Name:    name,

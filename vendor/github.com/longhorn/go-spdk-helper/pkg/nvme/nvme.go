@@ -1,11 +1,9 @@
 package nvme
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/longhorn/go-spdk-helper/pkg/util"
 )
@@ -21,6 +19,14 @@ type Device struct {
 	SubsystemNQN string
 	Controllers  []Controller
 	Namespaces   []Namespace
+}
+
+type NvmeDiscoveryPageEntry struct {
+	PortID  uint16 `json:"portid"`
+	TrsvcID string `json:"trsvcid"`
+	Subnqn  string `json:"subnqn"`
+	Traddr  string `json:"traddr"`
+	SubType string `json:"subtype"`
 }
 
 type Controller struct {
@@ -59,39 +65,62 @@ func DiscoverTarget(ip, port string, executor util.Executor) (subnqn string, err
 		"-t", DefaultTransportType,
 		"-a", ip,
 		"-s", port,
+		"-o", "json",
 	}
 
 	// A valid output is like below:
-	//   Discovery Log Number of Records 1, Generation counter 1
-	//   =====Discovery Log Entry 0======
-	//   trtype:  tcp
-	//   adrfam:  ipv4
-	//   subtype: nvme subsystem
-	//   treq:    not required
-	//   portid:  0
-	//   trsvcid: 4520
-	//   subnqn:  nqn.2023-01.io.spdk:raid01
-	//   traddr:  127.0.0.1
-	//   sectype: none
-	output, err := executor.Execute(nvmeBinary, opts)
+	// # nvme discover -t tcp -a 10.42.2.20 -s 20011 -o json
+	//	{
+	//		"device" : "nvme0",
+	//		"genctr" : 2,
+	//		"records" : [
+	//		  {
+	//			"trtype" : "tcp",
+	//			"adrfam" : "ipv4",
+	//			"subtype" : "nvme subsystem",
+	//			"treq" : "not required",
+	//			"portid" : 0,
+	//			"trsvcid" : "20001",
+	//			"subnqn" : "nqn.2023-01.io.longhorn.spdk:pvc-81bab972-8e6b-48be-b691-18eaa430a897-r-0881c7b4",
+	//			"traddr" : "10.42.2.20",
+	//			"sectype" : "none"
+	//		  },
+	//		  {
+	//			"trtype" : "tcp",
+	//			"adrfam" : "ipv4",
+	//			"subtype" : "nvme subsystem",
+	//			"treq" : "not required",
+	//			"portid" : 0,
+	//			"trsvcid" : "20011",
+	//			"subnqn" : "nqn.2023-01.io.longhorn.spdk:pvc-5f94d59d-baec-40e5-9e8b-25b79909d14e-e-49c947f5",
+	//			"traddr" : "10.42.2.20",
+	//			"sectype" : "none"
+	//		  }
+	//		]
+	//	  }
+
+	// nvme discover does not respect the -s option, so we need to filter the output
+	outputStr, err := executor.Execute(nvmeBinary, opts)
 	if err != nil {
 		return "", err
 	}
 
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "subnqn:") {
-			continue
-		}
-		subnqn = strings.TrimSpace(strings.TrimPrefix(line, "subnqn:"))
-		break
-	}
-	if subnqn == "" {
-		return "", fmt.Errorf("found empty subnqn after nvme discover for %s:%s", ip, port)
+	var output struct {
+		Entries []NvmeDiscoveryPageEntry `json:"records"`
 	}
 
-	return subnqn, nil
+	err = json.Unmarshal([]byte(outputStr), &output)
+	if err != nil {
+		return "", err
+	}
+
+	for _, entry := range output.Entries {
+		if entry.TrsvcID == port {
+			return entry.Subnqn, nil
+		}
+	}
+
+	return "", fmt.Errorf("found empty subnqn after nvme discover for %s:%s", ip, port)
 }
 
 func ConnectTarget(ip, port, nqn string, executor util.Executor) (controllerName string, err error) {

@@ -25,6 +25,21 @@ type LvstoreInfo struct {
 	ClusterSize       uint64 `json:"cluster_size"`
 }
 
+type LvolInfo struct {
+	Alias             string `json:"alias"`
+	UUID              string `json:"uuid"`
+	Name              string `json:"name"`
+	IsThinProvisioned bool   `json:"is_thin_provisioned"`
+	IsSnapshot        bool   `json:"is_snapshot"`
+	IsClone           bool   `json:"is_clone"`
+	IsEsnapClone      bool   `json:"is_esnap_clone"`
+	IsDegraded        bool   `json:"is_degraded"`
+	Lvs               struct {
+		Name string `json:"name"`
+		UUID string `json:"uuid"`
+	} `json:"lvs"`
+}
+
 type BdevLvolCreateLvstoreRequest struct {
 	BdevName string `json:"bdev_name"`
 	LvsName  string `json:"lvs_name"`
