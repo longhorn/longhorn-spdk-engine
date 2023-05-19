@@ -46,6 +46,8 @@ type Replica struct {
 	UpdateCh chan interface{}
 
 	log logrus.FieldLogger
+
+	// TODO: Record error message
 }
 
 type Lvol struct {
@@ -142,24 +144,32 @@ func NewReplica(replicaName, lvsName, lvsUUID string, specSize uint64, updateCh 
 	}
 }
 
-// Construct build Replica with the SnapshotMap and SnapshotChain from the bdev lvol list.
-// This function is typically invoked for the existing lvols after node/service restart and device add.
-func (r *Replica) Construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err error) {
+func (r *Replica) Sync(bdevLvolMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
 	r.Lock()
+	defer r.Unlock()
+	// It's better to let the server send the update signal
+
+	if r.State == types.InstanceStatePending {
+		return r.construct(bdevLvolMap)
+	}
+
+	return r.validateAndUpdate(bdevLvolMap, subsystemMap)
+}
+
+// construct build Replica with the SnapshotMap and SnapshotChain from the bdev lvol list.
+// This function is typically invoked for the existing lvols after node/service restart and device add.
+func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err error) {
 	defer func() {
 		if err != nil {
 			r.State = types.InstanceStateError
 		}
-		r.Unlock()
-
-		// It's better to let the server send the update signal
 	}()
 
 	if r.State != types.InstanceStatePending {
 		return fmt.Errorf("invalid state %s for replica %s construct", r.Name, r.State)
 	}
 
-	if err := r.validateReplicaInfoWithoutLock(bdevLvolMap[r.Name]); err != nil {
+	if err := r.validateReplicaInfo(bdevLvolMap[r.Name]); err != nil {
 		return err
 	}
 	newChain, err := constructActiveChain(r.Name, bdevLvolMap)
@@ -181,20 +191,11 @@ func (r *Replica) Construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	return nil
 }
 
-func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
-	bdevLvolMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
-	updateRequired := false
-	r.Lock()
+func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
 	defer func() {
 		if err != nil && r.State != types.InstanceStateError {
 			r.State = types.InstanceStateError
 			r.log.Errorf("Found error during validation and update: %v", err)
-			updateRequired = true
-		}
-		r.Unlock()
-
-		if updateRequired {
-			r.UpdateCh <- nil
 		}
 	}()
 
@@ -203,7 +204,7 @@ func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
 		return nil
 	}
 
-	if err := r.validateReplicaInfoWithoutLock(bdevLvolMap[r.Name]); err != nil {
+	if err := r.validateReplicaInfo(bdevLvolMap[r.Name]); err != nil {
 		return err
 	}
 
@@ -222,7 +223,6 @@ func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
 		// Then update the actual size for the head lvol
 		if svcLvol.Name == r.Name && svcLvol.ActualSize != newSvcLvol.ActualSize {
 			svcLvol.ActualSize = newSvcLvol.ActualSize
-			updateRequired = true
 		}
 	}
 
@@ -250,32 +250,20 @@ func (r *Replica) ValidateAndUpdate(spdkClient *spdkclient.Client,
 		}
 	}
 
-	if !r.IsExposed {
-		return nil
-	}
-
+	// In case of a stopped replica being wrongly exposed, this function will check the exposing state anyway.
 	nqn := helpertypes.GetNQN(r.Name)
-	subsystem := subsystemMap[nqn]
-	if subsystem == nil || len(subsystem.ListenAddresses) == 0 {
-		return fmt.Errorf("cannot find the Nvmf subsystem with NQN %s for the exposed replica %s", nqn, r.Name)
-	}
-	exposedPort := 0
-	for _, listenAddr := range subsystem.ListenAddresses {
-		if !strings.EqualFold(string(listenAddr.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
-			!strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
-			continue
+	exposedPort, exposedPortErr := getExposedPort(subsystemMap[nqn])
+	if r.IsExposed {
+		if exposedPortErr != nil {
+			return errors.Wrapf(err, "failed to find the actual port in subsystem NQN %s for replica %s, which should be exposed at %d", nqn, r.Name, r.PortStart)
 		}
-		exposedPort, err = strconv.Atoi(listenAddr.Trsvcid)
-		if err != nil {
-			return err
+		if exposedPort != r.PortStart {
+			return fmt.Errorf("found mismatching between the actual exposed port %d and the recorded port %d for exposed replica %s", exposedPort, r.PortStart, r.Name)
 		}
-		break
-	}
-	if int32(exposedPort) != r.PortStart {
-		if stopErr := spdkClient.StopExposeBdev(nqn); stopErr != nil {
-			return errors.Wrapf(stopErr, "failed to stop the replica expose after finding mismatching between the actual exposed port %d and the recorded port %d for the exposed replica %s", exposedPort, r.PortStart, r.Name)
+	} else {
+		if exposedPortErr == nil {
+			return fmt.Errorf("found the actual port %d in subsystem NQN %s for replica %s, which should not be exposed", exposedPort, nqn, r.Name)
 		}
-		return fmt.Errorf("found mismatching between the actual exposed port %d and the recorded port %d for the exposed replica %s", exposedPort, r.PortStart, r.Name)
 	}
 
 	return nil
@@ -308,7 +296,28 @@ func compareSvcLvols(prev, cur *Lvol, checkChildren, checkActualSize bool) error
 	return nil
 }
 
-func (r *Replica) validateReplicaInfoWithoutLock(headBdevLvol *spdktypes.BdevInfo) (err error) {
+func getExposedPort(subsystem *spdktypes.NvmfSubsystem) (exposedPort int32, err error) {
+	if subsystem == nil || len(subsystem.ListenAddresses) == 0 {
+		return 0, fmt.Errorf("cannot find the Nvmf subsystem")
+	}
+
+	port := 0
+	for _, listenAddr := range subsystem.ListenAddresses {
+		if !strings.EqualFold(string(listenAddr.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
+			!strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
+			continue
+		}
+		port, err = strconv.Atoi(listenAddr.Trsvcid)
+		if err != nil {
+			return 0, err
+		}
+		return int32(port), nil
+	}
+
+	return 0, fmt.Errorf("cannot find a exposed port in the Nvmf subsystem")
+}
+
+func (r *Replica) validateReplicaInfo(headBdevLvol *spdktypes.BdevInfo) (err error) {
 	if headBdevLvol == nil {
 		return fmt.Errorf("found nil head bdev lvol for replica %s", r.Name)
 	}
