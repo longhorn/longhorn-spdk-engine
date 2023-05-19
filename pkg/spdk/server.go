@@ -109,6 +109,10 @@ func (s *Server) verify() error {
 	s.Lock()
 	defer s.Unlock()
 
+	lvsList, err := s.spdkClient.BdevLvolGetLvstore("", "")
+	if err != nil {
+		return err
+	}
 	bdevList, err := s.spdkClient.BdevGetBdevs("", 0)
 	if err != nil {
 		return err
@@ -117,30 +121,63 @@ func (s *Server) verify() error {
 	if err != nil {
 		return err
 	}
-	bdevMap := map[string]*spdktypes.BdevInfo{}
-	bdevLvolMap := map[string]*spdktypes.BdevInfo{}
-	for idx := range bdevList {
-		bdev := &bdevList[idx]
-		if len(bdev.Aliases) == 1 && spdktypes.GetBdevType(bdev) == spdktypes.BdevTypeLvol {
-			bdevMap[bdev.Aliases[0]] = bdev
-			bdevLvolMap[spdktypes.GetLvolNameFromAlias(bdev.Aliases[0])] = bdev
-		} else {
-			bdevMap[bdev.Name] = bdev
-		}
+
+	lvsUUIDNameMap := map[string]string{}
+	for _, lvs := range lvsList {
+		lvsUUIDNameMap[lvs.UUID] = lvs.Name
 	}
+
 	subsystemMap := map[string]*spdktypes.NvmfSubsystem{}
 	for idx := range subsystemList {
 		subsystem := &subsystemList[idx]
 		subsystemMap[subsystem.Nqn] = subsystem
 	}
 
+	bdevMap := map[string]*spdktypes.BdevInfo{}
+	bdevLvolMap := map[string]*spdktypes.BdevInfo{}
+	for idx := range bdevList {
+		bdev := &bdevList[idx]
+		bdevType := spdktypes.GetBdevType(bdev)
+
+		switch bdevType {
+		case spdktypes.BdevTypeLvol:
+			if len(bdev.Aliases) != 1 {
+				continue
+			}
+			lvolName := spdktypes.GetLvolNameFromAlias(bdev.Aliases[0])
+			bdevMap[bdev.Aliases[0]] = bdev
+			bdevLvolMap[lvolName] = bdev
+
+			// Detect if the lvol bdev is an uncached replica.
+			if bdev.DriverSpecific.Lvol.Snapshot {
+				continue
+			}
+			if s.replicaMap[lvolName] != nil {
+				continue
+			}
+			lvsUUID := bdev.DriverSpecific.Lvol.LvolStoreUUID
+			specSize := bdev.NumBlocks * uint64(bdev.BlockSize)
+			// TODO: May need to cache Disks
+			s.replicaMap[lvolName] = NewReplica(lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeReplica])
+		case spdktypes.BdevTypeRaid:
+			// Cannot detect if a RAID bdev is an engine since:
+			//   1. we don't know the frontend
+			//   2. RAID bdevs are not persist objects in SPDK. After spdk_tgt start/restart, there is no RAID bdev henc there is no need to do detection.
+			fallthrough
+		default:
+			bdevMap[bdev.Name] = bdev
+		}
+	}
+
 	for _, r := range s.replicaMap {
-		r.ValidateAndUpdate(s.spdkClient, bdevLvolMap, subsystemMap)
+		r.Sync(bdevLvolMap, subsystemMap)
 	}
 
 	for _, e := range s.engineMap {
 		e.ValidateAndUpdate(bdevMap, subsystemMap)
 	}
+
+	// TODO: send update signals if there is a Replica/Replica change
 
 	return nil
 }
