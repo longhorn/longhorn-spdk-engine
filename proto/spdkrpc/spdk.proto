@@ -98,6 +98,9 @@ message EngineCreateRequest {
     uint64 spec_size = 3;
     map<string, string> replica_address_map = 4;
     string frontend = 5;
+    int32 ctrlr_loss_timeout = 6;
+    int32 reconnect_delay = 7;
+    int32 fast_io_fail_timeout = 8;
 }
 
 message EngineDeleteRequest {
