@@ -432,15 +432,24 @@ func (c *Client) BdevRaidGetInfoByCategory(category spdktypes.BdevRaidCategory) 
 //	"traddr": NVMe-oF target address: ip or BDF
 //
 //	"adrfam": NVMe-oF target adrfam: ipv4, ipv6, ib, fc, intra_host
-func (c *Client) BdevNvmeAttachController(name, subnqn, traddr, trsvcid string, trtype spdktypes.NvmeTransportType, adrfam spdktypes.NvmeAddressFamily) (bdevNameList []string, err error) {
+//
+// "ctrlrLossTimeoutSec": Controller loss timeout in seconds
+//
+// "reconnectDelaySec": Controller reconnect delay in seconds
+//
+// "fastIOFailTimeoutSec": Fast I/O failure timeout in seconds
+func (c *Client) BdevNvmeAttachController(name, subnqn, traddr, trsvcid string, trtype spdktypes.NvmeTransportType, adrfam spdktypes.NvmeAddressFamily, ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec int32) (bdevNameList []string, err error) {
 	req := spdktypes.BdevNvmeAttachControllerRequest{
 		Name: name,
 		NvmeTransportID: spdktypes.NvmeTransportID{
-			Traddr:  traddr,
-			Trtype:  trtype,
-			Subnqn:  subnqn,
-			Trsvcid: trsvcid,
-			Adrfam:  adrfam,
+			Traddr:               traddr,
+			Trtype:               trtype,
+			Subnqn:               subnqn,
+			Trsvcid:              trsvcid,
+			Adrfam:               adrfam,
+			CtrlrLossTimeoutSec:  ctrlrLossTimeoutSec,
+			ReconnectDelaySec:    reconnectDelaySec,
+			FastIOFailTimeoutSec: fastIOFailTimeoutSec,
 		},
 	}
 
