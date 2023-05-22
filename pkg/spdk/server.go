@@ -334,7 +334,8 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine])
 	e := s.engineMap[req.Name]
 
-	return e.Create(s.spdkClient, req.ReplicaAddressMap, s.getLocalReplicaBdevMap(req.ReplicaAddressMap), s.portAllocator)
+	return e.Create(s.spdkClient, req.ReplicaAddressMap, s.getLocalReplicaBdevMap(req.ReplicaAddressMap), s.portAllocator,
+		req.CtrlrLossTimeout, req.ReconnectDelay, req.FastIoFailTimeout)
 }
 
 func (s *Server) getLocalReplicaBdevMap(replicaAddressMap map[string]string) (replicaBdevMap map[string]string) {
