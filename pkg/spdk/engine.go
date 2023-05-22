@@ -167,7 +167,8 @@ func getBdevNameForReplica(spdkClient *spdkclient.Client, localReplicaBdevMap ma
 		return localReplicaBdevMap[replicaName], nil
 	}
 
-	nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(replicaName, helpertypes.GetNQN(replicaName), replicaIP, replicaPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4)
+	nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(replicaName, helpertypes.GetNQN(replicaName), replicaIP, replicaPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4,
+		helpertypes.DefaultCtrlrLossTimeoutSec, helpertypes.DefaultReconnectDelaySec, helpertypes.DefaultFastIoFailTimeoutSec)
 	if err != nil {
 		return "", err
 	}
