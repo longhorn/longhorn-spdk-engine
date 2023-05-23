@@ -51,14 +51,11 @@ type NvmeNsData struct {
 }
 
 type NvmeTransportID struct {
-	Trtype               NvmeTransportType `json:"trtype,omitempty"`
-	Adrfam               NvmeAddressFamily `json:"adrfam,omitempty"`
-	Traddr               string            `json:"traddr,omitempty"`
-	Trsvcid              string            `json:"trsvcid,omitempty"`
-	Subnqn               string            `json:"subnqn,omitempty"`
-	CtrlrLossTimeoutSec  int32             `json:"ctrlr_loss_timeout_sec"`
-	ReconnectDelaySec    int32             `json:"reconnect_delay_sec"`
-	FastIOFailTimeoutSec int32             `json:"fast_io_fail_timeout_sec"`
+	Trtype  NvmeTransportType `json:"trtype,omitempty"`
+	Adrfam  NvmeAddressFamily `json:"adrfam,omitempty"`
+	Traddr  string            `json:"traddr,omitempty"`
+	Trsvcid string            `json:"trsvcid,omitempty"`
+	Subnqn  string            `json:"subnqn,omitempty"`
 }
 
 type NvmeVendorSpecific struct {
@@ -97,6 +94,10 @@ type BdevNvmeAttachControllerRequest struct {
 
 	Hostaddr  string `json:"hostaddr,omitempty"`
 	Hostsvcid string `json:"hostsvcid,omitempty"`
+
+	CtrlrLossTimeoutSec  int32 `json:"ctrlr_loss_timeout_sec"`
+	ReconnectDelaySec    int32 `json:"reconnect_delay_sec"`
+	FastIOFailTimeoutSec int32 `json:"fast_io_fail_timeout_sec"`
 }
 
 type BdevNvmeDetachControllerRequest struct {
