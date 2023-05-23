@@ -459,6 +459,39 @@ func (e *Engine) validateAndUpdateReplicaMode(replicaName string, bdev *spdktype
 	return types.ModeRW, nil
 }
 
+func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, replicaAddress string) (err error) {
+	e.Lock()
+	defer e.Unlock()
+
+	if replicaName == "" {
+		for rName, rAddr := range e.ReplicaAddressMap {
+			if rAddr == replicaAddress {
+				replicaName = rName
+				break
+			}
+		}
+	}
+	if replicaName == "" {
+		return fmt.Errorf("cannot find replica name with address %s for engine %s replica delete", replicaAddress, e.Name)
+	}
+	if e.ReplicaAddressMap[replicaName] == "" {
+		return fmt.Errorf("cannot find replica %s for engine %s replica delete", replicaName, e.Name)
+	}
+	if replicaAddress != "" && e.ReplicaAddressMap[replicaName] != replicaAddress {
+		return fmt.Errorf("replica %s recorded address %s does not match the input address %s for engine %s replica delete", replicaName, e.ReplicaAddressMap[replicaName], replicaAddress, e.Name)
+	}
+
+	if _, err := spdkClient.BdevRaidRemoveBaseBdev(e.ReplicaBdevNameMap[replicaName]); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return err
+	}
+
+	delete(e.ReplicaAddressMap, replicaName)
+	delete(e.ReplicaModeMap, replicaName)
+	delete(e.ReplicaBdevNameMap, replicaName)
+
+	return nil
+}
+
 func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, name, snapshotName string) (res *spdkrpc.Engine, err error) {
 	return nil, fmt.Errorf("unimplemented")
 }

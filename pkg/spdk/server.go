@@ -466,6 +466,22 @@ func (s *Server) EngineWatch(req *empty.Empty, srv spdkrpc.SPDKService_EngineWat
 	return nil
 }
 
+func (s *Server) EngineReplicaDelete(ctx context.Context, req *spdkrpc.EngineReplicaDeleteRequest) (ret *empty.Empty, err error) {
+	s.Lock()
+	defer s.Unlock()
+
+	e := s.engineMap[req.EngineName]
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s with address %s delete", req.EngineName, req.ReplicaName, req.ReplicaAddress)
+	}
+
+	if err := e.ReplicaDelete(s.spdkClient, req.ReplicaName, req.ReplicaAddress); err != nil {
+		return nil, err
+	}
+
+	return &empty.Empty{}, nil
+}
+
 func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Engine, err error) {
 	if req.Name == "" || req.SnapshotName == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name and snapshot name are required")
