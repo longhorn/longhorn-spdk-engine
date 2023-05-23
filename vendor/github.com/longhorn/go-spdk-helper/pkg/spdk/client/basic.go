@@ -442,15 +442,15 @@ func (c *Client) BdevNvmeAttachController(name, subnqn, traddr, trsvcid string, 
 	req := spdktypes.BdevNvmeAttachControllerRequest{
 		Name: name,
 		NvmeTransportID: spdktypes.NvmeTransportID{
-			Traddr:               traddr,
-			Trtype:               trtype,
-			Subnqn:               subnqn,
-			Trsvcid:              trsvcid,
-			Adrfam:               adrfam,
-			CtrlrLossTimeoutSec:  ctrlrLossTimeoutSec,
-			ReconnectDelaySec:    reconnectDelaySec,
-			FastIOFailTimeoutSec: fastIOFailTimeoutSec,
+			Traddr:  traddr,
+			Trtype:  trtype,
+			Subnqn:  subnqn,
+			Trsvcid: trsvcid,
+			Adrfam:  adrfam,
 		},
+		CtrlrLossTimeoutSec:  ctrlrLossTimeoutSec,
+		ReconnectDelaySec:    reconnectDelaySec,
+		FastIOFailTimeoutSec: fastIOFailTimeoutSec,
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("bdev_nvme_attach_controller", req)
