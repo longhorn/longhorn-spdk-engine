@@ -50,6 +50,7 @@ message Replica {
     int32 port_end = 9;
     map<string, Lvol> snapshots = 10;
     bool rebuilding = 11;
+    string state = 12;
 }
 
 message ReplicaCreateRequest {
@@ -90,6 +91,7 @@ message Engine {
     map<string, ReplicaMode> replica_mode_map = 8;
     string frontend = 9;
     string endpoint = 10;
+    string state = 11;
 }
 
 message EngineCreateRequest {

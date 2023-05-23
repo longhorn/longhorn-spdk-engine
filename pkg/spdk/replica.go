@@ -2,14 +2,14 @@ package spdk
 
 import (
 	"fmt"
-	grpccodes "google.golang.org/grpc/codes"
-	grpcstatus "google.golang.org/grpc/status"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
@@ -71,6 +71,7 @@ func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 		Ip:        r.IP,
 		PortStart: r.PortStart,
 		PortEnd:   r.PortEnd,
+		State:     string(r.State),
 	}
 	for name, lvol := range r.SnapshotMap {
 		res.Snapshots[name] = ServiceLvolToProtoLvol(lvol)
