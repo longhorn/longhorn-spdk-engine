@@ -280,6 +280,7 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 		Port:              e.Port,
 		Frontend:          e.Frontend,
 		Endpoint:          e.Endpoint,
+		State:             string(e.State),
 	}
 
 	for replicaName, replicaMode := range e.ReplicaModeMap {
