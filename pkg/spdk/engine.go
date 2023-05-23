@@ -388,6 +388,41 @@ func (e *Engine) ValidateAndUpdate(
 		return fmt.Errorf("found mismatching between engine spec size %d and actual raid bdev size %d for engine %s", e.SpecSize, bdevRaidSize, e.Name)
 	}
 
+	// Verify engine map consistency
+	for replicaName := range e.ReplicaAddressMap {
+		if _, exists := e.ReplicaBdevNameMap[replicaName]; !exists {
+			e.ReplicaBdevNameMap[replicaName] = ""
+			e.ReplicaModeMap[replicaName] = types.ModeERR
+			e.log.Errorf("Mark replica %s as mode ERR since it is not found in engine %s bdev name map", replicaName, e.Name)
+		}
+		if _, exists := e.ReplicaModeMap[replicaName]; !exists {
+			e.ReplicaModeMap[replicaName] = types.ModeERR
+			e.log.Errorf("Mark replica %s as mode ERR since it is not found in engine %s mode map", replicaName, e.Name)
+		}
+	}
+	for replicaName := range e.ReplicaBdevNameMap {
+		if _, exists := e.ReplicaAddressMap[replicaName]; !exists {
+			e.ReplicaAddressMap[replicaName] = ""
+			e.ReplicaModeMap[replicaName] = types.ModeERR
+			e.log.Errorf("Mark replica %s as mode ERR since it is not found in engine %s address map", replicaName, e.Name)
+		}
+		if _, exists := e.ReplicaModeMap[replicaName]; !exists {
+			e.ReplicaModeMap[replicaName] = types.ModeERR
+			e.log.Errorf("Mark replica %s as mode ERR since it is not found in engine %s mode map", replicaName, e.Name)
+		}
+	}
+	// Now e.ReplicaAddressMap and e.ReplicaBdevNameMap should have the same key set
+	for replicaName := range e.ReplicaModeMap {
+		if _, exists := e.ReplicaAddressMap[replicaName]; !exists {
+			delete(e.ReplicaModeMap, replicaName)
+			e.log.Errorf("Remove replica %s for the mode map since it is not found in engine %s address map", replicaName, e.Name)
+		}
+		if _, exists := e.ReplicaBdevNameMap[replicaName]; !exists {
+			delete(e.ReplicaBdevNameMap, replicaName)
+			e.log.Errorf("Remove replica %s for the mode map since it is not found in engine %s bdev name map", replicaName, e.Name)
+		}
+	}
+
 	containValidReplica := false
 	for replicaName, bdevName := range e.ReplicaBdevNameMap {
 		if e.ReplicaModeMap[replicaName] == types.ModeERR {
