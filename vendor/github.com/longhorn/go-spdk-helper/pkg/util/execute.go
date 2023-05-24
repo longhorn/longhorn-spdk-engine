@@ -146,3 +146,11 @@ func ExecuteWithStdin(binary string, args []string, stdinString string) (string,
 	}
 	return output.String(), nil
 }
+
+func GetExecutorByHostProc(hostProc string) (Executor, error) {
+	if hostProc == "" {
+		return NewTimeoutExecutor(CmdTimeout), nil
+	}
+
+	return NewNamespaceExecutor(GetHostNamespacePath(hostProc))
+}

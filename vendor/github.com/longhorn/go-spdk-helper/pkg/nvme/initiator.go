@@ -53,15 +53,9 @@ func NewInitiator(name, subsystemNQN, hostProc string) (*Initiator, error) {
 
 	// If transportAddress or transportServiceID is empty, the initiator is still valid for stopping
 
-	var executor util.Executor
-	if hostProc != "" {
-		ne, err := util.NewNamespaceExecutor(util.GetHostNamespacePath(hostProc))
-		if err != nil {
-			return nil, err
-		}
-		executor = ne
-	} else {
-		executor = util.NewTimeoutExecutor(util.CmdTimeout)
+	executor, err := util.GetExecutorByHostProc(hostProc)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := CheckForNVMeCliExistence(executor); err != nil {
