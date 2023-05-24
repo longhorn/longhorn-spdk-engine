@@ -55,3 +55,7 @@ const (
 type BdevRaidGetBdevsRequest struct {
 	Category BdevRaidCategory `json:"category"`
 }
+
+type BdevRaidRemoveBaseBdevRequest struct {
+	Name string `json:"name"`
+}

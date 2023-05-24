@@ -419,6 +419,53 @@ func (c *Client) BdevRaidGetInfoByCategory(category spdktypes.BdevRaidCategory) 
 	return bdevRaidInfoList, json.Unmarshal(cmdOutput, &bdevRaidInfoList)
 }
 
+// BdevRaidRemoveBaseBdev is used to list all the raid info details based on the input category requested.
+//
+//	"name": Required. The base bdev name to be removed from RAID bdevs.
+func (c *Client) BdevRaidRemoveBaseBdev(name string) (removed bool, err error) {
+	req := spdktypes.BdevRaidRemoveBaseBdevRequest{
+		Name: name,
+	}
+
+	// Notice that RAID `num_base_bdevs_discovered` will decrease but `num_base_bdevs` won't change after the removal.
+	// And it will leave a meaningless record in the `base_bdev_list`, for example:
+	//
+	// 	"driver_specific": {
+	//		"raid": {
+	//			"name": "raid01",
+	//			"strip_size_kb": 0,
+	//			"state": "online",
+	//			"raid_level": "raid1",
+	//			"num_base_bdevs": 2,
+	//			"num_base_bdevs_discovered": 1,
+	//			"num_base_bdevs_operational": 1,
+	//			"base_bdevs_list": [
+	//				{
+	//					"name": "spdk-00/lvol0",
+	//					"uuid": "617f5bc6-9a86-43c1-9223-2fa9e07894e2",
+	//					"is_configured": true,
+	//					"data_offset": 0,
+	//					"data_size": 25600
+	//				},
+	//				{
+	//					"name": "",
+	//					"uuid": "00000000-0000-0000-0000-000000000000",
+	//					"is_configured": false,
+	//					"data_offset": 0,
+	//					"data_size": 25600
+	//				}
+	//			],
+	//			"superblock": false
+	//		}
+	//	}
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_raid_remove_base_bdev", req)
+	if err != nil {
+		return false, err
+	}
+
+	return removed, json.Unmarshal(cmdOutput, &removed)
+}
+
 // BdevNvmeAttachController constructs NVMe bdev.
 //
 //	"name": Name of the NVMe controller. And the corresponding bdev nvme name are same as the nvme namespace name, which is `{ControllerName}n1`

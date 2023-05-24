@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -63,7 +62,14 @@ func (c *Client) SendMsgWithTimeout(method string, params interface{}, timeoutIn
 	var resp Response
 
 	defer func() {
-		err = errors.Wrapf(err, "error sending message, id %v, method %v, params %+v", id, method, params)
+		if err != nil {
+			err = JSONClientError{
+				ID:          id,
+				Method:      method,
+				Params:      params,
+				ErrorDetail: err,
+			}
+		}
 
 		// For debug purpose
 		stdenc := json.NewEncoder(os.Stdin)
