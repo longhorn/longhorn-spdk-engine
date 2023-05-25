@@ -21,7 +21,7 @@ type Device struct {
 	Namespaces   []Namespace
 }
 
-type NvmeDiscoveryPageEntry struct {
+type DiscoveryPageEntry struct {
 	PortID  uint16 `json:"portid"`
 	TrsvcID string `json:"trsvcid"`
 	Subnqn  string `json:"subnqn"`
@@ -106,7 +106,7 @@ func DiscoverTarget(ip, port string, executor util.Executor) (subnqn string, err
 	}
 
 	var output struct {
-		Entries []NvmeDiscoveryPageEntry `json:"records"`
+		Entries []DiscoveryPageEntry `json:"records"`
 	}
 
 	err = json.Unmarshal([]byte(outputStr), &output)

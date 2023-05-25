@@ -167,23 +167,23 @@ func (c *Client) BdevLvolRenameLvstore(oldName, newName string) (renamed bool, e
 //
 //	"lvol_name": Required. Name of logical volume to create. The bdev name/alias will be <LVSTORE NAME>/<LVOL NAME>.
 //
-//	"lvstoreName": Required. Name of logical volume store to create logical volume on.
+//	"lvstoreName": Either this or "lvstoreUUID" is required. Name of logical volume store to create logical volume on.
 //
-//	"specifiedUUID": Optional. UUID of logical volume store to create logical volume on.
+//	"lvstoreUUID": Either this or "lvstoreName" is required. UUID of logical volume store to create logical volume on.
 //
 //	"sizeInMib": Optional. Logical volume size in Mib. And size will be rounded up to a multiple of cluster size.
 //
 //	"clearMethod": Optional. Change default data clusters clear method. Available: none, unmap, write_zeroes. unmap by default for this API.
 //
 //	"thinProvision": Optional. True to enable thin provisioning. True by default for this API.
-func (c *Client) BdevLvolCreate(lvstoreName, lvolName, specifiedUUID string, sizeInMib uint64, clearMethod spdktypes.BdevLvolClearMethod, thinProvision bool) (uuid string, err error) {
+func (c *Client) BdevLvolCreate(lvstoreName, lvstoreUUID, lvolName string, sizeInMib uint64, clearMethod spdktypes.BdevLvolClearMethod, thinProvision bool) (uuid string, err error) {
 	if clearMethod == "" {
 		clearMethod = spdktypes.BdevLvolClearMethodUnmap
 	}
 	req := spdktypes.BdevLvolCreateRequest{
 		LvsName:       lvstoreName,
+		UUID:          lvstoreUUID,
 		LvolName:      lvolName,
-		UUID:          specifiedUUID,
 		SizeInMib:     sizeInMib,
 		ClearMethod:   clearMethod,
 		ThinProvision: thinProvision,

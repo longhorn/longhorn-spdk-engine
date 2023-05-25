@@ -73,11 +73,10 @@ const (
 )
 
 type BdevLvolCreateRequest struct {
-	LvsName   string `json:"lvs_name"`
-	LvolName  string `json:"lvol_name"`
-	SizeInMib uint64 `json:"size_in_mib"`
-
+	LvsName       string              `json:"lvs_name,omitempty"`
 	UUID          string              `json:"uuid,omitempty"`
+	LvolName      string              `json:"lvol_name"`
+	SizeInMib     uint64              `json:"size_in_mib"`
 	ClearMethod   BdevLvolClearMethod `json:"clear_method,omitempty"`
 	ThinProvision bool                `json:"thin_provision,omitempty"`
 }

@@ -14,7 +14,7 @@ const (
 	FrontendSPDKTCPBlockdev = "spdk-tcp-blockdev"
 
 	DefaultCtrlrLossTimeoutSec = 30
-	// ReconnectDelaySec can't be more than FastIoFailTimeoutSec
+	// DefaultReconnectDelaySec can't be more than DefaultFastIoFailTimeoutSec, same for non-default values.
 	DefaultReconnectDelaySec    = 5
 	DefaultFastIoFailTimeoutSec = 15
 )
