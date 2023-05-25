@@ -432,8 +432,30 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, sup
 
 	// Create bdev lvol if the replica is the new one
 	if r.State == types.InstanceStatePending {
+		var lvsList []spdktypes.LvstoreInfo
+		if r.LvsUUID != "" {
+			lvsList, err = spdkClient.BdevLvolGetLvstore("", r.LvsUUID)
+		} else if r.LvsName != "" {
+			lvsList, err = spdkClient.BdevLvolGetLvstore(r.LvsName, "")
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(lvsList) != 1 {
+			return nil, fmt.Errorf("found zero or multiple lvstore with name %s and UUID %s during replica %s creation", r.LvsName, r.LvsUUID, r.Name)
+		}
+		if r.LvsName == "" {
+			r.LvsName = lvsList[0].Name
+		}
+		if r.LvsUUID == "" {
+			r.LvsUUID = lvsList[0].UUID
+		}
+		if r.LvsName != lvsList[0].Name || r.LvsUUID != lvsList[0].UUID {
+			return nil, fmt.Errorf("found mismatching between the actual lvstore name %s with UUID %s and the recorded lvstore name %s with UUID %s during replica %s creation", lvsList[0].Name, lvsList[0].UUID, r.LvsName, r.LvsUUID, r.Name)
+		}
+
 		r.log.Infof("Creating a lvol bdev for the new replica")
-		if _, err := spdkClient.BdevLvolCreate(r.LvsName, r.Name, "", util.BytesToMiB(r.SpecSize), "", true); err != nil {
+		if _, err := spdkClient.BdevLvolCreate("", r.LvsUUID, r.Name, util.BytesToMiB(r.SpecSize), "", true); err != nil {
 			return nil, err
 		}
 		bdevLvolList, err := spdkClient.BdevLvolGet(r.Alias, 0)
