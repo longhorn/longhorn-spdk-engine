@@ -222,8 +222,8 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 	if req.Name == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
 	}
-	if req.LvsName == "" || req.LvsUuid == "" {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "lvs name and lvs UUID are required")
+	if req.LvsName == "" && req.LvsUuid == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "lvs name or lvs UUID are required")
 	}
 
 	s.Lock()
