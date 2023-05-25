@@ -5,7 +5,7 @@ go 1.17
 require (
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/golang/protobuf v1.5.2
-	github.com/longhorn/go-spdk-helper v0.0.0-20230525062649-42290bb3e584
+	github.com/longhorn/go-spdk-helper v0.0.0-20230525131301-ddb9e9044e51
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.8.1
 	golang.org/x/net v0.7.0
