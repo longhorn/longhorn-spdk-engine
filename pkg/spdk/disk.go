@@ -5,9 +5,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
-	"syscall"
 
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
@@ -17,6 +14,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	"github.com/longhorn/go-spdk-helper/pkg/util"
@@ -89,8 +87,7 @@ func svcDiskDelete(spdkClient *spdkclient.Client, diskName, diskUUID string) (re
 	aioBdevName := ""
 	lvstores, err := spdkClient.BdevLvolGetLvstore("", diskUUID)
 	if err != nil {
-		resp, parseErr := parseErrorMessage(err.Error())
-		if parseErr != nil || !isNoSuchDevice(resp.Message) {
+		if !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return nil, errors.Wrapf(err, "failed to get lvstore with UUID %v", diskUUID)
 		}
 		log.Warnf("Cannot find lvstore with UUID %v", diskUUID)
@@ -132,8 +129,7 @@ func svcDiskGet(spdkClient *spdkclient.Client, diskName, diskPath string) (ret *
 	// Check if the disk exists
 	bdevs, err := spdkClient.BdevAioGet(diskName, 0)
 	if err != nil {
-		resp, parseErr := parseErrorMessage(err.Error())
-		if parseErr != nil || !isNoSuchDevice(resp.Message) {
+		if !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err, "failed to get AIO bdev with name %v", diskName).Error())
 		}
 	}
@@ -245,8 +241,7 @@ func addBlockDevice(spdkClient *spdkclient.Client, diskName, diskPath string, bl
 	log.Infof("Creating AIO bdev %v with block size %v", diskName, blockSize)
 	bdevName, err := spdkClient.BdevAioCreate(getDiskPath(diskPath), diskName, uint64(blockSize))
 	if err != nil {
-		resp, parseErr := parseErrorMessage(err.Error())
-		if parseErr != nil || !isFileExists(resp.Message) {
+		if !jsonrpc.IsJSONRPCRespErrorFileExists(err) {
 			return "", errors.Wrapf(err, "failed to create AIO bdev")
 		}
 	}
@@ -309,38 +304,4 @@ func lvstoreToDisk(spdkClient *spdkclient.Client, diskPath, lvstoreName, lvstore
 		BlockSize:   int64(lvstore.BlockSize),
 		ClusterSize: int64(lvstore.ClusterSize),
 	}, nil
-}
-
-var errorMessageRegExp = regexp.MustCompile(`"code": (-?\d+),\n\t"message": "([^"]+)"`)
-
-type ErrorMessage struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-func parseErrorMessage(errStr string) (*ErrorMessage, error) {
-	match := errorMessageRegExp.FindStringSubmatch(errStr)
-	if len(match) == 0 {
-		return nil, fmt.Errorf("failed to parse error message")
-	}
-
-	code := 0
-	if _, err := fmt.Sscanf(match[1], "%d", &code); err != nil {
-		return nil, fmt.Errorf("failed to parse error code: %w", err)
-	}
-
-	em := &ErrorMessage{
-		Code:    code,
-		Message: match[2],
-	}
-
-	return em, nil
-}
-
-func isFileExists(message string) bool {
-	return strings.EqualFold(message, syscall.Errno(syscall.EEXIST).Error())
-}
-
-func isNoSuchDevice(message string) bool {
-	return strings.EqualFold(message, syscall.Errno(syscall.ENODEV).Error())
 }
