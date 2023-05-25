@@ -229,6 +229,23 @@ func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error)
 	return api.NewEngineStream(stream), nil
 }
 
+func (c *SPDKClient) EngineReplicaDelete(engineName, replicaName, replicaAddress string) error {
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineReplicaDelete(ctx, &spdkrpc.EngineReplicaDeleteRequest{
+		EngineName:     engineName,
+		ReplicaName:    replicaName,
+		ReplicaAddress: replicaAddress,
+	})
+	if err != nil {
+		return errors.Wrap(err, "failed to delete replica from engine")
+	}
+
+	return nil
+}
+
 func (c *SPDKClient) DiskCreate(diskName, diskPath string, blockSize int64) (*spdkrpc.Disk, error) {
 	if diskName == "" || diskPath == "" {
 		return nil, fmt.Errorf("failed to create disk: missing required parameter")
