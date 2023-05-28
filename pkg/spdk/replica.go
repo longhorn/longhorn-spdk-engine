@@ -241,11 +241,10 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 		}
 	}
 
-	if r.IP == "" {
-		return fmt.Errorf("found invalid IP %s for replica %s", r.IP, r.Name)
-	}
-
 	if r.State == types.InstanceStateRunning {
+		if r.IP == "" {
+			return fmt.Errorf("found invalid IP %s for replica %s", r.IP, r.Name)
+		}
 		if r.PortStart == 0 || r.PortEnd == 0 || r.PortStart > r.PortEnd {
 			return fmt.Errorf("found invalid Ports [%d, %d] for the running replica %s", r.PortStart, r.PortEnd, r.Name)
 		}
