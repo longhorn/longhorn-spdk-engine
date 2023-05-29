@@ -168,7 +168,6 @@ message DiskCreateRequest{
 
 message DiskGetRequest {
     string disk_name = 1;
-    string disk_path = 2;
 }
 
 message DiskDeleteRequest {

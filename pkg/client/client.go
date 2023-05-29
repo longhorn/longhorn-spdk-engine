@@ -262,8 +262,8 @@ func (c *SPDKClient) DiskCreate(diskName, diskPath string, blockSize int64) (*sp
 	})
 }
 
-func (c *SPDKClient) DiskGet(diskName, diskPath string) (*spdkrpc.Disk, error) {
-	if diskName == "" || diskPath == "" {
+func (c *SPDKClient) DiskGet(diskName string) (*spdkrpc.Disk, error) {
+	if diskName == "" {
 		return nil, fmt.Errorf("failed to get disk info: missing required parameter")
 	}
 
@@ -273,7 +273,6 @@ func (c *SPDKClient) DiskGet(diskName, diskPath string) (*spdkrpc.Disk, error) {
 
 	return client.DiskGet(ctx, &spdkrpc.DiskGetRequest{
 		DiskName: diskName,
-		DiskPath: diskPath,
 	})
 }
 

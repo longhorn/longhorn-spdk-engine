@@ -531,7 +531,7 @@ func (s *Server) DiskDelete(ctx context.Context, req *spdkrpc.DiskDeleteRequest)
 func (s *Server) DiskGet(ctx context.Context, req *spdkrpc.DiskGetRequest) (ret *spdkrpc.Disk, err error) {
 	s.Lock()
 	defer s.Unlock()
-	return svcDiskGet(s.spdkClient, req.DiskName, req.DiskPath)
+	return svcDiskGet(s.spdkClient, req.DiskName)
 }
 
 func (s *Server) VersionDetailGet(context.Context, *empty.Empty) (*spdkrpc.VersionDetailGetReply, error) {
