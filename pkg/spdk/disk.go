@@ -17,7 +17,9 @@ import (
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
-	"github.com/longhorn/go-spdk-helper/pkg/util"
+	spdkutil "github.com/longhorn/go-spdk-helper/pkg/util"
+
+	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
 
@@ -107,10 +109,9 @@ func svcDiskDelete(spdkClient *spdkclient.Client, diskName, diskUUID string) (re
 	return &empty.Empty{}, nil
 }
 
-func svcDiskGet(spdkClient *spdkclient.Client, diskName, diskPath string) (ret *spdkrpc.Disk, err error) {
+func svcDiskGet(spdkClient *spdkclient.Client, diskName string) (ret *spdkrpc.Disk, err error) {
 	log := logrus.WithFields(logrus.Fields{
 		"diskName": diskName,
-		"diskPath": diskPath,
 	})
 
 	log.Info("Getting disk info")
@@ -122,8 +123,8 @@ func svcDiskGet(spdkClient *spdkclient.Client, diskName, diskPath string) (ret *
 		}
 	}()
 
-	if diskName == "" || diskPath == "" {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "disk name and disk path are required")
+	if diskName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "disk name is required")
 	}
 
 	// Check if the disk exists
@@ -139,15 +140,16 @@ func svcDiskGet(spdkClient *spdkclient.Client, diskName, diskPath string) (ret *
 
 	var targetBdev *spdktypes.BdevInfo
 	for i, bdev := range bdevs {
-		if bdev.DriverSpecific != nil ||
-			bdev.DriverSpecific.Aio.FileName == getDiskPath(diskPath) {
+		if bdev.DriverSpecific != nil {
 			targetBdev = &bdevs[i]
 			break
 		}
 	}
 	if targetBdev == nil {
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, errors.Wrapf(err, "failed to get AIO bdev name for disk path %v", diskPath).Error())
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, errors.Wrapf(err, "failed to get AIO bdev for disk %v", diskName).Error())
 	}
+
+	diskPath := util.RemovePrefix(targetBdev.DriverSpecific.Aio.FileName, hostPrefix)
 
 	return lvstoreToDisk(spdkClient, diskPath, diskName, "")
 }
@@ -157,8 +159,8 @@ func getDiskPath(path string) string {
 }
 
 func getDiskID(filename string) (string, error) {
-	executor := util.NewTimeoutExecutor(util.CmdTimeout)
-	dev, err := util.DetectDevice(filename, executor)
+	executor := spdkutil.NewTimeoutExecutor(spdkutil.CmdTimeout)
+	dev, err := spdkutil.DetectDevice(filename, executor)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to detect disk device")
 	}

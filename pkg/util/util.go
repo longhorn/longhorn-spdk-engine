@@ -3,6 +3,7 @@ package util
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 func RoundUp(num, base uint64) uint64 {
@@ -28,4 +29,11 @@ func GetVolumeNameFromEngineName(engineName string) string {
 
 func BytesToMiB(bytes uint64) uint64 {
 	return bytes / 1024 / 1024
+}
+
+func RemovePrefix(path, prefix string) string {
+	if strings.HasPrefix(path, prefix) {
+		return strings.TrimPrefix(path, prefix)
+	}
+	return path
 }
