@@ -1,0 +1,22 @@
+#!/bin/bash
+set -e
+
+if [ -d '/host/dev' ]
+then
+	mount --rbind /host/dev /dev
+fi
+
+echo "Starting longhorn-instance-manager"
+/usr/local/bin/longhorn-instance-manager --debug daemon --listen localhost:8500 &
+pid_im=$!
+
+# make sure everything is running before continue integration test
+ps $pid_im
+
+trap "kill $pid_im" EXIT
+
+cd integration
+find -depth -name __pycache__ -o -name "*.pyc" -exec rm -rf {} \;
+if [ -z "$NO_TEST" ]; then
+    tox "$@"
+fi
