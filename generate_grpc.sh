@@ -13,4 +13,6 @@ fi
 # proto lint check
 #buf check lint
 
+mkdir -p integration/rpc/spdk
 protoc -I proto/spdkrpc/ -I proto/vendor/protobuf/src/ proto/spdkrpc/spdk.proto --go_out=plugins=grpc:proto/spdkrpc/
+python3 -m grpc_tools.protoc -I proto/spdkrpc/ -I proto/vendor/protobuf/src/ --python_out=integration/rpc/spdk --grpc_python_out=integration/rpc/spdk proto/spdkrpc/spdk.proto
