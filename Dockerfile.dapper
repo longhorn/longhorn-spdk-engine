@@ -27,7 +27,7 @@ RUN zypper -n install cmake wget curl git less file gcc \
     bash-completion librdmacm1 librdmacm-utils libibverbs xsltproc docbook-xsl-stylesheets \
     perl-Config-General libaio-devel glibc-devel-static glibc-devel sg3_utils iptables libltdl7 \
     python3-pip uuid-runtime libdevmapper1_03 iproute2 jq unzip \
-    rpm-build rdma-core-devel gcc-c++ docker util-linux-systemd && \
+    rpm-build rdma-core-devel gcc-c++ docker util-linux-systemd grep nvme-cli && \
     rm -rf rm -rf /var/cache/zypp/*
 
 # needed for ${!var} substitution
@@ -124,7 +124,7 @@ RUN if [ ${ARCH} == "amd64" ]; then \
 RUN cd /go/src/github.com/longhorn && \
     git clone https://github.com/derekbit/longhorn-instance-manager.git && \
     cd longhorn-instance-manager && \
-    git checkout 361b5271e9648211cbe4be175d08fd2ac2f577b9 && \
+    git checkout 1f6d365948ee53293c2719f95572cb4f4ad3b4cf && \
     go build -o ./longhorn-instance-manager && \
     cp -r integration/rpc/ ${DAPPER_SOURCE}/integration/rpc/ && \
     cp longhorn-instance-manager /usr/local/bin

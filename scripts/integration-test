@@ -6,14 +6,34 @@ then
 	mount --rbind /host/dev /dev
 fi
 
+# Set POD_IP
+IF=`ip addr show | grep "inet " | grep -v "host lo" | awk '{print $2}' | cut -d '/' -f 1 | head -n 1`
+if [ -z "$IF" ]; then
+    echo "Failed to get the IP address of the host"
+    exit 1
+fi
+export POD_IP=$IF
+
+# Create a loop block device
+dd if=/dev/zero of=blockfile bs=1M count=1024 && losetup -f blockfile
+dev_path=$(losetup -j blockfile | grep -o "/dev/loop[0-9]*")
+# Create /host/{dev_loop} with the same major and minor numbers as ${dev_loop}
+dev_loop_major=$(printf "%d\n" 0x$(stat -c '%t' $dev_path))
+dev_loop_minor=$(printf "%d\n" 0x$(stat -c '%T' $dev_path))
+mknod /dev/im-disk b $dev_loop_major $dev_loop_minor
+
+echo "Starting spdk_tgt"
+spdk_tgt &
+pid_spdk=$!
+
 echo "Starting longhorn-instance-manager"
-/usr/local/bin/longhorn-instance-manager --debug daemon --listen localhost:8500 &
+/usr/local/bin/longhorn-instance-manager --debug daemon --spdk-enabled --listen localhost:8500 &
 pid_im=$!
 
 # make sure everything is running before continue integration test
 ps $pid_im
 
-trap "kill $pid_im" EXIT
+trap "kill $pid_im && kill $pid_spdk && losetup -d $dev_path && rm -rf /dev/im-disk" EXIT
 
 cd integration
 find -depth -name __pycache__ -o -name "*.pyc" -exec rm -rf {} \;
