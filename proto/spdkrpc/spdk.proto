@@ -12,6 +12,12 @@ service SPDKService {
     rpc ReplicaSnapshotDelete(SnapshotRequest) returns (google.protobuf.Empty);
     rpc ReplicaList(google.protobuf.Empty) returns (ReplicaListResponse);
     rpc ReplicaWatch(google.protobuf.Empty) returns (stream google.protobuf.Empty) {}
+    rpc ReplicaRebuildingSrcStart(ReplicaRebuildingSrcStartRequest) returns (google.protobuf.Empty) {}
+    rpc ReplicaRebuildingSrcFinish(ReplicaRebuildingSrcFinishRequest) returns (google.protobuf.Empty) {}
+    rpc ReplicaSnapshotShallowCopy(ReplicaSnapshotShallowCopyRequest) returns (google.protobuf.Empty);
+    rpc ReplicaRebuildingDstStart(ReplicaRebuildingDstStartRequest) returns (ReplicaRebuildingDstStartResponse) {}
+    rpc ReplicaRebuildingDstFinish(ReplicaRebuildingDstFinishRequest) returns (google.protobuf.Empty) {}
+    rpc ReplicaRebuildingDstSnapshotCreate(SnapshotRequest) returns (google.protobuf.Empty);
 
 
     rpc EngineCreate(EngineCreateRequest) returns (Engine);
@@ -79,6 +85,36 @@ enum ReplicaMode {
     WO = 0;
     RW = 1;
     ERR = 2;
+}
+
+message ReplicaRebuildingSrcStartRequest {
+    string name = 1;
+    string dst_replica_name = 2;
+    string dst_rebuilding_lvol_address = 3;
+}
+
+message ReplicaRebuildingSrcFinishRequest {
+    string name = 1;
+    string dst_replica_name = 2;
+}
+
+message ReplicaSnapshotShallowCopyRequest {
+    string name = 1;
+    string snapshot_name = 2;
+}
+
+message ReplicaRebuildingDstStartRequest {
+    string name = 1;
+    bool expose_required = 2;
+}
+
+message ReplicaRebuildingDstStartResponse {
+    string address = 1;
+}
+
+message ReplicaRebuildingDstFinishRequest {
+    string name = 1;
+    bool unexpose_required = 2;
 }
 
 message Engine {
