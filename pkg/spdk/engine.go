@@ -75,7 +75,7 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 	}
 }
 
-func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localReplicaBdevMap map[string]string, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Engine, err error) {
+func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localReplicaLvsNameMap map[string]string, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Engine, err error) {
 	requireUpdate := true
 
 	e.Lock()
@@ -105,7 +105,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 
 	replicaBdevList := []string{}
 	for replicaName, replicaAddr := range replicaAddressMap {
-		bdevName, err := getBdevNameForReplica(spdkClient, localReplicaBdevMap, replicaName, replicaAddr, podIP)
+		bdevName, err := getBdevNameForReplica(spdkClient, localReplicaLvsNameMap, replicaName, replicaAddr, podIP)
 		if err != nil {
 			e.log.WithError(err).Errorf("Failed to get bdev from replica %s with address %s, will skip it and continue", replicaName, replicaAddr)
 			e.ReplicaModeMap[replicaName] = types.ModeERR
@@ -156,17 +156,17 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 	return e.getWithoutLock(), nil
 }
 
-func getBdevNameForReplica(spdkClient *spdkclient.Client, localReplicaBdevMap map[string]string, replicaName, replicaAddress, podIP string) (bdevName string, err error) {
+func getBdevNameForReplica(spdkClient *spdkclient.Client, localReplicaLvsNameMap map[string]string, replicaName, replicaAddress, podIP string) (bdevName string, err error) {
 	replicaIP, replicaPort, err := net.SplitHostPort(replicaAddress)
 	if err != nil {
 		return "", err
 	}
 	if replicaIP == podIP {
-		if localReplicaBdevMap[replicaName] == "" {
-			return "", fmt.Errorf("cannot to find local replica %s from the local replica bdev map", replicaName)
+		if localReplicaLvsNameMap[replicaName] == "" {
+			return "", fmt.Errorf("cannot find local replica %s from the local replica map", replicaName)
 
 		}
-		return localReplicaBdevMap[replicaName], nil
+		return spdktypes.GetLvolAlias(localReplicaLvsNameMap[replicaName], replicaName), nil
 	}
 
 	nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(replicaName, helpertypes.GetNQN(replicaName), replicaIP, replicaPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4,

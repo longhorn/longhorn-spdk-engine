@@ -350,6 +350,128 @@ func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.Snapsho
 	return &empty.Empty{}, err
 }
 
+func (s *Server) ReplicaRebuildingSrcStart(ctx context.Context, req *spdkrpc.ReplicaRebuildingSrcStartRequest) (ret *empty.Empty, err error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+	if req.DstReplicaName == "" || req.DstRebuildingLvolAddress == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "dst replica name and dst rebuilding lvol address are required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding src start", req.Name)
+	}
+
+	if err = r.RebuildingSrcStart(s.spdkClient, s.getLocalReplicaLvsNameMap(map[string]string{req.DstReplicaName: ""}), req.DstReplicaName, req.DstRebuildingLvolAddress); err != nil {
+		return nil, err
+	}
+	return &empty.Empty{}, nil
+}
+
+func (s *Server) ReplicaRebuildingSrcFinish(ctx context.Context, req *spdkrpc.ReplicaRebuildingSrcFinishRequest) (ret *empty.Empty, err error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+	if req.DstReplicaName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "dst replica name is required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding src finish", req.Name)
+	}
+
+	if err = r.RebuildingSrcFinish(s.spdkClient, req.DstReplicaName); err != nil {
+		return nil, err
+	}
+	return &empty.Empty{}, nil
+}
+
+func (s *Server) ReplicaSnapshotShallowCopy(ctx context.Context, req *spdkrpc.ReplicaSnapshotShallowCopyRequest) (ret *empty.Empty, err error) {
+	if req.Name == "" || req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica snapshot name is required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot %s shallow copy", req.Name, req.SnapshotName)
+	}
+
+	// Cannot add a lock to protect this now since a shallow copy may be time-consuming
+	if err = r.SnapshotShallowCopy(req.SnapshotName); err != nil {
+		return nil, err
+	}
+	return &empty.Empty{}, nil
+}
+
+func (s *Server) ReplicaRebuildingDstStart(ctx context.Context, req *spdkrpc.ReplicaRebuildingDstStartRequest) (ret *spdkrpc.ReplicaRebuildingDstStartResponse, err error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding dst start", req.Name)
+	}
+
+	address, err := r.RebuildingDstStart(s.spdkClient, req.ExposeRequired)
+	if err != nil {
+		return nil, err
+	}
+	return &spdkrpc.ReplicaRebuildingDstStartResponse{Address: address}, nil
+}
+
+func (s *Server) ReplicaRebuildingDstFinish(ctx context.Context, req *spdkrpc.ReplicaRebuildingDstFinishRequest) (ret *empty.Empty, err error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding dst finish", req.Name)
+	}
+
+	if err = r.RebuildingDstFinish(s.spdkClient, req.UnexposeRequired); err != nil {
+		return nil, err
+	}
+	return &empty.Empty{}, nil
+}
+
+func (s *Server) ReplicaRebuildingDstSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *empty.Empty, err error) {
+	if req.Name == "" || req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and snapshot name are required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding dst snapshot create", req.Name)
+	}
+
+	if err = r.RebuildingDstSnapshotCreate(s.spdkClient, req.SnapshotName); err != nil {
+		return nil, err
+	}
+	return &empty.Empty{}, nil
+}
+
 func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequest) (ret *spdkrpc.Engine, err error) {
 	if req.Name == "" || req.VolumeName == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name and volume name are required")
@@ -371,21 +493,20 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine])
 	e := s.engineMap[req.Name]
 
-	return e.Create(s.spdkClient, req.ReplicaAddressMap, s.getLocalReplicaBdevMap(req.ReplicaAddressMap), s.portAllocator)
+	return e.Create(s.spdkClient, req.ReplicaAddressMap, s.getLocalReplicaLvsNameMap(req.ReplicaAddressMap), s.portAllocator)
 }
 
-func (s *Server) getLocalReplicaBdevMap(replicaAddressMap map[string]string) (replicaBdevMap map[string]string) {
-	replicaBdevMap = map[string]string{}
-	for replicaName := range replicaAddressMap {
+func (s *Server) getLocalReplicaLvsNameMap(replicaMap map[string]string) (replicaLvsNameMap map[string]string) {
+	replicaLvsNameMap = map[string]string{}
+	for replicaName := range replicaMap {
 		r := s.replicaMap[replicaName]
 		if r == nil {
 			continue
 		}
-		// For a lvol bdev, the name is actually UUID, but we use the alias here.
-		replicaBdevMap[replicaName] = spdktypes.GetLvolAlias(r.LvsName, r.Name)
+		replicaLvsNameMap[replicaName] = r.LvsName
 	}
 
-	return replicaBdevMap
+	return replicaLvsNameMap
 }
 
 func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequest) (ret *empty.Empty, err error) {
