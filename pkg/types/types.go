@@ -32,3 +32,5 @@ const (
 	InstanceTypeReplica = InstanceType("replica")
 	InstanceTypeEngine  = InstanceType("engine")
 )
+
+const SPDKServicePort = 8504
