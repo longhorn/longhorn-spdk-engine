@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	GRPCServiceTimeout = 3 * time.Minute
+	GRPCServiceTimeout    = 3 * time.Minute
+	GRPCServiceMedTimeout = 24 * time.Hour
 )
 
 type SPDKServiceContext struct {
@@ -176,6 +177,109 @@ func (c *SPDKClient) ReplicaSnapshotDelete(name, snapshotName string) error {
 		SnapshotName: snapshotName,
 	})
 	return errors.Wrapf(err, "failed to delete SPDK replica %s snapshot %s", name, snapshotName)
+}
+
+func (c *SPDKClient) ReplicaRebuildingSrcStart(srcReplicaName, dstReplicaName, dstRebuildingLvolAddress string) error {
+	if srcReplicaName == "" {
+		return fmt.Errorf("failed to start replica rebuilding src: missing required parameter src replica name")
+	}
+	if dstReplicaName == "" || dstRebuildingLvolAddress == "" {
+		return fmt.Errorf("failed to start replica rebuilding src: missing required parameter dst replica name or dst rebuilding lvol address")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaRebuildingSrcStart(ctx, &spdkrpc.ReplicaRebuildingSrcStartRequest{
+		Name:                     srcReplicaName,
+		DstReplicaName:           dstReplicaName,
+		DstRebuildingLvolAddress: dstRebuildingLvolAddress,
+	})
+	return errors.Wrapf(err, "failed to start replica rebuilding src %s for rebuilding replica %s", srcReplicaName, dstReplicaName)
+}
+
+func (c *SPDKClient) ReplicaRebuildingSrcFinish(srcReplicaName, dstReplicaName string) error {
+	if srcReplicaName == "" {
+		return fmt.Errorf("failed to finish replica rebuilding src: missing required parameter src replica name")
+	}
+	if dstReplicaName == "" {
+		return fmt.Errorf("failed to finish replica rebuilding src: missing required parameter dst replica name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaRebuildingSrcFinish(ctx, &spdkrpc.ReplicaRebuildingSrcFinishRequest{
+		Name:           srcReplicaName,
+		DstReplicaName: dstReplicaName,
+	})
+	return errors.Wrapf(err, "failed to finish replica rebuilding src %s for rebuilding replica %s", srcReplicaName, dstReplicaName)
+}
+
+func (c *SPDKClient) ReplicaSnapshotShallowCopy(srcReplicaName, snapshotName string) error {
+	if srcReplicaName == "" || snapshotName == "" {
+		return fmt.Errorf("failed to finish replica rebuilding src: missing required parameter replica name or snapshot name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceMedTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaSnapshotShallowCopy(ctx, &spdkrpc.ReplicaSnapshotShallowCopyRequest{
+		Name:         srcReplicaName,
+		SnapshotName: snapshotName,
+	})
+	return errors.Wrapf(err, "failed to shallow copy snapshot %s from src replica %s", snapshotName, srcReplicaName)
+}
+
+func (c *SPDKClient) ReplicaRebuildingDstStart(replicaName string, exposeRequired bool) error {
+	if replicaName == "" {
+		return fmt.Errorf("failed to start replica rebuilding dst: missing required parameter replica name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaRebuildingDstStart(ctx, &spdkrpc.ReplicaRebuildingDstStartRequest{
+		Name:           replicaName,
+		ExposeRequired: exposeRequired,
+	})
+	return errors.Wrapf(err, "failed to start replica rebuilding dst %s", replicaName)
+}
+
+func (c *SPDKClient) ReplicaRebuildingDstFinish(replicaName string, unexposeRequired bool) error {
+	if replicaName == "" {
+		return fmt.Errorf("failed to finish replica rebuilding dst: missing required parameter replica name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaRebuildingDstFinish(ctx, &spdkrpc.ReplicaRebuildingDstFinishRequest{
+		Name:             replicaName,
+		UnexposeRequired: unexposeRequired,
+	})
+	return errors.Wrapf(err, "failed to finish replica rebuilding dst %s", replicaName)
+}
+
+func (c *SPDKClient) ReplicaRebuildingDstSnapshotCreate(name, snapshotName string) error {
+	if name == "" || snapshotName == "" {
+		return fmt.Errorf("failed to create dst SPDK replica rebuilding snapshot: missing required parameter name or snapshot name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaRebuildingDstSnapshotCreate(ctx, &spdkrpc.SnapshotRequest{
+		Name:         name,
+		SnapshotName: snapshotName,
+	})
+	return errors.Wrapf(err, "failed to create dst SPDK replica %s rebuilding snapshot %s", name, snapshotName)
 }
 
 func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string) (*api.Engine, error) {
