@@ -609,15 +609,14 @@ func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.Snapshot
 	}
 
 	s.RLock()
-	defer s.RUnlock()
-
 	e := s.engineMap[req.Name]
+	s.RUnlock()
 
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot creation", req.Name)
 	}
 
-	return e.SnapshotCreate(s.spdkClient, req.Name, req.SnapshotName)
+	return e.SnapshotCreate(req.SnapshotName)
 }
 
 func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *empty.Empty, err error) {
@@ -626,15 +625,18 @@ func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.Snapshot
 	}
 
 	s.RLock()
-	defer s.RUnlock()
-
 	e := s.engineMap[req.Name]
+	s.RUnlock()
 
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot deletion", req.Name)
 	}
 
-	return e.SnapshotDelete(s.spdkClient, req.Name, req.SnapshotName)
+	if _, err := e.SnapshotDelete(req.SnapshotName); err != nil {
+		return nil, err
+	}
+
+	return &empty.Empty{}, nil
 }
 
 func (s *Server) DiskCreate(ctx context.Context, req *spdkrpc.DiskCreateRequest) (ret *spdkrpc.Disk, err error) {

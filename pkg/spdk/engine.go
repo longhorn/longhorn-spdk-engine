@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/sirupsen/logrus"
 
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
@@ -565,10 +564,74 @@ func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, repli
 	return nil
 }
 
-func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, name, snapshotName string) (res *spdkrpc.Engine, err error) {
-	return nil, fmt.Errorf("unimplemented")
+const SnapshotOperationCreate = "snapshot-create"
+const SnapshotOperationDelete = "snapshot-delete"
+
+func (e *Engine) SnapshotCreate(snapshotName string) (res *spdkrpc.Engine, err error) {
+	return e.snapshotOperation(snapshotName, SnapshotOperationCreate)
 }
 
-func (e *Engine) SnapshotDelete(spdkClient *spdkclient.Client, name, snapshotName string) (res *empty.Empty, err error) {
-	return nil, fmt.Errorf("unimplemented")
+func (e *Engine) SnapshotDelete(snapshotName string) (res *spdkrpc.Engine, err error) {
+	return e.snapshotOperation(snapshotName, SnapshotOperationDelete)
+}
+
+func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrpc.Engine, err error) {
+	updateRequired := false
+
+	e.Lock()
+	defer func() {
+		e.Unlock()
+
+		if updateRequired {
+			e.UpdateCh <- nil
+		}
+	}()
+
+	// Syncing with the SPDK TGT server only when the engine is running.
+	if e.State != types.InstanceStateRunning {
+		return nil, fmt.Errorf("invalid state %v for engine %s snapshot %s create", e.State, e.Name, snapshotName)
+	}
+
+	defer func() {
+		if err != nil && e.State != types.InstanceStateError {
+			e.State = types.InstanceStateError
+			updateRequired = true
+		}
+	}()
+
+	updateRequired = e.snapshotOperationWithoutLock(snapshotName, snapshotOp)
+
+	return e.getWithoutLock(), nil
+}
+
+func (e *Engine) snapshotOperationWithoutLock(snapshotName, snapshotOp string) (updated bool) {
+	for replicaName := range e.ReplicaAddressMap {
+		if err := e.replicaSnapshotOperation(replicaName, snapshotName, snapshotOp); err != nil {
+			if e.ReplicaModeMap[replicaName] != types.ModeRW {
+				continue
+			}
+			e.ReplicaModeMap[replicaName] = types.ModeERR
+			e.log.WithError(err).Errorf("Failed to issue operation %s for replica %s snapshot %s, will mark the replica as mode ERR", snapshotOp, replicaName, snapshotName)
+			updated = true
+		}
+	}
+
+	return updated
+}
+
+func (e *Engine) replicaSnapshotOperation(replicaName, snapshotName, snapshotOp string) error {
+	c, err := GetServiceClient(e.ReplicaAddressMap[replicaName])
+	if err != nil {
+		return err
+	}
+
+	switch snapshotOp {
+	case SnapshotOperationCreate:
+		// TODO: execute `sync` for the nvme initiator before snapshot start
+		return c.ReplicaSnapshotCreate(replicaName, snapshotName)
+	case SnapshotOperationDelete:
+		return c.ReplicaSnapshotDelete(replicaName, snapshotName)
+	default:
+		return fmt.Errorf("unknown replica snapshot operation %s", snapshotOp)
+	}
 }
