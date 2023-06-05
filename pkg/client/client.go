@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	GRPCServiceTimeout    = 3 * time.Minute
-	GRPCServiceMedTimeout = 24 * time.Hour
+	GRPCServiceTimeout     = 3 * time.Minute
+	GRPCServiceMedTimeout  = 24 * time.Hour
+	GRPCServiceLongTimeout = 72 * time.Hour
 )
 
 type SPDKServiceContext struct {
@@ -397,7 +398,34 @@ func (c *SPDKClient) EngineSnapshotDelete(name, snapshotName string) error {
 	return errors.Wrapf(err, "failed to delete SPDK engine %s snapshot %s", name, snapshotName)
 }
 
+func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress string) error {
+	if engineName == "" {
+		return fmt.Errorf("failed to add replica for SPDK engine: missing required parameter engine name")
+	}
+	if replicaName == "" || replicaAddress == "" {
+		return fmt.Errorf("failed to add replica for SPDK engine: missing required parameter replica name or address")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceLongTimeout)
+	defer cancel()
+
+	_, err := client.EngineReplicaAdd(ctx, &spdkrpc.EngineReplicaAddRequest{
+		EngineName:     engineName,
+		ReplicaName:    replicaName,
+		ReplicaAddress: replicaAddress,
+	})
+	return errors.Wrapf(err, "failed to add replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
+}
+
 func (c *SPDKClient) EngineReplicaDelete(engineName, replicaName, replicaAddress string) error {
+	if engineName == "" {
+		return fmt.Errorf("failed to delete replica from SPDK engine: missing required parameter engine name")
+	}
+	if replicaName == "" && replicaAddress == "" {
+		return fmt.Errorf("failed to delete replica from SPDK engine: missing required parameter replica name or address, at least one of them is required")
+	}
+
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
 	defer cancel()
@@ -407,11 +435,7 @@ func (c *SPDKClient) EngineReplicaDelete(engineName, replicaName, replicaAddress
 		ReplicaName:    replicaName,
 		ReplicaAddress: replicaAddress,
 	})
-	if err != nil {
-		return errors.Wrap(err, "failed to delete replica from engine")
-	}
-
-	return nil
+	return errors.Wrapf(err, "failed to delete replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
 }
 
 func (c *SPDKClient) DiskCreate(diskName, diskPath string, blockSize int64) (*spdkrpc.Disk, error) {
