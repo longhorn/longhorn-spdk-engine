@@ -587,6 +587,32 @@ func (s *Server) EngineWatch(req *empty.Empty, srv spdkrpc.SPDKService_EngineWat
 	return nil
 }
 
+func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *empty.Empty, err error) {
+	s.RLock()
+	e := s.engineMap[req.EngineName]
+	localReplicaLvsNameMap := s.getLocalReplicaLvsNameMap(map[string]string{req.ReplicaName: ""})
+	s.RUnlock()
+
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s with address %s add", req.EngineName, req.ReplicaName, req.ReplicaAddress)
+	}
+
+	if err := e.ReplicaAddStart(req.ReplicaName, req.ReplicaAddress); err != nil {
+		return nil, err
+	}
+
+	// Cannot add a lock for this call
+	if err := e.ReplicaShallowCopy(req.ReplicaName, req.ReplicaAddress); err != nil {
+		return nil, err
+	}
+
+	if err := e.ReplicaAddFinish(s.spdkClient, req.ReplicaName, req.ReplicaAddress, localReplicaLvsNameMap); err != nil {
+		return nil, err
+	}
+
+	return &empty.Empty{}, nil
+}
+
 func (s *Server) EngineReplicaDelete(ctx context.Context, req *spdkrpc.EngineReplicaDeleteRequest) (ret *empty.Empty, err error) {
 	s.Lock()
 	defer s.Unlock()

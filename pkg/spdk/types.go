@@ -8,13 +8,15 @@ import (
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
+	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 )
 
 const (
 	DiskTypeFilesystem = "filesystem"
 	DiskTypeBlock      = "block"
 
-	ReplicaRebuildingLvolSuffix = "rebuilding"
+	ReplicaRebuildingLvolSuffix  = "rebuilding"
+	RebuildingSnapshotNamePrefix = "rebuild"
 )
 
 func GetReplicaSnapshotLvolNamePrefix(replicaName string) string {
@@ -27,6 +29,10 @@ func GetReplicaSnapshotLvolName(replicaName, snapshotName string) string {
 
 func GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, snapLvolName string) string {
 	return strings.TrimPrefix(snapLvolName, GetReplicaSnapshotLvolNamePrefix(replicaName))
+}
+
+func GenerateRebuildingSnapshotName() string {
+	return fmt.Sprintf("%s-%s", RebuildingSnapshotNamePrefix, util.UUID()[:8])
 }
 
 func GetReplicaRebuildingLvolName(replicaName string) string {
