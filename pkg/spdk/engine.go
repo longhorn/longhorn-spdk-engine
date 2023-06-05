@@ -102,6 +102,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 	if err != nil {
 		return nil, err
 	}
+	e.IP = podIP
 
 	replicaBdevList := []string{}
 	for replicaName, replicaAddr := range replicaAddressMap {
@@ -122,33 +123,8 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 		return nil, err
 	}
 
-	nqn := helpertypes.GetNQN(e.Name)
-	port, _, err := superiorPortAllocator.AllocateRange(1)
-	if err != nil {
+	if err := e.handleFrontend(spdkClient, superiorPortAllocator); err != nil {
 		return nil, err
-	}
-	if err := spdkClient.StartExposeBdev(nqn, e.Name, podIP, strconv.Itoa(int(port))); err != nil {
-		return nil, err
-	}
-	e.IP = podIP
-	e.Port = port
-
-	switch e.Frontend {
-	case types.FrontendSPDKTCPBlockdev:
-		initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
-		if err != nil {
-			return nil, err
-		}
-		if err := initiator.Start(podIP, strconv.Itoa(int(port))); err != nil {
-			return nil, err
-		}
-		e.Endpoint = initiator.GetEndpoint()
-	case types.FrontendSPDKTCPNvmf:
-		e.Endpoint = GetNvmfEndpoint(nqn, e.IP, e.Port)
-	case types.FrontendSPDKVoid:
-		logrus.Infof("No frontend specified, will not expose the volume %s", e.VolumeName)
-	default:
-		return nil, fmt.Errorf("unknown frontend type %s", e.Frontend)
 	}
 
 	e.State = types.InstanceStateRunning
@@ -178,6 +154,38 @@ func getBdevNameForReplica(spdkClient *spdkclient.Client, localReplicaLvsNameMap
 		return "", fmt.Errorf("got zero or multiple results when attaching replica %s with address %s as a NVMe bdev: %+v", replicaName, replicaAddress, nvmeBdevNameList)
 	}
 	return nvmeBdevNameList[0], nil
+}
+
+func (e *Engine) handleFrontend(spdkClient *spdkclient.Client, superiorPortAllocator *util.Bitmap) error {
+	if e.Frontend != types.FrontendEmpty && e.Frontend != types.FrontendSPDKTCPNvmf && e.Frontend != types.FrontendSPDKTCPBlockdev {
+		return fmt.Errorf("unknown frontend type %s", e.Frontend)
+	}
+
+	if e.Frontend == types.FrontendEmpty {
+		e.log.Infof("No frontend specified, will not expose the volume %s", e.VolumeName)
+		return nil
+	}
+
+	nqn := helpertypes.GetNQN(e.Name)
+	port, _, err := superiorPortAllocator.AllocateRange(types.DefaultEngineReservedPortCount)
+	if err != nil {
+		return err
+	}
+	if err := spdkClient.StartExposeBdev(nqn, e.Name, e.IP, strconv.Itoa(int(port))); err != nil {
+		return err
+	}
+	e.Port = port
+
+	if e.Frontend == types.FrontendSPDKTCPNvmf {
+		e.Endpoint = GetNvmfEndpoint(nqn, e.IP, e.Port)
+		return nil
+	}
+
+	initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
+	if err != nil {
+		return err
+	}
+	return initiator.Start(e.IP, strconv.Itoa(int(port)))
 }
 
 func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *util.Bitmap) (err error) {
@@ -324,69 +332,8 @@ func (e *Engine) ValidateAndUpdate(
 		return fmt.Errorf("found mismatching between engine IP %s and pod IP %s for engine %s", e.IP, podIP, e.Name)
 	}
 
-	nqn := helpertypes.GetNQN(e.Name)
-	subsystem := subsystemMap[nqn]
-	if subsystem == nil || len(subsystem.ListenAddresses) == 0 {
-		return fmt.Errorf("cannot find the Nvmf subsystem for engine %s", e.Name)
-	}
-
-	port := 0
-	for _, listenAddr := range subsystem.ListenAddresses {
-		if !strings.EqualFold(string(listenAddr.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
-			!strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
-			continue
-		}
-		if port, err = strconv.Atoi(listenAddr.Trsvcid); err != nil {
-			return err
-		}
-		if e.Port == int32(port) {
-			break
-		}
-	}
-	if port == 0 || e.Port != int32(port) {
-		return fmt.Errorf("cannot find a matching listener with port %d from Nvmf subsystem for engine %s", e.Port, e.Name)
-	}
-
-	switch e.Frontend {
-	case types.FrontendSPDKTCPBlockdev:
-		initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
-		if err != nil {
-			return err
-		}
-
-		if err := initiator.LoadNVMeDeviceInfo(); err != nil {
-			if strings.Contains(err.Error(), "connecting state") ||
-				strings.Contains(err.Error(), "resetting state") {
-				e.log.WithError(err).Warnf("Ignored to validate and update engine %v, because the device is still in a transient state", e.Name)
-				return nil
-			}
-			return err
-		}
-
-		if err := initiator.LoadEndpoint(); err != nil {
-			return err
-		}
-		blockDevEndpoint := initiator.GetEndpoint()
-		if e.Endpoint == "" {
-			e.Endpoint = blockDevEndpoint
-			updateRequired = true
-		}
-		if e.Endpoint != blockDevEndpoint {
-			return fmt.Errorf("found mismatching between engine endpoint %s and actual block device endpoint %s for engine %s", e.Endpoint, blockDevEndpoint, e.Name)
-		}
-	case types.FrontendSPDKTCPNvmf:
-		nvmfEndpoint := GetNvmfEndpoint(nqn, e.IP, e.Port)
-		if e.Endpoint == "" {
-			e.Endpoint = nvmfEndpoint
-			updateRequired = true
-		}
-		if e.Endpoint != "" && e.Endpoint != nvmfEndpoint {
-			return fmt.Errorf("found mismatching between engine endpoint %s and actual nvmf endpoint %s for engine %s", e.Endpoint, nvmfEndpoint, e.Name)
-		}
-	case types.FrontendSPDKVoid:
-		logrus.Infof("Engine %s has no frontend type, skip endpoint creation", e.Name)
-	default:
-		return fmt.Errorf("unknown frontend type %s", e.Frontend)
+	if err := e.validateAndUpdateFrontend(subsystemMap); err != nil {
+		return err
 	}
 
 	bdevRaid := bdevMap[e.Name]
@@ -460,6 +407,87 @@ func (e *Engine) ValidateAndUpdate(
 		e.State = types.InstanceStateError
 		updateRequired = true
 		// TODO: should we delete the engine automatically here?
+	}
+
+	return nil
+}
+
+func (e *Engine) validateAndUpdateFrontend(subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
+	if e.Frontend != types.FrontendEmpty && e.Frontend != types.FrontendSPDKTCPNvmf && e.Frontend != types.FrontendSPDKTCPBlockdev {
+		return fmt.Errorf("unknown frontend type %s", e.Frontend)
+	}
+
+	nqn := helpertypes.GetNQN(e.Name)
+	subsystem := subsystemMap[nqn]
+
+	if e.Frontend == types.FrontendEmpty {
+		if subsystem != nil {
+			return fmt.Errorf("found nvmf subsystem %s for engine %s with empty frontend", nqn, e.Name)
+		}
+		if e.Endpoint != "" {
+			return fmt.Errorf("found non-empty endpoint %s for engine %s with empty frontend", e.Endpoint, e.Name)
+		}
+		if e.Port != 0 {
+			return fmt.Errorf("found non-zero port %s for engine %s with empty frontend", e.Port, e.Name)
+		}
+		return nil
+	}
+
+	if subsystem == nil || len(subsystem.ListenAddresses) == 0 {
+		return fmt.Errorf("cannot find the Nvmf subsystem for engine %s", e.Name)
+	}
+
+	port := 0
+	for _, listenAddr := range subsystem.ListenAddresses {
+		if !strings.EqualFold(string(listenAddr.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
+			!strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
+			continue
+		}
+		if port, err = strconv.Atoi(listenAddr.Trsvcid); err != nil {
+			return err
+		}
+		if e.Port == int32(port) {
+			break
+		}
+	}
+	if port == 0 || e.Port != int32(port) {
+		return fmt.Errorf("cannot find a matching listener with port %d from Nvmf subsystem for engine %s", e.Port, e.Name)
+	}
+
+	switch e.Frontend {
+	case types.FrontendSPDKTCPBlockdev:
+		initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
+		if err != nil {
+			return err
+		}
+		if err := initiator.LoadNVMeDeviceInfo(); err != nil {
+			if strings.Contains(err.Error(), "connecting state") ||
+				strings.Contains(err.Error(), "resetting state") {
+				e.log.WithError(err).Warnf("Ignored to validate and update engine %v, because the device is still in a transient state", e.Name)
+				return nil
+			}
+			return err
+		}
+		if err := initiator.LoadEndpoint(); err != nil {
+			return err
+		}
+		blockDevEndpoint := initiator.GetEndpoint()
+		if e.Endpoint == "" {
+			e.Endpoint = blockDevEndpoint
+		}
+		if e.Endpoint != blockDevEndpoint {
+			return fmt.Errorf("found mismatching between engine endpoint %s and actual block device endpoint %s for engine %s", e.Endpoint, blockDevEndpoint, e.Name)
+		}
+	case types.FrontendSPDKTCPNvmf:
+		nvmfEndpoint := GetNvmfEndpoint(nqn, e.IP, e.Port)
+		if e.Endpoint == "" {
+			e.Endpoint = nvmfEndpoint
+		}
+		if e.Endpoint != "" && e.Endpoint != nvmfEndpoint {
+			return fmt.Errorf("found mismatching between engine endpoint %s and actual nvmf endpoint %s for engine %s", e.Endpoint, nvmfEndpoint, e.Name)
+		}
+	default:
+		return fmt.Errorf("unknown frontend type %s", e.Frontend)
 	}
 
 	return nil

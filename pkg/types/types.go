@@ -11,8 +11,9 @@ const (
 const (
 	FrontendSPDKTCPNvmf     = "spdk-tcp-nvmf"
 	FrontendSPDKTCPBlockdev = "spdk-tcp-blockdev"
-	FrontendSPDKVoid        = ""
+	FrontendEmpty           = ""
 
+	DefaultEngineReservedPortCount  = 1
 	DefaultReplicaReservedPortCount = 5
 )
 

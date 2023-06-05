@@ -29,5 +29,5 @@ func GetReplicaRebuildingLvolName(replicaName string) string {
 }
 
 func GetNvmfEndpoint(nqn, ip string, port int32) string {
-	return fmt.Sprintf("%s://%s:%d", nqn, ip, port)
+	return fmt.Sprintf("nvmf://%s:%d/%s", ip, port, nqn)
 }
