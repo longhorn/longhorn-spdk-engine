@@ -27,6 +27,7 @@ service SPDKService {
     rpc EngineSnapshotDelete(SnapshotRequest) returns (google.protobuf.Empty);
     rpc EngineList(google.protobuf.Empty) returns (EngineListResponse);
     rpc EngineWatch(google.protobuf.Empty) returns (stream google.protobuf.Empty) {}
+    rpc EngineReplicaAdd(EngineReplicaAddRequest) returns (google.protobuf.Empty) {}
     rpc EngineReplicaDelete(EngineReplicaDeleteRequest) returns (google.protobuf.Empty) {}
 
     rpc DiskCreate(DiskCreateRequest) returns (Disk);
@@ -149,6 +150,12 @@ message EngineGetRequest {
 
 message EngineListResponse {
 	map<string, Engine> engines = 1;
+}
+
+message EngineReplicaAddRequest {
+    string engine_name = 1;
+    string replica_name = 2;
+    string replica_address = 3;
 }
 
 message EngineReplicaDeleteRequest {
