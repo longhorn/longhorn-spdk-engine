@@ -145,7 +145,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 		e.Endpoint = initiator.GetEndpoint()
 	case types.FrontendSPDKTCPNvmf:
 		e.Endpoint = GetNvmfEndpoint(nqn, e.IP, e.Port)
-	case "":
+	case types.FrontendSPDKVoid:
 		logrus.Infof("No frontend specified, will not expose the volume %s", e.VolumeName)
 	default:
 		return nil, fmt.Errorf("unknown frontend type %s", e.Frontend)
