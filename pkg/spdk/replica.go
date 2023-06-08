@@ -234,9 +234,8 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 	if len(r.SnapshotMap) != len(newSnapshotMap) {
 		return fmt.Errorf("replica current active snapshot map length %d is not the same as the latest snapshot map length %d", len(r.SnapshotMap), len(newSnapshotMap))
 	}
-	for svcLvolName, svcLvol := range r.SnapshotMap {
-		newSvcLvol := newSnapshotMap[svcLvolName]
-		if err := compareSvcLvols(svcLvol, newSvcLvol, true, true); err != nil {
+	for snapshotName := range r.SnapshotMap {
+		if err := compareSvcLvols(r.SnapshotMap[snapshotName], newSnapshotMap[snapshotName], true, true); err != nil {
 			return err
 		}
 	}
@@ -376,7 +375,11 @@ func constructSnapshotMap(replicaName string, rootSvcLvol *Lvol, bdevLvolMap map
 		if curSvcLvol == nil || curSvcLvol.Name == replicaName {
 			continue
 		}
-		res[curSvcLvol.Name] = curSvcLvol
+		snapshotName := GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, curSvcLvol.Name)
+		if snapshotName == "" {
+			continue
+		}
+		res[snapshotName] = curSvcLvol
 
 		if bdevLvolMap[curSvcLvol.Name].DriverSpecific.Lvol.Clones == nil {
 			continue
@@ -540,11 +543,11 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		return err
 	}
 	updateRequired = true
-	for _, lvol := range r.SnapshotMap {
-		if _, err := spdkClient.BdevLvolDelete(lvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+	for snapshotName, snapSvcLvol := range r.SnapshotMap {
+		if _, err := spdkClient.BdevLvolDelete(snapSvcLvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return err
 		}
-		delete(r.SnapshotMap, lvol.Name)
+		delete(r.SnapshotMap, snapshotName)
 	}
 
 	return nil
@@ -572,6 +575,11 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 		return nil, fmt.Errorf("invalid state %v for replica %s snapshot creation", r.State, r.Name)
 	}
 
+	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
+	if _, exists := r.SnapshotMap[snapshotName]; exists {
+		return nil, fmt.Errorf("snapshot %s(%s) already exists in replica %s", snapshotName, snapLvolName, r.Name)
+	}
+
 	defer func() {
 		if err != nil && r.State != types.InstanceStateError {
 			r.State = types.InstanceStateError
@@ -584,7 +592,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	}
 	headSvcLvol := r.ActiveChain[r.ChainLength-1]
 
-	snapUUID, err := spdkClient.BdevLvolSnapshot(headSvcLvol.UUID, GetReplicaSnapshotLvolName(headSvcLvol.Name, snapshotName))
+	snapUUID, err := spdkClient.BdevLvolSnapshot(headSvcLvol.UUID, snapLvolName)
 	if err != nil {
 		return nil, err
 	}
@@ -605,9 +613,10 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 		delete(prevSvcLvol.Children, headSvcLvol.Name)
 		prevSvcLvol.Children[snapSvcLvol.Name] = snapSvcLvol
 	}
-	r.ActiveChain = append(r.ActiveChain, snapSvcLvol)
+	r.ActiveChain[r.ChainLength-1] = snapSvcLvol
+	r.ActiveChain = append(r.ActiveChain, headSvcLvol)
 	r.ChainLength++
-	r.SnapshotMap[snapSvcLvol.Name] = snapSvcLvol
+	r.SnapshotMap[snapshotName] = snapSvcLvol
 	headSvcLvol.Parent = snapSvcLvol.Name
 	updateRequired = true
 
@@ -630,12 +639,13 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 		return nil, fmt.Errorf("invalid state %v for replica %s snapshot deletion", r.State, r.Name)
 	}
 
-	lvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
-	if r.SnapshotMap[lvolName] == nil {
+	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
+	snapSvcLvol := r.SnapshotMap[snapshotName]
+	if snapSvcLvol == nil {
 		return ServiceReplicaToProtoReplica(r), nil
 	}
-	if len(r.SnapshotMap[lvolName].Children) > 1 {
-		return nil, fmt.Errorf("cannot delete snapshot %s(%s) since it has %d children", snapshotName, lvolName, len(r.SnapshotMap[lvolName].Children))
+	if len(snapSvcLvol.Children) > 1 {
+		return nil, fmt.Errorf("cannot delete snapshot %s(%s) since it has %d children", snapshotName, snapLvolName, len(snapSvcLvol.Children))
 	}
 
 	defer func() {
@@ -649,51 +659,50 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 		return nil, fmt.Errorf("invalid chain length %d for replica snapshot delete", r.ChainLength)
 	}
 
-	if _, err := spdkClient.BdevLvolDelete(lvolName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+	if _, err := spdkClient.BdevLvolDelete(snapSvcLvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return nil, err
 	}
-	r.removeLvolFromSnapshotMapWithoutLock(lvolName)
-	r.removeLvolFromActiveChainWithoutLock(lvolName)
+	r.removeLvolFromSnapshotMapWithoutLock(snapshotName)
+	r.removeLvolFromActiveChainWithoutLock(snapLvolName)
 
 	updateRequired = true
 
 	return ServiceReplicaToProtoReplica(r), nil
 }
 
-func (r *Replica) removeLvolFromSnapshotMapWithoutLock(name string) {
+func (r *Replica) removeLvolFromSnapshotMapWithoutLock(snapshotName string) {
 	var deletingSvcLvol, parentSvcLvol, childSvcLvol *Lvol
 
-	deletingSvcLvol = r.SnapshotMap[name]
-	parentSvcLvol = r.SnapshotMap[deletingSvcLvol.Parent]
-	for _, childSvcLvol = range deletingSvcLvol.Children {
-		break
-	}
-
+	deletingSvcLvol = r.SnapshotMap[snapshotName]
+	parentSvcLvol = r.SnapshotMap[GetSnapshotNameFromReplicaSnapshotLvolName(r.Name, deletingSvcLvol.Parent)]
 	if parentSvcLvol != nil {
 		delete(parentSvcLvol.Children, deletingSvcLvol.Name)
-		if childSvcLvol != nil {
+	}
+	for _, childSvcLvol = range deletingSvcLvol.Children {
+		if parentSvcLvol != nil {
 			parentSvcLvol.Children[childSvcLvol.Name] = childSvcLvol
 			childSvcLvol.Parent = parentSvcLvol.Name
-		}
-	} else {
-		if childSvcLvol != nil {
+		} else {
 			childSvcLvol.Parent = ""
 		}
 	}
+
+	delete(r.SnapshotMap, snapshotName)
 }
 
-func (r *Replica) removeLvolFromActiveChainWithoutLock(name string) int {
+func (r *Replica) removeLvolFromActiveChainWithoutLock(snapLvolName string) int {
 	pos := -1
 	for idx, lvol := range r.ActiveChain {
-		if lvol.Name == name {
+		if lvol.Name == snapLvolName {
 			pos = idx
 			break
 		}
 	}
 
+	prevChain := r.ActiveChain
 	if pos >= 0 && pos < r.ChainLength-1 {
-		r.ActiveChain = append([]*Lvol{}, r.ActiveChain[:pos]...)
-		r.ActiveChain = append(r.ActiveChain, r.ActiveChain[pos+1:]...)
+		r.ActiveChain = append([]*Lvol{}, prevChain[:pos]...)
+		r.ActiveChain = append(r.ActiveChain, prevChain[pos+1:]...)
 	}
 	r.ChainLength = len(r.ActiveChain)
 

@@ -329,7 +329,7 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.Snapsho
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot create", req.Name)
 	}
 
-	return r.SnapshotCreate(s.spdkClient, req.Name)
+	return r.SnapshotCreate(s.spdkClient, req.SnapshotName)
 }
 
 func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *empty.Empty, err error) {
@@ -346,7 +346,7 @@ func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.Snapsho
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot delete", req.Name)
 	}
 
-	_, err = r.SnapshotDelete(s.spdkClient, req.Name)
+	_, err = r.SnapshotDelete(s.spdkClient, req.SnapshotName)
 	return &empty.Empty{}, err
 }
 
