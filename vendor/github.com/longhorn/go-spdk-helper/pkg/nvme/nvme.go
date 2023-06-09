@@ -3,10 +3,12 @@ package nvme
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/longhorn/go-spdk-helper/pkg/util"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -31,16 +33,10 @@ type DiscoveryPageEntry struct {
 }
 
 type Controller struct {
-	Controller   string
-	Transport    string
-	Address      string
-	State        string
-	HostNQN      string
-	HostID       string
-	Firmware     string
-	ModelNumber  string
-	SerialNumber string
-	Namespaces   []Namespace
+	Controller string
+	Transport  string
+	Address    string
+	State      string
 }
 
 type Namespace struct {
@@ -181,76 +177,135 @@ func DisconnectTarget(nqn string, executor util.Executor) error {
 	return err
 }
 
-func GetDevices(ip, port, nqn string, executor util.Executor) (devices []Device, err error) {
+type Subsystem struct {
+	Name  string
+	NQN   string
+	Paths []Path
+}
+
+type Path struct {
+	Name      string
+	Transport string
+	Address   string
+	State     string
+}
+
+func listSubsystems(device string, executor util.Executor) ([]Subsystem, error) {
 	opts := []string{
-		"list",
-		"-v",
+		"list-subsys",
+		device,
 		"-o", "json",
 	}
-
-	// The output example:
-	// {
-	//  "Devices" : [
-	//    {
-	//      "Subsystem" : "nvme-subsys0",
-	//      "SubsystemNQN" : "nqn.2023-01.io.longhorn.spdk:raid01",
-	//      "Controllers" : [
-	//        {
-	//          "Controller" : "nvme0",
-	//          "Transport" : "tcp",
-	//          "Address" : "traddr=127.0.0.1 trsvcid=4520",
-	//          "State" : "live",
-	//          "HostNQN" : "nqn.2014-08.org.nvmexpress:uuid:f9851252-f382-4eb8-af24-a5fbd875157a",
-	//          "HostID" : "d9bcbe5a-ecad-4dc7-bd65-babcc0f990bd",
-	//          "Firmware" : "23.05",
-	//          "ModelNumber" : "SPDK bdev Controller",
-	//          "SerialNumber" : "00000000000000000000",
-	//          "Namespaces" : [
-	//            {
-	//              "NameSpace" : "nvme0c0n1",
-	//              "NSID" : 1,
-	//              "UsedBytes" : 0,
-	//              "MaximumLBA" : 0,
-	//              "PhysicalSize" : 0,
-	//              "SectorSize" : 1
-	//            }
-	//          ]
-	//        }
-	//      ],
-	//      "Namespaces" : [
-	//        {
-	//          "NameSpace" : "nvme0n1",
-	//          "NSID" : 1,
-	//          "UsedBytes" : 4194304,
-	//          "MaximumLBA" : 1024,
-	//          "PhysicalSize" : 4194304,
-	//          "SectorSize" : 4096
-	//        }
-	//      ]
-	//    }
-	//  ]
-	// }
 	outputStr, err := executor.Execute(nvmeBinary, opts)
 	if err != nil {
 		return nil, err
 	}
-
 	jsonStr, err := extractJSONString(outputStr)
 	if err != nil {
 		return nil, err
 	}
-
-	output := map[string][]Device{}
+	output := map[string][]Subsystem{}
 	if err := json.Unmarshal([]byte(jsonStr), &output); err != nil {
 		return nil, err
 	}
 
+	return output["Subsystems"], nil
+}
+
+type NvmeDevice struct {
+	NameSpace    uint32
+	DevicePath   string
+	Firmware     string
+	Index        uint32
+	ModelNumber  string
+	SerialNumber string
+	UsedBytes    uint64
+	MaximumLBA   uint32
+	PhysicalSize uint64
+	SectorSize   uint32
+}
+
+func listNvmeDevices(executor util.Executor) ([]NvmeDevice, error) {
+	opts := []string{
+		"list",
+		"-o", "json",
+	}
+	outputStr, err := executor.Execute(nvmeBinary, opts)
+	if err != nil {
+		return nil, err
+	}
+	jsonStr, err := extractJSONString(outputStr)
+	if err != nil {
+		return nil, err
+	}
+	output := map[string][]NvmeDevice{}
+	if err := json.Unmarshal([]byte(jsonStr), &output); err != nil {
+		return nil, err
+	}
+
+	return output["Devices"], nil
+}
+
+// GetDevices returns all devices
+func GetDevices(ip, port, nqn string, executor util.Executor) (devices []Device, err error) {
+	devices = []Device{}
+
+	nvmeDevices, err := listNvmeDevices(executor)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range nvmeDevices {
+		// Get subsystem
+		subsystems, err := listSubsystems(d.DevicePath, executor)
+		if err != nil {
+			logrus.WithError(err).Warnf("failed to get subsystem for nvme device %s", d.DevicePath)
+			continue
+		}
+		if len(subsystems) == 0 {
+			return nil, fmt.Errorf("no subsystem found for nvme device %s", d.DevicePath)
+		}
+		if len(subsystems) > 1 {
+			return nil, fmt.Errorf("multiple subsystems found for nvme device %s", d.DevicePath)
+		}
+		sys := subsystems[0]
+
+		// Reconstruct controller list
+		controllers := []Controller{}
+		for _, path := range sys.Paths {
+			controller := Controller{
+				Controller: path.Name,
+				Transport:  path.Transport,
+				Address:    path.Address,
+				State:      path.State,
+			}
+			controllers = append(controllers, controller)
+		}
+
+		namespace := Namespace{
+			NameSpace:    filepath.Base(d.DevicePath),
+			NSID:         d.NameSpace,
+			UsedBytes:    d.UsedBytes,
+			MaximumLBA:   d.MaximumLBA,
+			PhysicalSize: d.PhysicalSize,
+			SectorSize:   d.SectorSize,
+		}
+
+		device := Device{
+			Subsystem:    sys.Name,
+			SubsystemNQN: sys.NQN,
+			Controllers:  controllers,
+			Namespaces:   []Namespace{namespace},
+		}
+
+		devices = append(devices, device)
+	}
+
 	if nqn == "" {
-		return output["Devices"], err
+		return devices, err
 	}
 
 	res := []Device{}
-	for _, d := range output["Devices"] {
+	for _, d := range devices {
 		match := false
 		if d.SubsystemNQN != nqn {
 			continue
