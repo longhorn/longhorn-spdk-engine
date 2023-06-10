@@ -1,52 +1,13 @@
 package nvme
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"regexp"
-	"strings"
+
+	"github.com/sirupsen/logrus"
 
 	"github.com/longhorn/go-spdk-helper/pkg/util"
-	"github.com/sirupsen/logrus"
 )
-
-const (
-	nvmeBinary = "nvme"
-
-	DefaultTransportType = "tcp"
-)
-
-type Device struct {
-	Subsystem    string
-	SubsystemNQN string
-	Controllers  []Controller
-	Namespaces   []Namespace
-}
-
-type DiscoveryPageEntry struct {
-	PortID  uint16 `json:"portid"`
-	TrsvcID string `json:"trsvcid"`
-	Subnqn  string `json:"subnqn"`
-	Traddr  string `json:"traddr"`
-	SubType string `json:"subtype"`
-}
-
-type Controller struct {
-	Controller string
-	Transport  string
-	Address    string
-	State      string
-}
-
-type Namespace struct {
-	NameSpace    string
-	NSID         uint32
-	UsedBytes    uint64
-	MaximumLBA   uint32
-	PhysicalSize uint64
-	SectorSize   uint32
-}
 
 func CheckForNVMeCliExistence(executor util.Executor) error {
 	opts := []string{
@@ -57,66 +18,12 @@ func CheckForNVMeCliExistence(executor util.Executor) error {
 }
 
 func DiscoverTarget(ip, port string, executor util.Executor) (subnqn string, err error) {
-	opts := []string{
-		"discover",
-		"-t", DefaultTransportType,
-		"-a", ip,
-		"-s", port,
-		"-o", "json",
-	}
-
-	// A valid output is like below:
-	// # nvme discover -t tcp -a 10.42.2.20 -s 20011 -o json
-	//	{
-	//		"device" : "nvme0",
-	//		"genctr" : 2,
-	//		"records" : [
-	//		  {
-	//			"trtype" : "tcp",
-	//			"adrfam" : "ipv4",
-	//			"subtype" : "nvme subsystem",
-	//			"treq" : "not required",
-	//			"portid" : 0,
-	//			"trsvcid" : "20001",
-	//			"subnqn" : "nqn.2023-01.io.longhorn.spdk:pvc-81bab972-8e6b-48be-b691-18eaa430a897-r-0881c7b4",
-	//			"traddr" : "10.42.2.20",
-	//			"sectype" : "none"
-	//		  },
-	//		  {
-	//			"trtype" : "tcp",
-	//			"adrfam" : "ipv4",
-	//			"subtype" : "nvme subsystem",
-	//			"treq" : "not required",
-	//			"portid" : 0,
-	//			"trsvcid" : "20011",
-	//			"subnqn" : "nqn.2023-01.io.longhorn.spdk:pvc-5f94d59d-baec-40e5-9e8b-25b79909d14e-e-49c947f5",
-	//			"traddr" : "10.42.2.20",
-	//			"sectype" : "none"
-	//		  }
-	//		]
-	//	  }
-
-	// nvme discover does not respect the -s option, so we need to filter the output
-	outputStr, err := executor.Execute(nvmeBinary, opts)
+	entries, err := performNvmeDiscovery(ip, port, executor)
 	if err != nil {
 		return "", err
 	}
 
-	jsonStr, err := extractJSONString(outputStr)
-	if err != nil {
-		return "", err
-	}
-
-	var output struct {
-		Entries []DiscoveryPageEntry `json:"records"`
-	}
-
-	err = json.Unmarshal([]byte(jsonStr), &output)
-	if err != nil {
-		return "", err
-	}
-
-	for _, entry := range output.Entries {
+	for _, entry := range entries {
 		if entry.TrsvcID == port {
 			return entry.Subnqn, nil
 		}
@@ -126,137 +33,36 @@ func DiscoverTarget(ip, port string, executor util.Executor) (subnqn string, err
 }
 
 func ConnectTarget(ip, port, nqn string, executor util.Executor) (controllerName string, err error) {
-	opts := []string{
-		"connect",
-		"-t", DefaultTransportType,
-		"-a", ip,
-		"-s", port,
-		"--nqn", nqn,
-		"-o", "json",
-	}
-
 	// Trying to connect an existing subsystem will error out with exit code 114.
 	// Hence, it's better to check the existence first.
 	if devices, err := GetDevices(ip, port, nqn, executor); err == nil && len(devices) > 0 {
 		return devices[0].Controllers[0].Controller, nil
 	}
 
-	// The output example:
-	// {
-	//  "device" : "nvme0"
-	// }
-	outputStr, err := executor.Execute(nvmeBinary, opts)
-	if err != nil {
-		return "", err
-	}
-
-	jsonStr, err := extractJSONString(outputStr)
-	if err != nil {
-		return "", err
-	}
-
-	output := map[string]string{}
-	if err := json.Unmarshal([]byte(jsonStr), &output); err != nil {
-		return "", err
-	}
-
-	return output["device"], nil
+	return performNvmeConnect(ip, port, nqn, executor)
 }
 
 func DisconnectTarget(nqn string, executor util.Executor) error {
-	opts := []string{
-		"disconnect",
-		"--nqn", nqn,
-	}
-
-	// The output example:
-	// NQN:nqn.2023-01.io.spdk:raid01 disconnected 1 controller(s)
-	//
-	// And trying to disconnect a non-existing target would return exit code 0
-	_, err := executor.Execute(nvmeBinary, opts)
-	return err
-}
-
-type Subsystem struct {
-	Name  string
-	NQN   string
-	Paths []Path
-}
-
-type Path struct {
-	Name      string
-	Transport string
-	Address   string
-	State     string
-}
-
-func listSubsystems(device string, executor util.Executor) ([]Subsystem, error) {
-	opts := []string{
-		"list-subsys",
-		device,
-		"-o", "json",
-	}
-	outputStr, err := executor.Execute(nvmeBinary, opts)
-	if err != nil {
-		return nil, err
-	}
-	jsonStr, err := extractJSONString(outputStr)
-	if err != nil {
-		return nil, err
-	}
-	output := map[string][]Subsystem{}
-	if err := json.Unmarshal([]byte(jsonStr), &output); err != nil {
-		return nil, err
-	}
-
-	return output["Subsystems"], nil
-}
-
-type NvmeDevice struct {
-	NameSpace    uint32
-	DevicePath   string
-	Firmware     string
-	Index        uint32
-	ModelNumber  string
-	SerialNumber string
-	UsedBytes    uint64
-	MaximumLBA   uint32
-	PhysicalSize uint64
-	SectorSize   uint32
-}
-
-func listNvmeDevices(executor util.Executor) ([]NvmeDevice, error) {
-	opts := []string{
-		"list",
-		"-o", "json",
-	}
-	outputStr, err := executor.Execute(nvmeBinary, opts)
-	if err != nil {
-		return nil, err
-	}
-	jsonStr, err := extractJSONString(outputStr)
-	if err != nil {
-		return nil, err
-	}
-	output := map[string][]NvmeDevice{}
-	if err := json.Unmarshal([]byte(jsonStr), &output); err != nil {
-		return nil, err
-	}
-
-	return output["Devices"], nil
+	return performNvmeDisconnect(nqn, executor)
 }
 
 // GetDevices returns all devices
 func GetDevices(ip, port, nqn string, executor util.Executor) (devices []Device, err error) {
+	defer func() {
+		if err != nil {
+			logrus.WithError(err).Warnf("Failed to get devices for address %s:%s and nqn %s", ip, port, nqn)
+		}
+	}()
+
 	devices = []Device{}
 
-	nvmeDevices, err := listNvmeDevices(executor)
+	nvmeDevices, err := performNvmeList(executor)
 	if err != nil {
 		return nil, err
 	}
 	for _, d := range nvmeDevices {
 		// Get subsystem
-		subsystems, err := listSubsystems(d.DevicePath, executor)
+		subsystems, err := performNvmeListSubsystems(d.DevicePath, executor)
 		if err != nil {
 			logrus.WithError(err).Warnf("failed to get subsystem for nvme device %s", d.DevicePath)
 			continue
@@ -330,24 +136,21 @@ func GetDevices(ip, port, nqn string, executor util.Executor) (devices []Device,
 	}
 
 	if len(res) == 0 {
+		subsystems, err := performNvmeListSubsystems("", executor)
+		if err != nil {
+			return nil, err
+		}
+		for _, sys := range subsystems {
+			if sys.NQN != nqn {
+				continue
+			}
+			for _, path := range sys.Paths {
+				return nil, fmt.Errorf("subsystem NQN %s path %v address %v is in %s state",
+					nqn, path.Name, path.Address, path.State)
+			}
+		}
+
 		return nil, fmt.Errorf("cannot find a valid nvme device with subsystem NQN %s and address %s:%s", nqn, ip, port)
 	}
 	return res, nil
-}
-
-func GetIPAndPortFromControllerAddress(addr string) (ip, port string) {
-	reg := regexp.MustCompile(`traddr=([^"]*) trsvcid=\d*$`)
-	ip = reg.ReplaceAllString(addr, "${1}")
-	reg = regexp.MustCompile(`traddr=.* trsvcid=([^"]*)$`)
-	port = reg.ReplaceAllString(addr, "${1}")
-	return ip, port
-}
-
-// Extract the JSON part without the prefix
-func extractJSONString(str string) (string, error) {
-	startIndex := strings.Index(str, "{")
-	if startIndex == -1 {
-		return "", fmt.Errorf("invalid JSON string")
-	}
-	return str[startIndex:], nil
 }
