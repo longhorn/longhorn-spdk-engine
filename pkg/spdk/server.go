@@ -106,8 +106,16 @@ func (s *Server) monitoring() {
 }
 
 func (s *Server) verify() error {
-	s.Lock()
-	defer s.Unlock()
+	replicaMap := map[string]*Replica{}
+	engineMap := map[string]*Engine{}
+	s.RLock()
+	for k, v := range s.replicaMap {
+		replicaMap[k] = v
+	}
+	for k, v := range s.engineMap {
+		engineMap[k] = v
+	}
+	s.RUnlock()
 
 	lvsList, err := s.spdkClient.BdevLvolGetLvstore("", "")
 	if err != nil {
@@ -152,13 +160,13 @@ func (s *Server) verify() error {
 			if bdev.DriverSpecific.Lvol.Snapshot {
 				continue
 			}
-			if s.replicaMap[lvolName] != nil {
+			if replicaMap[lvolName] != nil {
 				continue
 			}
 			lvsUUID := bdev.DriverSpecific.Lvol.LvolStoreUUID
 			specSize := bdev.NumBlocks * uint64(bdev.BlockSize)
 			// TODO: May need to cache Disks
-			s.replicaMap[lvolName] = NewReplica(lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeReplica])
+			replicaMap[lvolName] = NewReplica(lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeReplica])
 		case spdktypes.BdevTypeRaid:
 			// Cannot detect if a RAID bdev is an engine since:
 			//   1. we don't know the frontend
@@ -169,11 +177,15 @@ func (s *Server) verify() error {
 		}
 	}
 
-	for _, r := range s.replicaMap {
+	s.Lock()
+	s.replicaMap = replicaMap
+	s.Unlock()
+
+	for _, r := range replicaMap {
 		r.Sync(bdevLvolMap, subsystemMap)
 	}
 
-	for _, e := range s.engineMap {
+	for _, e := range engineMap {
 		e.ValidateAndUpdate(bdevMap, subsystemMap)
 	}
 
@@ -227,21 +239,20 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 	}
 
 	s.Lock()
-	defer s.Unlock()
-
 	if _, ok := s.replicaMap[req.Name]; !ok {
 		s.replicaMap[req.Name] = NewReplica(req.Name, req.LvsName, req.LvsUuid, req.SpecSize, s.updateChs[types.InstanceTypeReplica])
 	}
 	r := s.replicaMap[req.Name]
+	s.Unlock()
 
 	return r.Create(s.spdkClient, req.ExposeRequired, s.portAllocator)
 }
 
 func (s *Server) ReplicaDelete(ctx context.Context, req *spdkrpc.ReplicaDeleteRequest) (ret *empty.Empty, err error) {
-	s.Lock()
-	defer s.Unlock()
-
+	s.RLock()
 	r := s.replicaMap[req.Name]
+	s.RUnlock()
+
 	defer func() {
 		if err == nil && req.CleanupRequired {
 			delete(s.replicaMap, req.Name)
@@ -270,13 +281,18 @@ func (s *Server) ReplicaGet(ctx context.Context, req *spdkrpc.ReplicaGetRequest)
 }
 
 func (s *Server) ReplicaList(ctx context.Context, req *empty.Empty) (*spdkrpc.ReplicaListResponse, error) {
+	replicaMap := map[string]*Replica{}
 	res := map[string]*spdkrpc.Replica{}
 
 	s.RLock()
-	for replicaName, r := range s.replicaMap {
-		res[replicaName] = r.Get()
+	for k, v := range s.replicaMap {
+		replicaMap[k] = v
 	}
 	s.RUnlock()
+
+	for replicaName, r := range replicaMap {
+		res[replicaName] = r.Get()
+	}
 
 	return &spdkrpc.ReplicaListResponse{Replicas: res}, nil
 }
@@ -320,10 +336,9 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.Snapsho
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and snapshot name are required")
 	}
 
-	s.Lock()
-	defer s.Unlock()
-
+	s.RLock()
 	r := s.replicaMap[req.Name]
+	s.RUnlock()
 
 	if r == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot create", req.Name)
@@ -337,10 +352,9 @@ func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.Snapsho
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and snapshot name are required")
 	}
 
-	s.Lock()
-	defer s.Unlock()
-
+	s.RLock()
 	r := s.replicaMap[req.Name]
+	s.RUnlock()
 
 	if r == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot delete", req.Name)
@@ -484,14 +498,14 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	}
 
 	s.Lock()
-	defer s.Unlock()
-
 	if _, ok := s.engineMap[req.Name]; ok {
+		s.Unlock()
 		return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "engine %v already exists", req.Name)
 	}
 
 	s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine])
 	e := s.engineMap[req.Name]
+	s.Unlock()
 
 	return e.Create(s.spdkClient, req.ReplicaAddressMap, s.getLocalReplicaLvsNameMap(req.ReplicaAddressMap), s.portAllocator)
 }
@@ -510,10 +524,10 @@ func (s *Server) getLocalReplicaLvsNameMap(replicaMap map[string]string) (replic
 }
 
 func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequest) (ret *empty.Empty, err error) {
-	s.Lock()
-	defer s.Unlock()
-
+	s.RLock()
 	e := s.engineMap[req.Name]
+	s.RUnlock()
+
 	defer func() {
 		if err == nil {
 			delete(s.engineMap, req.Name)
@@ -542,13 +556,18 @@ func (s *Server) EngineGet(ctx context.Context, req *spdkrpc.EngineGetRequest) (
 }
 
 func (s *Server) EngineList(ctx context.Context, req *empty.Empty) (*spdkrpc.EngineListResponse, error) {
+	engineMap := map[string]*Engine{}
 	res := map[string]*spdkrpc.Engine{}
 
 	s.RLock()
-	for engineName, e := range s.engineMap {
-		res[engineName] = e.Get()
+	for k, v := range s.engineMap {
+		engineMap[k] = v
 	}
 	s.RUnlock()
+
+	for engineName, e := range engineMap {
+		res[engineName] = e.Get()
+	}
 
 	return &spdkrpc.EngineListResponse{Engines: res}, nil
 }
@@ -614,10 +633,10 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 }
 
 func (s *Server) EngineReplicaDelete(ctx context.Context, req *spdkrpc.EngineReplicaDeleteRequest) (ret *empty.Empty, err error) {
-	s.Lock()
-	defer s.Unlock()
-
+	s.RLock()
 	e := s.engineMap[req.EngineName]
+	s.RUnlock()
+
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s with address %s delete", req.EngineName, req.ReplicaName, req.ReplicaAddress)
 	}
