@@ -12,7 +12,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
@@ -30,7 +29,7 @@ type Server struct {
 
 	ctx context.Context
 
-	spdkClient    *spdkclient.Client
+	spdkClient    *SPDKClient
 	portAllocator *util.Bitmap
 
 	replicaMap map[string]*Replica
@@ -42,7 +41,7 @@ type Server struct {
 }
 
 func NewServer(ctx context.Context, portStart, portEnd int32) (*Server, error) {
-	cli, err := spdkclient.NewClient()
+	cli, err := NewSPDKClient()
 	if err != nil {
 		return nil, err
 	}
