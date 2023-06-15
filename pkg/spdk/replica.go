@@ -1,6 +1,7 @@
 package spdk
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -25,6 +26,8 @@ import (
 
 type Replica struct {
 	sync.RWMutex
+
+	ctx context.Context
 
 	ActiveChain []*Lvol
 	ChainLength int
@@ -118,7 +121,7 @@ func BdevLvolInfoToServiceLvol(bdev *spdktypes.BdevInfo) *Lvol {
 	}
 }
 
-func NewReplica(replicaName, lvsName, lvsUUID string, specSize uint64, updateCh chan interface{}) *Replica {
+func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specSize uint64, updateCh chan interface{}) *Replica {
 	log := logrus.StandardLogger().WithFields(logrus.Fields{
 		"replicaName": replicaName,
 		"lvsName":     lvsName,
@@ -132,6 +135,8 @@ func NewReplica(replicaName, lvsName, lvsUUID string, specSize uint64, updateCh 
 	log.WithField("specSize", roundedSpecSize)
 
 	return &Replica{
+		ctx: ctx,
+
 		ActiveChain: []*Lvol{
 			{
 				Name:     replicaName,
@@ -853,7 +858,7 @@ func (r *Replica) SnapshotShallowCopy(snapshotName string) (err error) {
 		return fmt.Errorf("cannot find snapshot %s for replica %s shallow copy", snapshotName, r.Name)
 	}
 
-	spdkClient, err := spdkclient.NewClient()
+	spdkClient, err := spdkclient.NewClient(r.ctx)
 	if err != nil {
 		return err
 	}
