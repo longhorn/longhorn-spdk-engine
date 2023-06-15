@@ -216,7 +216,7 @@ func (s *Server) verify() (err error) {
 			lvsUUID := bdev.DriverSpecific.Lvol.LvolStoreUUID
 			specSize := bdev.NumBlocks * uint64(bdev.BlockSize)
 			// TODO: May need to cache Disks
-			replicaMap[lvolName] = NewReplica(lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeReplica])
+			replicaMap[lvolName] = NewReplica(s.ctx, lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeReplica])
 		case spdktypes.BdevTypeRaid:
 			// Cannot detect if a RAID bdev is an engine since:
 			//   1. we don't know the frontend
@@ -290,7 +290,7 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 
 	s.Lock()
 	if _, ok := s.replicaMap[req.Name]; !ok {
-		s.replicaMap[req.Name] = NewReplica(req.Name, req.LvsName, req.LvsUuid, req.SpecSize, s.updateChs[types.InstanceTypeReplica])
+		s.replicaMap[req.Name] = NewReplica(s.ctx, req.Name, req.LvsName, req.LvsUuid, req.SpecSize, s.updateChs[types.InstanceTypeReplica])
 	}
 	r := s.replicaMap[req.Name]
 	s.Unlock()
