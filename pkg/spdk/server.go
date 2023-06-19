@@ -13,6 +13,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
@@ -104,14 +105,39 @@ func (s *Server) monitoring() {
 			logrus.Info("SPDK Server: stopped monitoring replicas due to the context done")
 			done = true
 		case <-ticker.C:
-			if err := s.verify(); err != nil {
-				logrus.WithError(err).Errorf("SPDK Server: failed to verify and update replica cache, will retry later")
+			err := s.verify()
+			if err == nil {
+				break
+			}
+
+			logrus.WithError(err).Errorf("SPDK Server: failed to verify and update replica cache, will retry later")
+
+			if jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
+				err = s.tryEnsureSPDKTgtHealthy()
+				if err != nil {
+					logrus.WithError(err).Error("SPDK Server: failed to ensure spdk_tgt is healthy")
+				}
 			}
 		}
 		if done {
 			break
 		}
 	}
+}
+
+func (s *Server) tryEnsureSPDKTgtHealthy() error {
+	running, err := util.IsSPDKTargetProcessRunning()
+	if err != nil {
+		return errors.Wrap(err, "failed to check spdk_tgt is running")
+	}
+
+	if running {
+		logrus.Info("SPDK Server: reconnecting to spdk_tgt")
+		return s.spdkClient.Reconnect()
+	}
+
+	logrus.Info("SPDK Server: restarting spdk_tgt")
+	return util.StartSPDKTgtDaemon()
 }
 
 func (s *Server) verify() (err error) {
@@ -131,15 +157,13 @@ func (s *Server) verify() (err error) {
 			return
 		}
 		if jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
-			logrus.WithError(err).Errorf("SPDK Server: marking all non-stopped and non-error replicas and engines as error")
-			s.RLock()
-			for _, r := range s.replicaMap {
+			logrus.WithError(err).Warn("SPDK Server: marking all non-stopped and non-error replicas and engines as error")
+			for _, r := range replicaMap {
 				r.SetErrorState()
 			}
-			for _, e := range s.engineMap {
+			for _, e := range engineMap {
 				e.SetErrorState()
 			}
-			s.RUnlock()
 		}
 	}()
 
