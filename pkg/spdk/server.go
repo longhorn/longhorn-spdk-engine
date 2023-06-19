@@ -114,7 +114,7 @@ func (s *Server) monitoring() {
 	}
 }
 
-func (s *Server) verify() error {
+func (s *Server) verify() (err error) {
 	replicaMap := map[string]*Replica{}
 	engineMap := map[string]*Engine{}
 	s.RLock()
@@ -125,6 +125,23 @@ func (s *Server) verify() error {
 		engineMap[k] = v
 	}
 	s.RUnlock()
+
+	defer func() {
+		if err == nil {
+			return
+		}
+		if jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
+			logrus.WithError(err).Errorf("SPDK Server: marking all non-stopped and non-error replicas and engines as error")
+			s.RLock()
+			for _, r := range s.replicaMap {
+				r.SetErrorState()
+			}
+			for _, e := range s.engineMap {
+				e.SetErrorState()
+			}
+			s.RUnlock()
+		}
+	}()
 
 	lvsList, err := s.spdkClient.BdevLvolGetLvstore("", "")
 	if err != nil {
