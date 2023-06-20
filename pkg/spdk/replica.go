@@ -425,7 +425,7 @@ func constructSnapshotMap(replicaName string, rootSvcLvol *Lvol, bdevLvolMap map
 	return res, nil
 }
 
-func (r *Replica) Create(spdkClient *SPDKClient, exposeRequired bool, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Replica, err error) {
+func (r *Replica) Create(spdkClient *SPDKClient, exposeRequired bool, portCount int32, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Replica, err error) {
 	updateRequired := true
 
 	r.Lock()
@@ -504,7 +504,7 @@ func (r *Replica) Create(spdkClient *SPDKClient, exposeRequired bool, superiorPo
 	}
 	r.IP = podIP
 
-	r.PortStart, r.PortEnd, err = superiorPortAllocator.AllocateRange(types.DefaultReplicaReservedPortCount)
+	r.PortStart, r.PortEnd, err = superiorPortAllocator.AllocateRange(portCount)
 	if err != nil {
 		return nil, err
 	}
