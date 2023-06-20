@@ -295,7 +295,7 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 	r := s.replicaMap[req.Name]
 	s.Unlock()
 
-	return r.Create(s.spdkClient, req.ExposeRequired, s.portAllocator)
+	return r.Create(s.spdkClient, req.ExposeRequired, req.PortCount, s.portAllocator)
 }
 
 func (s *Server) ReplicaDelete(ctx context.Context, req *spdkrpc.ReplicaDeleteRequest) (ret *empty.Empty, err error) {
@@ -557,7 +557,7 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	e := s.engineMap[req.Name]
 	s.Unlock()
 
-	return e.Create(s.spdkClient, req.ReplicaAddressMap, s.getLocalReplicaLvsNameMap(req.ReplicaAddressMap), s.portAllocator)
+	return e.Create(s.spdkClient, req.ReplicaAddressMap, s.getLocalReplicaLvsNameMap(req.ReplicaAddressMap), req.PortCount, s.portAllocator)
 }
 
 func (s *Server) getLocalReplicaLvsNameMap(replicaMap map[string]string) (replicaLvsNameMap map[string]string) {
