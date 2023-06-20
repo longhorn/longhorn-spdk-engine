@@ -1065,3 +1065,21 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *SPDKClient, snapshotNa
 
 	return nil
 }
+
+func (r *Replica) SetErrorState() {
+	needUpdate := false
+
+	r.Lock()
+	defer func() {
+		r.Unlock()
+
+		if needUpdate {
+			r.UpdateCh <- nil
+		}
+	}()
+
+	if r.State != types.InstanceStateStopped && r.State != types.InstanceStateError {
+		r.State = types.InstanceStateError
+		needUpdate = true
+	}
+}

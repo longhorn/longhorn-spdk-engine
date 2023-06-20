@@ -859,3 +859,21 @@ func (e *Engine) replicaSnapshotOperation(replicaName, snapshotName, snapshotOp 
 		return fmt.Errorf("unknown replica snapshot operation %s", snapshotOp)
 	}
 }
+
+func (e *Engine) SetErrorState() {
+	needUpdate := false
+
+	e.Lock()
+	defer func() {
+		e.Unlock()
+
+		if needUpdate {
+			e.UpdateCh <- nil
+		}
+	}()
+
+	if e.State != types.InstanceStateStopped && e.State != types.InstanceStateError {
+		e.State = types.InstanceStateError
+		needUpdate = true
+	}
+}
