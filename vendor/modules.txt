@@ -23,7 +23,7 @@ github.com/google/uuid
 # github.com/kr/text v0.1.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/go-spdk-helper v0.0.0-20230620105912-7fdb56e276a6
+# github.com/longhorn/go-spdk-helper v0.0.0-20230626041832-c611b61f6b36
 ## explicit; go 1.17
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
 github.com/longhorn/go-spdk-helper/pkg/nvme
