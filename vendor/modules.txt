@@ -23,11 +23,12 @@ github.com/google/uuid
 # github.com/kr/text v0.1.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/go-spdk-helper v0.0.0-20231002161457-6c31a95f76e8
-## explicit; go 1.17
+# github.com/longhorn/go-spdk-helper v0.0.0-20231115022355-4dcc6f22bc08
+## explicit; go 1.21
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
 github.com/longhorn/go-spdk-helper/pkg/nvme
 github.com/longhorn/go-spdk-helper/pkg/spdk/client
+github.com/longhorn/go-spdk-helper/pkg/spdk/target
 github.com/longhorn/go-spdk-helper/pkg/spdk/types
 github.com/longhorn/go-spdk-helper/pkg/types
 github.com/longhorn/go-spdk-helper/pkg/util
@@ -43,7 +44,7 @@ github.com/niemeyer/pretty
 # github.com/pkg/errors v0.9.1
 ## explicit
 github.com/pkg/errors
-# github.com/sirupsen/logrus v1.8.1
+# github.com/sirupsen/logrus v1.9.0
 ## explicit; go 1.13
 github.com/sirupsen/logrus
 # golang.org/x/net v0.7.0
@@ -114,6 +115,8 @@ google.golang.org/grpc/internal/transport/networktype
 google.golang.org/grpc/keepalive
 google.golang.org/grpc/metadata
 google.golang.org/grpc/peer
+google.golang.org/grpc/reflection
+google.golang.org/grpc/reflection/grpc_reflection_v1alpha
 google.golang.org/grpc/resolver
 google.golang.org/grpc/serviceconfig
 google.golang.org/grpc/stats
