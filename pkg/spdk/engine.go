@@ -11,6 +11,7 @@ import (
 
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	"github.com/longhorn/go-spdk-helper/pkg/nvme"
+	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
@@ -73,7 +74,7 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 	}
 }
 
-func (e *Engine) Create(spdkClient *SPDKClient, replicaAddressMap, localReplicaLvsNameMap map[string]string, portCount int32, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Engine, err error) {
+func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localReplicaLvsNameMap map[string]string, portCount int32, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Engine, err error) {
 	requireUpdate := true
 
 	e.Lock()
@@ -131,7 +132,7 @@ func (e *Engine) Create(spdkClient *SPDKClient, replicaAddressMap, localReplicaL
 	return e.getWithoutLock(), nil
 }
 
-func getBdevNameForReplica(spdkClient *SPDKClient, localReplicaLvsNameMap map[string]string, replicaName, replicaAddress, podIP string) (bdevName string, err error) {
+func getBdevNameForReplica(spdkClient *spdkclient.Client, localReplicaLvsNameMap map[string]string, replicaName, replicaAddress, podIP string) (bdevName string, err error) {
 	replicaIP, replicaPort, err := net.SplitHostPort(replicaAddress)
 	if err != nil {
 		return "", err
@@ -155,7 +156,7 @@ func getBdevNameForReplica(spdkClient *SPDKClient, localReplicaLvsNameMap map[st
 	return nvmeBdevNameList[0], nil
 }
 
-func (e *Engine) handleFrontend(spdkClient *SPDKClient, portCount int32, superiorPortAllocator *util.Bitmap) error {
+func (e *Engine) handleFrontend(spdkClient *spdkclient.Client, portCount int32, superiorPortAllocator *util.Bitmap) error {
 	if e.Frontend != types.FrontendEmpty && e.Frontend != types.FrontendSPDKTCPNvmf && e.Frontend != types.FrontendSPDKTCPBlockdev {
 		return fmt.Errorf("unknown frontend type %s", e.Frontend)
 	}
@@ -187,7 +188,7 @@ func (e *Engine) handleFrontend(spdkClient *SPDKClient, portCount int32, superio
 	return initiator.Start(e.IP, strconv.Itoa(int(port)))
 }
 
-func (e *Engine) Delete(spdkClient *SPDKClient, superiorPortAllocator *util.Bitmap) (err error) {
+func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *util.Bitmap) (err error) {
 	requireUpdate := false
 
 	e.Lock()
@@ -251,7 +252,7 @@ func (e *Engine) Delete(spdkClient *SPDKClient, superiorPortAllocator *util.Bitm
 	return nil
 }
 
-func (e *Engine) removeReplica(spdkClient *SPDKClient, replicaName string) (err error) {
+func (e *Engine) removeReplica(spdkClient *spdkclient.Client, replicaName string) (err error) {
 	replicaIP, _, err := net.SplitHostPort(e.ReplicaAddressMap[replicaName])
 	if err != nil {
 		return err
@@ -575,7 +576,7 @@ func (e *Engine) ReplicaAddStart(replicaName, replicaAddress string) (err error)
 	return nil
 }
 
-func (e *Engine) ReplicaAddFinish(spdkClient *SPDKClient, replicaName, replicaAddress string, localReplicaLvsNameMap map[string]string) (err error) {
+func (e *Engine) ReplicaAddFinish(spdkClient *spdkclient.Client, replicaName, replicaAddress string, localReplicaLvsNameMap map[string]string) (err error) {
 	updateRequired := false
 
 	e.Lock()
@@ -758,7 +759,7 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 	return nil
 }
 
-func (e *Engine) ReplicaDelete(spdkClient *SPDKClient, replicaName, replicaAddress string) (err error) {
+func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, replicaAddress string) (err error) {
 	e.Lock()
 	defer e.Unlock()
 
