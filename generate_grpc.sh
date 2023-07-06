@@ -13,4 +13,15 @@ fi
 # proto lint check
 #buf check lint
 
-protoc -I proto/spdkrpc/ -I proto/vendor/protobuf/src/ proto/spdkrpc/spdk.proto --go_out=plugins=grpc:proto/spdkrpc/
+PROTO_DIR="proto/spdkrpc"
+TMP_DIR_BASE=".protobuild"
+TMP_DIR="${TMP_DIR_BASE}/github.com/longhorn/longhorn-spdk-engine/proto/"
+
+mkdir -p "${TMP_DIR}"
+trap 'rm -rf ${TMP_DIR_BASE}' EXIT
+
+cp -a "${PROTO_DIR}"/*.proto "${TMP_DIR}"
+
+PROTO="spdk"
+protoc -I ${TMP_DIR_BASE}/ -I proto/vendor/ -I proto/vendor/protobuf/src/ "${TMP_DIR}/${PROTO}.proto" --go_out=plugins=grpc:"${TMP_DIR_BASE}"
+mv "${TMP_DIR}/${PROTO}.pb.go" "${PROTO_DIR}/${PROTO}.pb.go"
