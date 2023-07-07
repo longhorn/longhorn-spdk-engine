@@ -43,7 +43,7 @@ type SPDKClient struct {
 	SPDKServiceContext
 }
 
-func NewSPDKClient(serviceUrl string) (*SPDKClient, error) {
+func NewSPDKClient(serviceURL string) (*SPDKClient, error) {
 	getSPDKServiceContext := func(serviceUrl string) (SPDKServiceContext, error) {
 		connection, err := grpc.Dial(serviceUrl, grpc.WithInsecure())
 		if err != nil {
@@ -56,13 +56,13 @@ func NewSPDKClient(serviceUrl string) (*SPDKClient, error) {
 		}, nil
 	}
 
-	serviceContext, err := getSPDKServiceContext(serviceUrl)
+	serviceContext, err := getSPDKServiceContext(serviceURL)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SPDKClient{
-		serviceURL:         serviceUrl,
+		serviceURL:         serviceURL,
 		SPDKServiceContext: serviceContext,
 	}, nil
 }
