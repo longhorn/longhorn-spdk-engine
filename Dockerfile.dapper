@@ -1,0 +1,122 @@
+FROM registry.suse.com/bci/bci-base:15.5
+
+ARG DAPPER_HOST_ARCH=amd64
+ARG http_proxy
+ARG https_proxy
+ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
+ENV PROTOBUF_VER=3.18.0
+
+# Setup environment
+ENV PATH /go/bin:$PATH
+ENV DAPPER_DOCKER_SOCKET true
+ENV DAPPER_ENV TAG REPO
+ENV DAPPER_OUTPUT bin coverage.out
+ENV DAPPER_RUN_ARGS --privileged --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.venv:exec --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.tox:exec -v /dev:/host/dev -v /proc:/host/proc -v /sys:/host/sys -v /tmp:/tmp
+ENV DAPPER_SOURCE /go/src/github.com/longhorn/longhorn-spdk-engine
+WORKDIR ${DAPPER_SOURCE}
+
+RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/system:/snappy/SLE_15/system:snappy.repo && \
+    zypper -n addrepo --refresh https://download.opensuse.org/repositories/network:/utilities/SLE_15_SP5/network:utilities.repo && \
+    zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:libraries:c_c++/15.5/devel:libraries:c_c++.repo && \
+    zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:Factory/15.5/devel:languages:python:Factory.repo && \
+    zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:backports/SLE_15/devel:languages:python:backports.repo && \
+    zypper --gpg-auto-import-keys ref
+
+RUN zypper -n install kmod curl fuse wget tar gzip unzip git awk gcc \
+    libibverbs librdmacm1 rdma-core-devel perl-Config-General libaio-devel sg3_utils uuid-devel libjson-c-devel \
+    iputils telnet iproute2 qemu-tools \
+    e2fsprogs e2fsprogs-devel xfsprogs xfsprogs-devel util-linux-systemd python3-devel python3-pip meson ninja
+
+
+# Install Go & tools
+ENV GOLANG_ARCH_amd64=amd64 GOLANG_ARCH_arm64=arm64 GOLANG_ARCH_s390x=s390x GOLANG_ARCH=GOLANG_ARCH_${ARCH} \
+    GOPATH=/go PATH=/go/bin:/usr/local/go/bin:${PATH} SHELL=/bin/bash
+RUN wget -O - https://storage.googleapis.com/golang/go1.21.3.linux-${!GOLANG_ARCH}.tar.gz | tar -xzf - -C /usr/local && \
+    go install golang.org/x/lint/golint@latest
+
+
+ENV NVME_CLI_DIR /usr/src/nvme-cli
+ENV NVME_CLI_COMMIT_ID d6c07e0de9be777009ebb9ab7475bee1ae3e0e95
+RUN git clone https://github.com/linux-nvme/nvme-cli.git ${NVME_CLI_DIR} && \
+    cd ${NVME_CLI_DIR} && \
+    git checkout ${NVME_CLI_COMMIT_ID} && \
+    meson setup --force-fallback-for=libnvme .build && \
+    meson compile -C .build && \
+    meson install -C .build
+
+
+# GRPC dependencies
+# GRPC health probe
+ENV GRPC_HEALTH_PROBE_amd64=https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.3.2/grpc_health_probe-linux-amd64 \
+    GRPC_HEALTH_PROBE_arm64=https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.3.2/grpc_health_probe-linux-arm64 \
+    GRPC_HEALTH_PROBE_s390x=https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.3.2/grpc_health_probe-linux-s390x \
+	GRPC_HEALTH_PROBE=GRPC_HEALTH_PROBE_${ARCH}
+
+RUN wget ${!GRPC_HEALTH_PROBE} -O /usr/local/bin/grpc_health_probe && \
+    chmod +x /usr/local/bin/grpc_health_probe
+
+# protoc
+ENV PROTOC_amd64=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-x86_64.zip \
+	PROTOC_arm64=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-aarch_64.zip \
+	PROTOC_s390x=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-s390_64.zip \
+	PROTOC=PROTOC_${ARCH}
+
+RUN cd /usr/src && \
+	wget ${!PROTOC} -O protoc_${ARCH}.zip && \
+    unzip protoc_${ARCH}.zip -d /usr/local/
+
+# protoc-gen-go
+RUN cd /go/src/github.com/ && \
+    mkdir golang/ && \
+    cd golang && \
+    git clone https://github.com/golang/protobuf.git && \
+    cd protobuf && \
+    git checkout v1.3.2 && \
+    cd protoc-gen-go && \
+    go build && \
+    cp protoc-gen-go /usr/local/bin
+
+# python grpc-tools
+RUN if [ "${ARCH}" == "s390x" ]; then \
+        zypper -n in libopenssl-devel && \
+        GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=True pip3 install grpcio==1.25.0 grpcio_tools==1.25.0 protobuf==${PROTOBUF_VER}; \
+    else \
+        pip3 install grpcio==1.25.0 grpcio_tools==1.25.0 protobuf==${PROTOBUF_VER}; \
+    fi
+
+# buf
+ENV GO111MODULE=on
+RUN go install github.com/bufbuild/buf/cmd/buf@v1.4.0
+
+
+# longhorn/spdk
+ENV HUGEMEM=1024
+ENV SPDK_DIR /usr/src/spdk
+ENV SPDK_COMMIT_ID 4542f9b14010fc7192d42e05adaafc2ae863bac5
+RUN echo "vm.nr_hugepages=$((HUGEMEM/2))" >> /etc/sysctl.conf
+RUN git clone https://github.com/longhorn/spdk.git ${SPDK_DIR} --recursive && \
+    if [ ${ARCH} == "amd64" ]; then \
+        cd ${SPDK_DIR} && \
+        git checkout ${SPDK_COMMIT_ID} && \
+        git submodule update --init && \
+        ./scripts/pkgdep.sh && \
+        ./configure --target-arch=nehalem --disable-tests --disable-unit-tests --disable-examples && \
+        make -j$(nproc) && \
+        make install; \
+    fi
+
+# longhorn/go-spdk-helper binary for debugging
+ENV GO_SPDK_HELPER_DIR /usr/src/go-spdk-helper
+RUN git clone https://github.com/longhorn/go-spdk-helper.git ${GO_SPDK_HELPER_DIR} && \
+    cd ${GO_SPDK_HELPER_DIR} && \
+    go build && \
+    install -m 755 go-spdk-helper /usr/local/bin/go-spdk-helper && \
+    rm -rf ${GO_SPDK_HELPER_DIR}
+
+
+RUN ldconfig
+
+VOLUME /tmp
+ENV TMPDIR /tmp
+ENTRYPOINT ["./scripts/entry"]
+CMD ["ci"]
