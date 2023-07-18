@@ -185,7 +185,12 @@ func (e *Engine) handleFrontend(spdkClient *spdkclient.Client, portCount int32, 
 	if err != nil {
 		return err
 	}
-	return initiator.Start(e.IP, strconv.Itoa(int(port)))
+	if err = initiator.Start(e.IP, strconv.Itoa(int(port))); err != nil {
+		return err
+	}
+	e.Endpoint = initiator.GetEndpoint()
+
+	return nil
 }
 
 func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *util.Bitmap) (err error) {
