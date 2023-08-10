@@ -103,6 +103,7 @@ func ServiceLvolToProtoLvol(lvol *Lvol) *spdkrpc.Lvol {
 		Children:   map[string]bool{},
 	}
 	for _, childSvcLvol := range lvol.Children {
+		// For a snapshot lvol, the child name means the child lvol name, which consists of <replica-name>-snap-<snapshot-name>
 		res.Children[childSvcLvol.Name] = true
 	}
 
@@ -781,6 +782,7 @@ func (r *Replica) RebuildingSrcStart(spdkClient *spdkclient.Client, localReplica
 			return fmt.Errorf("cannot find dst replica %s from the local replica map for replica %s rebuilding src start", dstReplicaName, r.Name)
 		}
 		r.rebuildingDstBdevName = spdktypes.GetLvolAlias(dstReplicaLvsName, dstRebuildingLvolName)
+		r.rebuildingDstBdevType = spdktypes.BdevTypeLvol
 	} else {
 		nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(dstRebuildingLvolName, helpertypes.GetNQN(dstRebuildingLvolName), dstRebuildingLvolIP, dstRebuildingLvolPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4,
 			helpertypes.DefaultCtrlrLossTimeoutSec, helpertypes.DefaultReconnectDelaySec, helpertypes.DefaultFastIOFailTimeoutSec)
@@ -791,10 +793,9 @@ func (r *Replica) RebuildingSrcStart(spdkClient *spdkclient.Client, localReplica
 			return fmt.Errorf("got zero or multiple results when attaching rebuilding dst lvol %s with address %s as a NVMe bdev: %+v", dstRebuildingLvolName, dstRebuildingLvolAddress, nvmeBdevNameList)
 		}
 		r.rebuildingDstBdevName = nvmeBdevNameList[0]
+		r.rebuildingDstBdevType = spdktypes.BdevTypeNvme
 	}
-
 	r.rebuildingDstReplicaName = dstReplicaName
-	r.rebuildingDstBdevType = spdktypes.BdevTypeNvme
 	updateRequired = true
 
 	return nil
@@ -1036,8 +1037,8 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 	if !r.isRebuilding {
 		return fmt.Errorf("replica %s is not in rebuilding", r.Name)
 	}
-	if r.rebuildingLvol == nil || r.rebuildingPort == 0 || !r.IsExposed {
-		return fmt.Errorf("rebuilding lvol is not existed or exposed for replica %s rebuilding snapshot %s creation", r.Name, snapshotName)
+	if r.rebuildingLvol == nil || (r.IsExposed && r.rebuildingPort == 0) {
+		return fmt.Errorf("rebuilding lvol is not existed, or exposed without rebuilding port for replica %s rebuilding snapshot %s creation", r.Name, snapshotName)
 	}
 
 	defer func() {
