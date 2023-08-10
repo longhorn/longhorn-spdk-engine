@@ -102,6 +102,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 		return nil, err
 	}
 	e.IP = podIP
+	e.log = e.log.WithField("ip", podIP)
 
 	replicaBdevList := []string{}
 	for replicaName, replicaAddr := range replicaAddressMap {
@@ -118,11 +119,14 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 		replicaBdevList = append(replicaBdevList, bdevName)
 	}
 	e.ReplicaAddressMap = replicaAddressMap
+	e.log = e.log.WithField("replicaAddressMap", replicaAddressMap)
 
+	e.log.Infof("Launching RAID during engine creation")
 	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
 		return nil, err
 	}
 
+	e.log.Infof("Launching Frontend during engine creation")
 	if err := e.handleFrontend(spdkClient, portCount, superiorPortAllocator); err != nil {
 		return nil, err
 	}
@@ -175,6 +179,7 @@ func (e *Engine) handleFrontend(spdkClient *spdkclient.Client, portCount int32, 
 		return err
 	}
 	e.Port = port
+	e.log = e.log.WithField("port", port)
 
 	if e.Frontend == types.FrontendSPDKTCPNvmf {
 		e.Endpoint = GetNvmfEndpoint(nqn, e.IP, e.Port)
@@ -189,6 +194,7 @@ func (e *Engine) handleFrontend(spdkClient *spdkclient.Client, portCount int32, 
 		return err
 	}
 	e.Endpoint = initiator.GetEndpoint()
+	e.log = e.log.WithField("endpoint", e.Endpoint)
 
 	return nil
 }
@@ -384,6 +390,7 @@ func (e *Engine) ValidateAndUpdate(
 			e.log.Errorf("Remove replica %s for the mode map since it is not found in engine %s bdev name map", replicaName, e.Name)
 		}
 	}
+	e.log = e.log.WithField("replicaAddressMap", e.ReplicaAddressMap)
 
 	containValidReplica := false
 	for replicaName, bdevName := range e.ReplicaBdevNameMap {
@@ -577,6 +584,7 @@ func (e *Engine) ReplicaAddStart(replicaName, replicaAddress string) (err error)
 	e.ReplicaAddressMap[replicaName] = replicaAddress
 	e.ReplicaBdevNameMap[replicaName] = ""
 	e.ReplicaModeMap[replicaName] = types.ModeWO
+	e.log = e.log.WithField("replicaAddressMap", e.ReplicaAddressMap)
 
 	return nil
 }
@@ -793,6 +801,7 @@ func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, repli
 	delete(e.ReplicaAddressMap, replicaName)
 	delete(e.ReplicaModeMap, replicaName)
 	delete(e.ReplicaBdevNameMap, replicaName)
+	e.log = e.log.WithField("replicaAddressMap", e.ReplicaAddressMap)
 
 	return nil
 }
@@ -833,6 +842,8 @@ func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrp
 	}()
 
 	updateRequired = e.snapshotOperationWithoutLock(snapshotName, snapshotOp)
+
+	e.log.Infof("Engine finished snapshot %s for %v", snapshotOp, snapshotName)
 
 	return e.getWithoutLock(), nil
 }

@@ -656,6 +656,8 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	headSvcLvol.Parent = snapSvcLvol.Name
 	updateRequired = true
 
+	r.log.Infof("Replica created snapshot %s(%s)", snapshotName, snapSvcLvol.Alias)
+
 	return ServiceReplicaToProtoReplica(r), err
 }
 
@@ -702,6 +704,8 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	r.removeLvolFromActiveChainWithoutLock(snapLvolName)
 
 	updateRequired = true
+
+	r.log.Infof("Replica deleted snapshot %s(%s)", snapshotName, snapSvcLvol.Alias)
 
 	return ServiceReplicaToProtoReplica(r), nil
 }
