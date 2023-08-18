@@ -329,7 +329,9 @@ func (s *Server) ReplicaDelete(ctx context.Context, req *spdkrpc.ReplicaDeleteRe
 
 	defer func() {
 		if err == nil && req.CleanupRequired {
+			s.Lock()
 			delete(s.replicaMap, req.Name)
+			s.Unlock()
 		}
 	}()
 
