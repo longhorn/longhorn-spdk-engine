@@ -161,13 +161,24 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 	}
 }
 
-func (r *Replica) Sync(bdevLvolMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
+func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
 	r.Lock()
 	defer r.Unlock()
 	// It's better to let the server send the update signal
 
+	// This lvol and nvmf subsystem fetch should be protected by replica lock, in case of snapshot operations happened during the sync-up.
+	bdevLvolMap, err := GetBdevLvolMap(spdkClient)
+	if err != nil {
+		return err
+	}
+
 	if r.State == types.InstanceStatePending {
 		return r.construct(bdevLvolMap)
+	}
+
+	subsystemMap, err := GetNvmfSubsystemMap(spdkClient)
+	if err != nil {
+		return err
 	}
 
 	return r.validateAndUpdate(bdevLvolMap, subsystemMap)

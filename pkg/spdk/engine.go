@@ -311,18 +311,11 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 	return res
 }
 
-func (e *Engine) ValidateAndUpdate(
-	bdevMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
+func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 	updateRequired := false
 
 	e.Lock()
 	defer func() {
-		// TODO: we may not need to mark the engine as ERR for each error
-		if err != nil && e.State != types.InstanceStateError {
-			e.State = types.InstanceStateError
-			e.log.Errorf("Found error during engine validation and update: %v", err)
-			updateRequired = true
-		}
 		e.Unlock()
 
 		if updateRequired {
@@ -334,6 +327,24 @@ func (e *Engine) ValidateAndUpdate(
 	if e.State != types.InstanceStateRunning {
 		return nil
 	}
+
+	subsystemMap, err := GetNvmfSubsystemMap(spdkClient)
+	if err != nil {
+		return err
+	}
+	bdevMap, err := GetBdevMap(spdkClient)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		// TODO: we may not need to mark the engine as ERR for each error
+		if err != nil && e.State != types.InstanceStateError {
+			e.State = types.InstanceStateError
+			e.log.WithError(err).Error("Found error during engine validation and update")
+			updateRequired = true
+		}
+	}()
 
 	podIP, err := util.GetIPForPod()
 	if err != nil {
