@@ -164,7 +164,8 @@ func (s *Server) clientReconnect() error {
 func (s *Server) verify() (err error) {
 	replicaMap := map[string]*Replica{}
 	engineMap := map[string]*Engine{}
-	s.RLock()
+
+	s.Lock()
 	for k, v := range s.replicaMap {
 		replicaMap[k] = v
 	}
@@ -172,7 +173,6 @@ func (s *Server) verify() (err error) {
 		engineMap[k] = v
 	}
 	spdkClient := s.spdkClient
-	s.RUnlock()
 
 	defer func() {
 		if err == nil {
@@ -189,76 +189,59 @@ func (s *Server) verify() (err error) {
 		}
 	}()
 
-	lvsList, err := spdkClient.BdevLvolGetLvstore("", "")
-	if err != nil {
-		return err
-	}
+	// Detect if the lvol bdev is an uncached replica.
+	// But cannot detect if a RAID bdev is an engine since:
+	//   1. we don't know the frontend
+	//   2. RAID bdevs are not persist objects in SPDK. After spdk_tgt start/restart, there is no RAID bdev hence there is no need to do detection.
+	// TODO: May need to cache Disks as well.
 	bdevList, err := spdkClient.BdevGetBdevs("", 0)
 	if err != nil {
+		s.Unlock()
 		return err
 	}
-	subsystemList, err := spdkClient.NvmfGetSubsystems("", "")
+	lvsList, err := spdkClient.BdevLvolGetLvstore("", "")
 	if err != nil {
+		s.Unlock()
 		return err
 	}
-
 	lvsUUIDNameMap := map[string]string{}
 	for _, lvs := range lvsList {
 		lvsUUIDNameMap[lvs.UUID] = lvs.Name
 	}
-
-	subsystemMap := map[string]*spdktypes.NvmfSubsystem{}
-	for idx := range subsystemList {
-		subsystem := &subsystemList[idx]
-		subsystemMap[subsystem.Nqn] = subsystem
-	}
-
-	bdevMap := map[string]*spdktypes.BdevInfo{}
-	bdevLvolMap := map[string]*spdktypes.BdevInfo{}
 	for idx := range bdevList {
 		bdev := &bdevList[idx]
-		bdevType := spdktypes.GetBdevType(bdev)
-
-		switch bdevType {
-		case spdktypes.BdevTypeLvol:
-			if len(bdev.Aliases) != 1 {
-				continue
-			}
-			lvolName := spdktypes.GetLvolNameFromAlias(bdev.Aliases[0])
-			bdevMap[bdev.Aliases[0]] = bdev
-			bdevLvolMap[lvolName] = bdev
-
-			// Detect if the lvol bdev is an uncached replica.
-			if bdev.DriverSpecific.Lvol.Snapshot {
-				continue
-			}
-			if replicaMap[lvolName] != nil {
-				continue
-			}
-			lvsUUID := bdev.DriverSpecific.Lvol.LvolStoreUUID
-			specSize := bdev.NumBlocks * uint64(bdev.BlockSize)
-			// TODO: May need to cache Disks
-			replicaMap[lvolName] = NewReplica(s.ctx, lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeReplica])
-		case spdktypes.BdevTypeRaid:
-			// Cannot detect if a RAID bdev is an engine since:
-			//   1. we don't know the frontend
-			//   2. RAID bdevs are not persist objects in SPDK. After spdk_tgt start/restart, there is no RAID bdev henc there is no need to do detection.
-			fallthrough
-		default:
-			bdevMap[bdev.Name] = bdev
+		if spdktypes.GetBdevType(bdev) != spdktypes.BdevTypeLvol {
+			continue
 		}
+		if len(bdev.Aliases) != 1 {
+			continue
+		}
+		if bdev.DriverSpecific.Lvol.Snapshot {
+			continue
+		}
+		lvolName := spdktypes.GetLvolNameFromAlias(bdev.Aliases[0])
+		if replicaMap[lvolName] != nil {
+			continue
+		}
+		lvsUUID := bdev.DriverSpecific.Lvol.LvolStoreUUID
+		specSize := bdev.NumBlocks * uint64(bdev.BlockSize)
+		replicaMap[lvolName] = NewReplica(s.ctx, lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeReplica])
 	}
-
-	s.Lock()
 	s.replicaMap = replicaMap
 	s.Unlock()
 
 	for _, r := range replicaMap {
-		r.Sync(bdevLvolMap, subsystemMap)
+		err = r.Sync(spdkClient)
+		if err != nil && jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
+			return err
+		}
 	}
 
 	for _, e := range engineMap {
-		e.ValidateAndUpdate(bdevMap, subsystemMap)
+		err = e.ValidateAndUpdate(spdkClient)
+		if err != nil && jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
+			return err
+		}
 	}
 
 	// TODO: send update signals if there is a Replica/Replica change
