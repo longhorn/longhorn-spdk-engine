@@ -616,7 +616,9 @@ func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequ
 
 	defer func() {
 		if err == nil {
+			s.Lock()
 			delete(s.engineMap, req.Name)
+			s.Unlock()
 		}
 	}()
 
