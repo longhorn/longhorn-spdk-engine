@@ -6,7 +6,7 @@ require (
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/golang/protobuf v1.5.2
 	github.com/google/uuid v1.3.0
-	github.com/longhorn/go-spdk-helper v0.0.0-20230802035240-e5fe21b6067f
+	github.com/longhorn/go-spdk-helper v0.0.0-20231002161457-6c31a95f76e8
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.8.1
 	golang.org/x/net v0.7.0
