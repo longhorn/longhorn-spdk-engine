@@ -9,7 +9,6 @@ import (
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -166,17 +165,7 @@ func getDiskID(filename string) (string, error) {
 		return "", errors.Wrap(err, "failed to detect disk device")
 	}
 
-	return fmt.Sprintf("%d-%d", dev.Major, dev.Minor), nil
-}
-
-func isBlockDevice(fullPath string) (bool, error) {
-	var st unix.Stat_t
-	err := unix.Stat(fullPath, &st)
-	if err != nil {
-		return false, err
-	}
-
-	return (st.Mode & unix.S_IFMT) == unix.S_IFBLK, nil
+	return fmt.Sprintf("%d-%d", dev.Export.Major, dev.Export.Minor), nil
 }
 
 func getDiskDeviceSize(path string) (int64, error) {
@@ -194,7 +183,7 @@ func getDiskDeviceSize(path string) (int64, error) {
 }
 
 func validateDiskCreation(spdkClient *spdkclient.Client, diskPath string) error {
-	ok, err := isBlockDevice(diskPath)
+	ok, err := spdkutil.IsBlockDevice(diskPath)
 	if err != nil {
 		return errors.Wrap(err, "failed to check if disk is a block device")
 	}
