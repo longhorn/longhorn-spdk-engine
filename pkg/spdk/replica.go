@@ -31,6 +31,7 @@ type Replica struct {
 
 	ActiveChain []*Lvol
 	ChainLength int
+	// SnapshotMap map[<snapshot name>]. <snapshot name> is a caller provided name and does not contain prefix `<replica name>-snap-`
 	SnapshotMap map[string]*Lvol
 
 	Name      string
@@ -70,7 +71,8 @@ type Lvol struct {
 	SpecSize   uint64
 	ActualSize uint64
 	Parent     string
-	Children   map[string]*Lvol
+	// Children is map[<snapshot lvol name>] rather than map[<snapshot name>]. <snapshot lvol name> consists of `<replica name>-snap-<snapshot name>`
+	Children map[string]*Lvol
 }
 
 func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
@@ -86,6 +88,7 @@ func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 		PortEnd:   r.PortEnd,
 		State:     string(r.State),
 	}
+	// spdkrpc.Replica.Snapshots is map[<snapshot name>] rather than map[<snapshot lvol name>]
 	for name, lvol := range r.SnapshotMap {
 		res.Snapshots[name] = ServiceLvolToProtoLvol(lvol)
 	}
