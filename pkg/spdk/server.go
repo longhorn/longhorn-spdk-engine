@@ -163,14 +163,16 @@ func (s *Server) clientReconnect() error {
 
 func (s *Server) verify() (err error) {
 	replicaMap := map[string]*Replica{}
-	engineMap := map[string]*Engine{}
+	replicaMapForSync := map[string]*Replica{}
+	engineMapForSync := map[string]*Engine{}
 
 	s.Lock()
 	for k, v := range s.replicaMap {
 		replicaMap[k] = v
+		replicaMapForSync[k] = v
 	}
 	for k, v := range s.engineMap {
-		engineMap[k] = v
+		engineMapForSync[k] = v
 	}
 	spdkClient := s.spdkClient
 
@@ -180,10 +182,10 @@ func (s *Server) verify() (err error) {
 		}
 		if jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
 			logrus.WithError(err).Warn("SPDK Server: marking all non-stopped and non-error replicas and engines as error")
-			for _, r := range replicaMap {
+			for _, r := range replicaMapForSync {
 				r.SetErrorState()
 			}
-			for _, e := range engineMap {
+			for _, e := range engineMapForSync {
 				e.SetErrorState()
 			}
 		}
@@ -226,18 +228,19 @@ func (s *Server) verify() (err error) {
 		lvsUUID := bdev.DriverSpecific.Lvol.LvolStoreUUID
 		specSize := bdev.NumBlocks * uint64(bdev.BlockSize)
 		replicaMap[lvolName] = NewReplica(s.ctx, lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeReplica])
+		replicaMapForSync[lvolName] = replicaMap[lvolName]
 	}
 	s.replicaMap = replicaMap
 	s.Unlock()
 
-	for _, r := range replicaMap {
+	for _, r := range replicaMapForSync {
 		err = r.Sync(spdkClient)
 		if err != nil && jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
 			return err
 		}
 	}
 
-	for _, e := range engineMap {
+	for _, e := range engineMapForSync {
 		err = e.ValidateAndUpdate(spdkClient)
 		if err != nil && jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
 			return err
