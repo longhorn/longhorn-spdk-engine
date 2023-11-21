@@ -23,4 +23,5 @@ trap "losetup -D" EXIT
 
 PACKAGES="$(find . -name '*.go' -print0 | xargs -0 -I{} dirname {} |  cut -f2 -d/ | sort -u | grep -Ev '(^\.$|.git|.trash-cache|vendor|bin)' | sed -e 's!^!./!' -e 's!$!/...!')"
 
+trap "rm -f /tmp/test-disk" EXIT
 go test -v -race -cover ${PACKAGES} -timeout 5m
