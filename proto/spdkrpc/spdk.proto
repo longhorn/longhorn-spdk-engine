@@ -12,6 +12,7 @@ service SPDKService {
     rpc ReplicaGet(ReplicaGetRequest) returns (Replica);
     rpc ReplicaSnapshotCreate(SnapshotRequest) returns (Replica);
     rpc ReplicaSnapshotDelete(SnapshotRequest) returns (google.protobuf.Empty);
+    rpc ReplicaSnapshotRevert(SnapshotRequest) returns (google.protobuf.Empty);
     rpc ReplicaList(google.protobuf.Empty) returns (ReplicaListResponse);
     rpc ReplicaWatch(google.protobuf.Empty) returns (stream google.protobuf.Empty) {}
     rpc ReplicaRebuildingSrcStart(ReplicaRebuildingSrcStartRequest) returns (google.protobuf.Empty) {}
@@ -27,6 +28,7 @@ service SPDKService {
     rpc EngineGet(EngineGetRequest) returns (Engine);
     rpc EngineSnapshotCreate(SnapshotRequest) returns (Engine);
     rpc EngineSnapshotDelete(SnapshotRequest) returns (google.protobuf.Empty);
+    rpc EngineSnapshotRevert(SnapshotRequest) returns (google.protobuf.Empty);
     rpc EngineList(google.protobuf.Empty) returns (EngineListResponse);
     rpc EngineWatch(google.protobuf.Empty) returns (stream google.protobuf.Empty) {}
     rpc EngineReplicaAdd(EngineReplicaAddRequest) returns (google.protobuf.Empty) {}
