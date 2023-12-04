@@ -27,3 +27,5 @@ require (
 	google.golang.org/genproto v0.0.0-20230110181048-76db0878b65f // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/longhorn/go-spdk-helper v0.0.0-20231115022355-4dcc6f22bc08 => github.com/derekbit/go-spdk-helper v0.0.0-20231204105326-01de1f352ebc
