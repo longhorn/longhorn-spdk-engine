@@ -461,6 +461,24 @@ func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.Snapsho
 	return &emptypb.Empty{}, err
 }
 
+func (s *Server) ReplicaSnapshotRevert(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *emptypb.Empty, err error) {
+	if req.Name == "" || req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and snapshot name are required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	spdkClient := s.spdkClient
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot revert", req.Name)
+	}
+
+	_, err = r.SnapshotRevert(spdkClient, req.SnapshotName)
+	return &emptypb.Empty{}, err
+}
+
 func (s *Server) ReplicaRebuildingSrcStart(ctx context.Context, req *spdkrpc.ReplicaRebuildingSrcStartRequest) (ret *emptypb.Empty, err error) {
 	if req.Name == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
