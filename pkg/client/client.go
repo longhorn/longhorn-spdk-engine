@@ -427,6 +427,22 @@ func (c *SPDKClient) EngineSnapshotDelete(name, snapshotName string) error {
 	return errors.Wrapf(err, "failed to delete SPDK engine %s snapshot %s", name, snapshotName)
 }
 
+func (c *SPDKClient) EngineSnapshotRevert(name, snapshotName string) error {
+	if name == "" || snapshotName == "" {
+		return fmt.Errorf("failed to revert SPDK engine snapshot: missing required parameter name or snapshot name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineSnapshotRevert(ctx, &spdkrpc.SnapshotRequest{
+		Name:         name,
+		SnapshotName: snapshotName,
+	})
+	return errors.Wrapf(err, "failed to revert SPDK engine %s snapshot %s", name, snapshotName)
+}
+
 func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress string) error {
 	if engineName == "" {
 		return fmt.Errorf("failed to add replica for SPDK engine: missing required parameter engine name")
