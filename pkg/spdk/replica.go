@@ -38,7 +38,6 @@ type Replica struct {
 	SnapshotMap map[string]*Lvol
 
 	Name      string
-	UUID      string
 	Alias     string
 	LvsName   string
 	LvsUUID   string
@@ -83,7 +82,6 @@ type Lvol struct {
 func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 	res := &spdkrpc.Replica{
 		Name:      r.Name,
-		Uuid:      r.UUID,
 		LvsName:   r.LvsName,
 		LvsUuid:   r.LvsUUID,
 		SpecSize:  r.SpecSize,
@@ -232,14 +230,12 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 		return err
 	}
 
-	r.UUID = bdevLvolMap[r.Name].UUID
 	r.ActiveChain = newChain
 	r.ChainLength = len(r.ActiveChain)
 	r.SnapshotMap = newSnapshotMap
 	if r.State == types.InstanceStatePending {
 		r.State = types.InstanceStateStopped
 	}
-	r.log.WithField("uuid", r.UUID)
 
 	return nil
 }
@@ -402,9 +398,6 @@ func (r *Replica) validateReplicaInfo(headBdevLvol *spdktypes.BdevInfo) (err err
 	if r.LvsUUID != headBdevLvol.DriverSpecific.Lvol.LvolStoreUUID {
 		return fmt.Errorf("found mismatching lvol LvsUUID %v with recorded LvsUUID %v for replica %s", headBdevLvol.DriverSpecific.Lvol.LvolStoreUUID, r.LvsUUID, r.Name)
 	}
-	if r.UUID != "" && headBdevLvol.UUID != r.UUID {
-		return fmt.Errorf("found mismatching lvol UUID %v with recorded UUID %v for replica %s", headBdevLvol.UUID, r.UUID, r.Name)
-	}
 	bdevLvolSpecSize := headBdevLvol.NumBlocks * uint64(headBdevLvol.BlockSize)
 	if r.SpecSize != 0 && r.SpecSize != bdevLvolSpecSize {
 		return fmt.Errorf("found mismatching lvol spec size %v with recorded spec size %v for replica %s", bdevLvolSpecSize, r.SpecSize, r.Name)
@@ -559,9 +552,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, por
 			return nil, fmt.Errorf("cannot find lvol %v after creation", r.Alias)
 		}
 		headSvcLvol.UUID = bdevLvolList[0].UUID
-		r.UUID = bdevLvolList[0].UUID
 		r.State = types.InstanceStateStopped
-		r.log.WithField("uuid", r.UUID)
 	}
 
 	podIP, err := util.GetIPForPod()
@@ -578,7 +569,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, por
 	r.portAllocator = util.NewBitmap(r.PortStart+1, r.PortEnd)
 
 	if exposeRequired {
-		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.UUID, podIP, strconv.Itoa(int(r.PortStart))); err != nil {
+		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), headSvcLvol.UUID, podIP, strconv.Itoa(int(r.PortStart))); err != nil {
 			return nil, err
 		}
 		r.IsExposed = true
@@ -639,7 +630,8 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		return nil
 	}
 
-	if _, err := spdkClient.BdevLvolDelete(r.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+	// Use r.Alias here since we don't know if an errored replicas still contains the head lvol
+	if _, err := spdkClient.BdevLvolDelete(r.Alias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return err
 	}
 	updateRequired = true
