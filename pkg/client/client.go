@@ -186,6 +186,22 @@ func (c *SPDKClient) ReplicaSnapshotDelete(name, snapshotName string) error {
 	return errors.Wrapf(err, "failed to delete SPDK replica %s snapshot %s", name, snapshotName)
 }
 
+func (c *SPDKClient) ReplicaSnapshotRevert(name, snapshotName string) error {
+	if name == "" || snapshotName == "" {
+		return fmt.Errorf("failed to revert SPDK replica snapshot: missing required parameter name or snapshot name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaSnapshotRevert(ctx, &spdkrpc.SnapshotRequest{
+		Name:         name,
+		SnapshotName: snapshotName,
+	})
+	return errors.Wrapf(err, "failed to revert SPDK replica %s snapshot %s", name, snapshotName)
+}
+
 func (c *SPDKClient) ReplicaRebuildingSrcStart(srcReplicaName, dstReplicaName, dstRebuildingLvolAddress string) error {
 	if srcReplicaName == "" {
 		return fmt.Errorf("failed to start replica rebuilding src: missing required parameter src replica name")

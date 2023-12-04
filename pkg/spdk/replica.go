@@ -406,7 +406,7 @@ func (r *Replica) validateReplicaInfo(headBdevLvol *spdktypes.BdevInfo) (err err
 	return nil
 }
 
-// constructActiveChain retrive the chain bottom up (from the head to the ancestor snapshot/backing image)
+// constructActiveChain retrieves the chain bottom up (from the head to the ancestor snapshot/backing image)
 func constructActiveChain(replicaName string, bdevLvolMap map[string]*spdktypes.BdevInfo) (res []*Lvol, err error) {
 	newChain := []*Lvol{}
 
@@ -818,6 +818,95 @@ func (r *Replica) removeLvolFromActiveChainWithoutLock(snapLvolName string) int 
 	r.ChainLength = len(r.ActiveChain)
 
 	return pos
+}
+
+func (r *Replica) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName string) (pReplica *spdkrpc.Replica, err error) {
+	updateRequired := false
+
+	r.Lock()
+	defer func() {
+		r.Unlock()
+
+		if updateRequired {
+			r.UpdateCh <- nil
+		}
+	}()
+
+	if r.State != types.InstanceStateStopped && r.State != types.InstanceStateRunning {
+		return nil, fmt.Errorf("invalid state %v for replica %s snapshot revert", r.State, r.Name)
+	}
+
+	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
+	snapSvcLvol := r.SnapshotMap[snapshotName]
+	if snapSvcLvol == nil {
+		return nil, fmt.Errorf("cannot revert to a non-existing snapshot %s(%s)", snapshotName, snapLvolName)
+	}
+	if snapSvcLvol.Children[r.Name] != nil {
+		return nil, fmt.Errorf("cannot revert to the same snapshot %s(%s)", snapshotName, snapLvolName)
+	}
+
+	defer func() {
+		if err != nil && r.State != types.InstanceStateError {
+			r.State = types.InstanceStateError
+			updateRequired = true
+		}
+	}()
+
+	if r.ChainLength < 2 {
+		return nil, fmt.Errorf("invalid chain length %d for replica snapshot revert", r.ChainLength)
+	}
+
+	if _, err := spdkClient.BdevLvolDelete(r.Alias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return nil, err
+	}
+	// The parent of the old head lvol is a valid snapshot lvol or backing image lvol
+	if r.ActiveChain[r.ChainLength-2] != nil {
+		delete(r.ActiveChain[r.ChainLength-2].Children, r.Name)
+	}
+	r.ChainLength--
+	r.ActiveChain = r.ActiveChain[:r.ChainLength]
+
+	// TODO: If the below steps fail, there will be no head lvol for the replica. Need to guarantee that the replica can be cleaned up correctly in this case
+
+	headLvolUUID, err := spdkClient.BdevLvolClone(snapSvcLvol.UUID, r.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	bdevLvolMap, err := GetBdevLvolMap(spdkClient)
+	if err != nil {
+		return nil, err
+	}
+
+	newChain, err := constructActiveChain(r.Name, bdevLvolMap)
+	if err != nil {
+		return nil, err
+	}
+
+	// Skip newChain[0], which is the backing image lvol and may be the ancestor of multiple replicas
+	newSnapshotMap, err := constructSnapshotMap(r.Name, newChain[1], bdevLvolMap)
+	if err != nil {
+		return nil, err
+	}
+
+	r.ActiveChain = newChain
+	r.ChainLength = len(r.ActiveChain)
+	r.SnapshotMap = newSnapshotMap
+
+	if r.IsExposed {
+		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return nil, err
+		}
+		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), headLvolUUID, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
+			return nil, err
+		}
+	}
+
+	updateRequired = true
+
+	r.log.Infof("Replica reverted snapshot %s(%s)", snapshotName, snapSvcLvol.Alias)
+
+	return ServiceReplicaToProtoReplica(r), nil
 }
 
 func (r *Replica) RebuildingSrcStart(spdkClient *spdkclient.Client, localReplicaLvsNameMap map[string]string, dstReplicaName, dstRebuildingLvolAddress string) (err error) {
