@@ -811,6 +811,26 @@ func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.Snapshot
 	return &emptypb.Empty{}, nil
 }
 
+func (s *Server) EngineSnapshotRevert(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *emptypb.Empty, err error) {
+	if req.Name == "" || req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name and snapshot name are required")
+	}
+
+	s.RLock()
+	e := s.engineMap[req.Name]
+	s.RUnlock()
+
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot revert", req.Name)
+	}
+
+	if _, err := e.SnapshotRevert(req.SnapshotName); err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 func (s *Server) DiskCreate(ctx context.Context, req *spdkrpc.DiskCreateRequest) (ret *spdkrpc.Disk, err error) {
 	s.RLock()
 	spdkClient := s.spdkClient

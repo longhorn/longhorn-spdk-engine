@@ -17,6 +17,7 @@ import (
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
 
+	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
@@ -613,6 +614,11 @@ func (e *Engine) ReplicaAddStart(replicaName, replicaAddress string) (err error)
 		return fmt.Errorf("replica %s already exists", replicaName)
 	}
 
+	replicaClients, err := e.getReplicaClients()
+	if err != nil {
+		return err
+	}
+
 	defer func() {
 		if err != nil {
 			if e.State != types.InstanceStateError {
@@ -627,7 +633,7 @@ func (e *Engine) ReplicaAddStart(replicaName, replicaAddress string) (err error)
 
 	// TODO: For online rebuilding, the IO should be paused first
 	snapshotName := GenerateRebuildingSnapshotName()
-	updateRequired = e.snapshotOperationWithoutLock(snapshotName, SnapshotOperationCreate)
+	updateRequired = e.snapshotOperationWithoutLock(replicaClients, snapshotName, SnapshotOperationCreate)
 
 	// TODO: For online rebuilding, this replica should be attached (if it's a remote one) then added to the RAID base bdev list with mode WO
 	e.ReplicaAddressMap[replicaName] = replicaAddress
@@ -861,8 +867,11 @@ func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, repli
 	return nil
 }
 
-const SnapshotOperationCreate = "snapshot-create"
-const SnapshotOperationDelete = "snapshot-delete"
+const (
+	SnapshotOperationCreate = "snapshot-create"
+	SnapshotOperationDelete = "snapshot-delete"
+	SnapshotOperationRevert = "snapshot-revert"
+)
 
 func (e *Engine) SnapshotCreate(snapshotName string) (res *spdkrpc.Engine, err error) {
 	return e.snapshotOperation(snapshotName, SnapshotOperationCreate)
@@ -870,6 +879,10 @@ func (e *Engine) SnapshotCreate(snapshotName string) (res *spdkrpc.Engine, err e
 
 func (e *Engine) SnapshotDelete(snapshotName string) (res *spdkrpc.Engine, err error) {
 	return e.snapshotOperation(snapshotName, SnapshotOperationDelete)
+}
+
+func (e *Engine) SnapshotRevert(snapshotName string) (res *spdkrpc.Engine, err error) {
+	return e.snapshotOperation(snapshotName, SnapshotOperationRevert)
 }
 
 func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrpc.Engine, err error) {
@@ -889,6 +902,15 @@ func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrp
 		return nil, fmt.Errorf("invalid state %v for engine %s snapshot %s create", e.State, e.Name, snapshotName)
 	}
 
+	replicaClients, err := e.getReplicaClients()
+	if err != nil {
+		return nil, err
+	}
+
+	if err = e.snapshotOperationPreCheckWithoutLock(replicaClients, snapshotName, snapshotOp); err != nil {
+		return nil, err
+	}
+
 	defer func() {
 		if err != nil {
 			if e.State != types.InstanceStateError {
@@ -901,19 +923,59 @@ func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrp
 
 	e.ErrorMsg = ""
 
-	updateRequired = e.snapshotOperationWithoutLock(snapshotName, snapshotOp)
+	updateRequired = e.snapshotOperationWithoutLock(replicaClients, snapshotName, snapshotOp)
 
 	e.log.Infof("Engine finished snapshot %s for %v", snapshotOp, snapshotName)
 
 	return e.getWithoutLock(), nil
 }
 
-func (e *Engine) snapshotOperationWithoutLock(snapshotName, snapshotOp string) (updated bool) {
+func (e *Engine) getReplicaClients() (replicaClients map[string]*client.SPDKClient, err error) {
+	replicaClients = map[string]*client.SPDKClient{}
 	for replicaName := range e.ReplicaAddressMap {
-		if err := e.replicaSnapshotOperation(replicaName, snapshotName, snapshotOp); err != nil {
-			if e.ReplicaModeMap[replicaName] != types.ModeRW {
-				continue
+		if e.ReplicaModeMap[replicaName] == types.ModeERR {
+			continue
+		}
+		c, err := GetServiceClient(e.ReplicaAddressMap[replicaName])
+		if err != nil {
+			return nil, err
+		}
+		replicaClients[replicaName] = c
+	}
+
+	return replicaClients, nil
+}
+
+func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]*client.SPDKClient, snapshotName, snapshotOp string) (err error) {
+	for replicaName := range replicaClients {
+		switch snapshotOp {
+		case SnapshotOperationCreate:
+		case SnapshotOperationDelete:
+			if e.ReplicaModeMap[replicaName] == types.ModeWO {
+				return fmt.Errorf("engine %s contains WO replica %s during snapshot %s delete", e.Name, replicaName, snapshotName)
 			}
+		case SnapshotOperationRevert:
+			if e.ReplicaModeMap[replicaName] == types.ModeWO {
+				return fmt.Errorf("engine %s contains WO replica %s during snapshot %s revert", e.Name, replicaName, snapshotName)
+			}
+			r, err := replicaClients[replicaName].ReplicaGet(replicaName)
+			if err != nil {
+				return err
+			}
+			if r.Snapshots[snapshotName] == nil {
+				return fmt.Errorf("replica %s does not contain the reverting snapshot %s", replicaName, snapshotName)
+			}
+		default:
+			return fmt.Errorf("unknown replica snapshot operation %s", snapshotOp)
+		}
+	}
+
+	return nil
+}
+
+func (e *Engine) snapshotOperationWithoutLock(replicaClients map[string]*client.SPDKClient, snapshotName, snapshotOp string) (updated bool) {
+	for replicaName := range replicaClients {
+		if err := e.replicaSnapshotOperation(replicaClients[replicaName], replicaName, snapshotName, snapshotOp); err != nil && e.ReplicaModeMap[replicaName] != types.ModeERR {
 			e.ReplicaModeMap[replicaName] = types.ModeERR
 			e.log.WithError(err).Errorf("Failed to issue operation %s for replica %s snapshot %s, will mark the replica as mode ERR", snapshotOp, replicaName, snapshotName)
 			updated = true
@@ -923,18 +985,15 @@ func (e *Engine) snapshotOperationWithoutLock(snapshotName, snapshotOp string) (
 	return updated
 }
 
-func (e *Engine) replicaSnapshotOperation(replicaName, snapshotName, snapshotOp string) error {
-	c, err := GetServiceClient(e.ReplicaAddressMap[replicaName])
-	if err != nil {
-		return err
-	}
-
+func (e *Engine) replicaSnapshotOperation(c *client.SPDKClient, replicaName, snapshotName, snapshotOp string) error {
 	switch snapshotOp {
 	case SnapshotOperationCreate:
 		// TODO: execute `sync` for the nvme initiator before snapshot start
 		return c.ReplicaSnapshotCreate(replicaName, snapshotName)
 	case SnapshotOperationDelete:
 		return c.ReplicaSnapshotDelete(replicaName, snapshotName)
+	case SnapshotOperationRevert:
+		return c.ReplicaSnapshotRevert(replicaName, snapshotName)
 	default:
 		return fmt.Errorf("unknown replica snapshot operation %s", snapshotOp)
 	}
