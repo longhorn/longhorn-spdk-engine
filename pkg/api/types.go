@@ -9,7 +9,6 @@ import (
 
 type Replica struct {
 	Name       string           `json:"name"`
-	UUID       string           `json:"uuid"`
 	LvsName    string           `json:"lvs_name"`
 	LvsUUID    string           `json:"lvs_uuid"`
 	SpecSize   uint64           `json:"spec_size"`
@@ -44,7 +43,6 @@ func ProtoLvolToLvol(l *spdkrpc.Lvol) *Lvol {
 func ProtoReplicaToReplica(r *spdkrpc.Replica) *Replica {
 	res := &Replica{
 		Name:       r.Name,
-		UUID:       r.Uuid,
 		LvsName:    r.LvsName,
 		LvsUUID:    r.LvsUuid,
 		SpecSize:   r.SpecSize,
