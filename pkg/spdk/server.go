@@ -31,8 +31,7 @@ const (
 type Server struct {
 	sync.RWMutex
 
-	ctx        context.Context
-	shutdownCh chan error
+	ctx context.Context
 
 	spdkClient    *spdkclient.Client
 	portAllocator *util.Bitmap
@@ -45,7 +44,7 @@ type Server struct {
 	updateChs    map[types.InstanceType]chan interface{}
 }
 
-func NewServer(ctx context.Context, portStart, portEnd int32, shutdownCh chan error) (*Server, error) {
+func NewServer(ctx context.Context, portStart, portEnd int32) (*Server, error) {
 	cli, err := spdkclient.NewClient(ctx)
 	if err != nil {
 		return nil, err
@@ -69,8 +68,7 @@ func NewServer(ctx context.Context, portStart, portEnd int32, shutdownCh chan er
 	}
 
 	s := &Server{
-		ctx:        ctx,
-		shutdownCh: shutdownCh,
+		ctx: ctx,
 
 		spdkClient:    cli,
 		portAllocator: util.NewBitmap(portStart, portEnd),
@@ -106,9 +104,6 @@ func (s *Server) monitoring() {
 		select {
 		case <-s.ctx.Done():
 			logrus.Info("SPDK Server: stopped monitoring replicas due to the context done")
-			done = true
-		case <-s.shutdownCh:
-			logrus.Info("SPDK Server: stopped monitoring replicas due to the shutdown signal")
 			done = true
 		case <-ticker.C:
 			err := s.verify()
