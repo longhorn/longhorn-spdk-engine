@@ -4,7 +4,8 @@ ARG DAPPER_HOST_ARCH=amd64
 ARG http_proxy
 ARG https_proxy
 ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
-ENV PROTOBUF_VER=3.18.0
+ENV PROTOBUF_VER=24.3
+ENV PROTOBUF_VER_PY=4.24.3
 
 # Setup environment
 ENV PATH /go/bin:$PATH
@@ -22,10 +23,11 @@ RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/syste
     zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:backports/SLE_15/devel:languages:python:backports.repo && \
     zypper --gpg-auto-import-keys ref
 
+# TODO: use default python3 if SLE upgrade system python version to python3.11
 RUN zypper -n install kmod curl fuse wget tar gzip unzip git awk gcc \
     libibverbs librdmacm1 rdma-core-devel perl-Config-General libaio-devel sg3_utils uuid-devel libjson-c-devel \
     iputils telnet iproute2 qemu-tools \
-    e2fsprogs e2fsprogs-devel xfsprogs xfsprogs-devel util-linux-systemd python3-devel python3-pip meson ninja
+    e2fsprogs e2fsprogs-devel xfsprogs xfsprogs-devel util-linux-systemd python311 python311-pip python311-devel meson ninja
 
 
 # Install Go & tools
@@ -50,19 +52,19 @@ RUN git clone https://github.com/linux-nvme/nvme-cli.git ${NVME_CLI_DIR} && \
 ENV GRPC_HEALTH_PROBE_amd64=https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.3.2/grpc_health_probe-linux-amd64 \
     GRPC_HEALTH_PROBE_arm64=https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.3.2/grpc_health_probe-linux-arm64 \
     GRPC_HEALTH_PROBE_s390x=https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.3.2/grpc_health_probe-linux-s390x \
-	GRPC_HEALTH_PROBE=GRPC_HEALTH_PROBE_${ARCH}
+    GRPC_HEALTH_PROBE=GRPC_HEALTH_PROBE_${ARCH}
 
 RUN wget ${!GRPC_HEALTH_PROBE} -O /usr/local/bin/grpc_health_probe && \
     chmod +x /usr/local/bin/grpc_health_probe
 
 # protoc
 ENV PROTOC_amd64=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-x86_64.zip \
-	PROTOC_arm64=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-aarch_64.zip \
-	PROTOC_s390x=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-s390_64.zip \
-	PROTOC=PROTOC_${ARCH}
+    PROTOC_arm64=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-aarch_64.zip \
+    PROTOC_s390x=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-s390_64.zip \
+    PROTOC=PROTOC_${ARCH}
 
 RUN cd /usr/src && \
-	wget ${!PROTOC} -O protoc_${ARCH}.zip && \
+    wget ${!PROTOC} -O protoc_${ARCH}.zip && \
     unzip protoc_${ARCH}.zip -d /usr/local/
 
 # protoc-gen-go
@@ -71,17 +73,21 @@ RUN cd /go/src/github.com/ && \
     cd golang && \
     git clone https://github.com/golang/protobuf.git && \
     cd protobuf && \
-    git checkout v1.3.2 && \
+    git checkout v1.5.3 && \
     cd protoc-gen-go && \
     go build && \
     cp protoc-gen-go /usr/local/bin
 
+# TODO: use default python3 if SLE upgrade system python version to python3.11
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 & \
+    ln -sf /usr/bin/pip3.11 /usr/bin/pip3
+
 # python grpc-tools
 RUN if [ "${ARCH}" == "s390x" ]; then \
-        zypper -n in libopenssl-devel && \
-        GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=True pip3 install grpcio==1.25.0 grpcio_tools==1.25.0 protobuf==${PROTOBUF_VER}; \
+    zypper -n in libopenssl-devel && \
+    GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=True pip3 install grpcio==1.58.0 grpcio_tools==1.58.0 protobuf==${PROTOBUF_VER_PY}; \
     else \
-        pip3 install grpcio==1.25.0 grpcio_tools==1.25.0 protobuf==${PROTOBUF_VER}; \
+    pip3 install grpcio==1.58.0 grpcio_tools==1.58.0 protobuf==${PROTOBUF_VER_PY}; \
     fi
 
 # buf
@@ -96,13 +102,13 @@ ENV SPDK_COMMIT_ID 4542f9b14010fc7192d42e05adaafc2ae863bac5
 RUN echo "vm.nr_hugepages=$((HUGEMEM/2))" >> /etc/sysctl.conf
 RUN git clone https://github.com/longhorn/spdk.git ${SPDK_DIR} --recursive && \
     if [ ${ARCH} == "amd64" ]; then \
-        cd ${SPDK_DIR} && \
-        git checkout ${SPDK_COMMIT_ID} && \
-        git submodule update --init && \
-        ./scripts/pkgdep.sh && \
-        ./configure --target-arch=nehalem --disable-tests --disable-unit-tests --disable-examples && \
-        make -j$(nproc) && \
-        make install; \
+    cd ${SPDK_DIR} && \
+    git checkout ${SPDK_COMMIT_ID} && \
+    git submodule update --init && \
+    ./scripts/pkgdep.sh && \
+    ./configure --target-arch=nehalem --disable-tests --disable-unit-tests --disable-examples && \
+    make -j$(nproc) && \
+    make install; \
     fi
 
 # longhorn/go-spdk-helper binary for debugging
