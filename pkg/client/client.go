@@ -7,7 +7,9 @@ import (
 
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
+
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
@@ -45,7 +47,7 @@ type SPDKClient struct {
 
 func NewSPDKClient(serviceURL string) (*SPDKClient, error) {
 	getSPDKServiceContext := func(serviceUrl string) (SPDKServiceContext, error) {
-		connection, err := grpc.Dial(serviceUrl, grpc.WithInsecure())
+		connection, err := grpc.Dial(serviceUrl, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			return SPDKServiceContext{}, errors.Wrapf(err, "cannot connect to SPDKService %v", serviceUrl)
 		}
