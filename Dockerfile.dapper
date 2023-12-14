@@ -23,12 +23,10 @@ RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/syste
     zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:backports/SLE_15/devel:languages:python:backports.repo && \
     zypper --gpg-auto-import-keys ref
 
-# TODO: use default python3 if SLE upgrade system python version to python3.11
 RUN zypper -n install kmod curl fuse wget tar gzip unzip git awk gcc \
     libibverbs librdmacm1 rdma-core-devel perl-Config-General libaio-devel sg3_utils uuid-devel libjson-c-devel \
     iputils telnet iproute2 qemu-tools \
-    e2fsprogs e2fsprogs-devel xfsprogs xfsprogs-devel util-linux-systemd python311 python311-pip python311-devel meson ninja
-
+    e2fsprogs e2fsprogs-devel xfsprogs xfsprogs-devel util-linux-systemd python3 python3-pip python3-devel meson ninja
 
 # Install Go & tools
 ENV GOLANG_ARCH_amd64=amd64 GOLANG_ARCH_arm64=arm64 GOLANG_ARCH_s390x=s390x GOLANG_ARCH=GOLANG_ARCH_${ARCH} \
@@ -78,22 +76,9 @@ RUN cd /go/src/github.com/ && \
     go build && \
     cp protoc-gen-go /usr/local/bin
 
-# TODO: use default python3 if SLE upgrade system python version to python3.11
-RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 & \
-    ln -sf /usr/bin/pip3.11 /usr/bin/pip3
-
-# python grpc-tools
-RUN if [ "${ARCH}" == "s390x" ]; then \
-    zypper -n in libopenssl-devel && \
-    GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=True pip3 install grpcio==1.58.0 grpcio_tools==1.58.0 protobuf==${PROTOBUF_VER_PY}; \
-    else \
-    pip3 install grpcio==1.58.0 grpcio_tools==1.58.0 protobuf==${PROTOBUF_VER_PY}; \
-    fi
-
 # buf
 ENV GO111MODULE=on
 RUN go install github.com/bufbuild/buf/cmd/buf@v1.4.0
-
 
 # longhorn/spdk
 ENV HUGEMEM=1024
@@ -118,7 +103,6 @@ RUN git clone https://github.com/longhorn/go-spdk-helper.git ${GO_SPDK_HELPER_DI
     go build && \
     install -m 755 go-spdk-helper /usr/local/bin/go-spdk-helper && \
     rm -rf ${GO_SPDK_HELPER_DIR}
-
 
 RUN ldconfig
 
