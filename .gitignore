@@ -28,6 +28,7 @@ _testmain.go
 trash.lock
 .trash-conf
 bin/
+Dockerfile.dapper*
 
 # patch tmp files
 *.orig
