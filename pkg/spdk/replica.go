@@ -616,23 +616,22 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 
 	r.Lock()
 	defer func() {
-		if err != nil {
+		// Considering that there may be still pending validations, it's better to update the state after the deletion.
+		if err != nil && r.State != types.InstanceStateError {
 			r.State = types.InstanceStateError
 			r.ErrorMsg = err.Error()
+			r.log.WithError(err).Errorf("Failed to delete replica with cleanup flag %v", cleanupRequired)
+			updateRequired = true
 		}
-		// The port can be released once the rebuilding and expose are stopped
-		if r.PortStart != 0 {
-			if releaseErr := superiorPortAllocator.ReleaseRange(r.PortStart, r.PortEnd); releaseErr != nil {
-				r.log.Errorf("Failed to release port %d to %d at the end of replica deletion: %v", r.PortStart, r.PortEnd, releaseErr)
-				return
-			}
-			r.portAllocator = nil
-			r.PortStart, r.PortEnd = 0, 0
-			if r.State == types.InstanceStateRunning {
+		if r.State == types.InstanceStateRunning {
+			if cleanupRequired {
+				r.State = types.InstanceStateTerminating
+			} else {
 				r.State = types.InstanceStateStopped
 			}
 			updateRequired = true
 		}
+
 		r.Unlock()
 
 		if updateRequired {
@@ -657,6 +656,16 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 	}
 	r.rebuildingLvol = nil
 	r.isRebuilding = false
+
+	// The port can be released once the rebuilding and expose are stopped.
+	if r.PortStart != 0 {
+		if err := superiorPortAllocator.ReleaseRange(r.PortStart, r.PortEnd); err != nil {
+			return errors.Wrapf(err, "failed to release port %d to %d during replica deletion with cleanup flag %v", r.PortStart, r.PortEnd, cleanupRequired)
+		}
+		r.portAllocator = nil
+		r.PortStart, r.PortEnd = 0, 0
+		updateRequired = true
+	}
 
 	if !cleanupRequired {
 		return nil
