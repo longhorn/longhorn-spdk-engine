@@ -17,10 +17,11 @@ const (
 type InstanceState string
 
 const (
-	InstanceStatePending = "pending"
-	InstanceStateStopped = "stopped"
-	InstanceStateRunning = "running"
-	InstanceStateError   = "error"
+	InstanceStatePending     = "pending"
+	InstanceStateStopped     = "stopped"
+	InstanceStateRunning     = "running"
+	InstanceStateTerminating = "terminating"
+	InstanceStateError       = "error"
 )
 
 type InstanceType string

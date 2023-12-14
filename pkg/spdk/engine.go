@@ -225,13 +225,18 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 
 	e.Lock()
 	defer func() {
-		if err != nil {
-			e.log.WithError(err).Errorf("Failed to delete engine %s", e.Name)
-			if e.State != types.InstanceStateError {
-				e.State = types.InstanceStateError
-			}
+		// Considering that there may be still pending validations, it's better to update the state after the deletion.
+		if err != nil && e.State != types.InstanceStateError {
+			e.State = types.InstanceStateError
 			e.ErrorMsg = err.Error()
+			e.log.WithError(err).Error("Failed to delete engine")
+			requireUpdate = true
 		}
+		if e.State == types.InstanceStateRunning {
+			e.State = types.InstanceStateTerminating
+			requireUpdate = true
+		}
+
 		e.Unlock()
 
 		if requireUpdate {
