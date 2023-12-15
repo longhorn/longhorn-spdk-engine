@@ -490,13 +490,14 @@ func (s *Server) ReplicaRebuildingSrcStart(ctx context.Context, req *spdkrpc.Rep
 	s.RLock()
 	r := s.replicaMap[req.Name]
 	spdkClient := s.spdkClient
+	replicaLvsNameMap := s.getLocalReplicaLvsNameMap(map[string]string{req.DstReplicaName: ""})
 	s.RUnlock()
 
 	if r == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding src start", req.Name)
 	}
 
-	if err = r.RebuildingSrcStart(spdkClient, s.getLocalReplicaLvsNameMap(map[string]string{req.DstReplicaName: ""}), req.DstReplicaName, req.DstRebuildingLvolAddress); err != nil {
+	if err = r.RebuildingSrcStart(spdkClient, replicaLvsNameMap, req.DstReplicaName, req.DstRebuildingLvolAddress); err != nil {
 		return nil, err
 	}
 	return &emptypb.Empty{}, nil
@@ -627,9 +628,10 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine])
 	e := s.engineMap[req.Name]
 	spdkClient := s.spdkClient
+	replicaLvsNameMap := s.getLocalReplicaLvsNameMap(req.ReplicaAddressMap)
 	s.Unlock()
 
-	return e.Create(spdkClient, req.ReplicaAddressMap, s.getLocalReplicaLvsNameMap(req.ReplicaAddressMap), req.PortCount, s.portAllocator)
+	return e.Create(spdkClient, req.ReplicaAddressMap, replicaLvsNameMap, req.PortCount, s.portAllocator)
 }
 
 func (s *Server) getLocalReplicaLvsNameMap(replicaMap map[string]string) (replicaLvsNameMap map[string]string) {
