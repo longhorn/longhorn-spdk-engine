@@ -34,8 +34,8 @@ type Replica struct {
 	// The last entry of the chain is always the head lvol.
 	ActiveChain []*Lvol
 	ChainLength int
-	// SnapshotMap map[<snapshot name>]. <snapshot name> is a caller provided name and does not contain prefix `<replica name>-snap-`
-	SnapshotMap map[string]*Lvol
+	// SnapshotLvolMap map[<snapshot lvol name>]. <snapshot lvol name> consists of `<replica name>-snap-<snapshot name>`
+	SnapshotLvolMap map[string]*Lvol
 
 	Name      string
 	Alias     string
@@ -93,25 +93,29 @@ func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 		ErrorMsg:  r.ErrorMsg,
 	}
 	// spdkrpc.Replica.Snapshots is map[<snapshot name>] rather than map[<snapshot lvol name>]
-	for name, lvol := range r.SnapshotMap {
-		res.Snapshots[name] = ServiceLvolToProtoLvol(lvol)
+	for lvolName, lvol := range r.SnapshotLvolMap {
+		res.Snapshots[GetSnapshotNameFromReplicaSnapshotLvolName(r.Name, lvolName)] = ServiceLvolToProtoLvol(r.Name, lvol)
 	}
 
 	return res
 }
 
-func ServiceLvolToProtoLvol(lvol *Lvol) *spdkrpc.Lvol {
+func ServiceLvolToProtoLvol(replicaName string, lvol *Lvol) *spdkrpc.Lvol {
 	res := &spdkrpc.Lvol{
-		Name:       lvol.Name,
+		Name:       GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, lvol.Name),
 		Uuid:       lvol.UUID,
 		SpecSize:   lvol.SpecSize,
 		ActualSize: lvol.ActualSize,
-		Parent:     lvol.Parent,
+		Parent:     GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, lvol.Parent),
 		Children:   map[string]bool{},
 	}
-	for _, childSvcLvol := range lvol.Children {
-		// For a snapshot lvol, the child name means the child lvol name, which consists of <replica-name>-snap-<snapshot-name>
-		res.Children[childSvcLvol.Name] = true
+	for childLvolName := range lvol.Children {
+		// spdkrpc.Lvol.Children is map[<snapshot name>] rather than map[<snapshot lvol name>]
+		if childLvolName == replicaName {
+			res.Children[replicaName] = true
+		} else {
+			res.Children[GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, childLvolName)] = true
+		}
 	}
 
 	return res
@@ -154,14 +158,14 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 				Children: map[string]*Lvol{},
 			},
 		},
-		ChainLength: 2,
-		SnapshotMap: map[string]*Lvol{},
-		Name:        replicaName,
-		Alias:       spdktypes.GetLvolAlias(lvsName, replicaName),
-		LvsName:     lvsName,
-		LvsUUID:     lvsUUID,
-		SpecSize:    roundedSpecSize,
-		State:       types.InstanceStatePending,
+		ChainLength:     2,
+		SnapshotLvolMap: map[string]*Lvol{},
+		Name:            replicaName,
+		Alias:           spdktypes.GetLvolAlias(lvsName, replicaName),
+		LvsName:         lvsName,
+		LvsUUID:         lvsUUID,
+		SpecSize:        roundedSpecSize,
+		State:           types.InstanceStatePending,
 
 		UpdateCh: updateCh,
 
@@ -192,7 +196,7 @@ func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
 	return r.validateAndUpdate(bdevLvolMap, subsystemMap)
 }
 
-// construct build Replica with the SnapshotMap and SnapshotChain from the bdev lvol list.
+// construct build Replica with the SnapshotLvolMap and SnapshotChain from the bdev lvol list.
 // This function is typically invoked for the existing lvols after node/service restart and device add.
 func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err error) {
 	defer func() {
@@ -219,20 +223,19 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	if err := r.validateReplicaInfo(bdevLvolMap[r.Name]); err != nil {
 		return err
 	}
-	newChain, err := constructActiveChain(r.Name, bdevLvolMap)
+
+	newSnapshotLvolMap, err := constructSnapshotLvolMap(r.Name, bdevLvolMap)
 	if err != nil {
 		return err
 	}
-
-	// Skip newChain[0], which is the backing image lvol and may be the ancestor of multiple replicas
-	newSnapshotMap, err := constructSnapshotMap(r.Name, newChain[1], bdevLvolMap)
+	newChain, err := constructActiveChainFromSnapshotLvolMap(r.Name, newSnapshotLvolMap, bdevLvolMap)
 	if err != nil {
 		return err
 	}
 
 	r.ActiveChain = newChain
 	r.ChainLength = len(r.ActiveChain)
-	r.SnapshotMap = newSnapshotMap
+	r.SnapshotLvolMap = newSnapshotLvolMap
 	if r.State == types.InstanceStatePending {
 		r.State = types.InstanceStateStopped
 	}
@@ -267,7 +270,20 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 		return err
 	}
 
-	newChain, err := constructActiveChain(r.Name, bdevLvolMap)
+	newSnapshotLvolMap, err := constructSnapshotLvolMap(r.Name, bdevLvolMap)
+	if err != nil {
+		return err
+	}
+	if len(r.SnapshotLvolMap) != len(newSnapshotLvolMap) {
+		return fmt.Errorf("replica current active snapshot lvol map length %d is not the same as the latest snapshot lvol map length %d", len(r.SnapshotLvolMap), len(newSnapshotLvolMap))
+	}
+	for snapshotLvolName := range r.SnapshotLvolMap {
+		if err := compareSvcLvols(r.SnapshotLvolMap[snapshotLvolName], newSnapshotLvolMap[snapshotLvolName], true, true); err != nil {
+			return err
+		}
+	}
+
+	newChain, err := constructActiveChainFromSnapshotLvolMap(r.Name, newSnapshotLvolMap, bdevLvolMap)
 	if err != nil {
 		return err
 	}
@@ -289,26 +305,12 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 			}
 		}
 
-		if err := compareSvcLvols(svcLvol, newSvcLvol, false, svcLvol.Name != r.Name); err != nil {
+		if err := compareSvcLvols(svcLvol, newSvcLvol, true, svcLvol.Name != r.Name); err != nil {
 			return err
 		}
 		// Then update the actual size for the head lvol
 		if svcLvol.Name == r.Name && svcLvol.ActualSize != newSvcLvol.ActualSize {
 			svcLvol.ActualSize = newSvcLvol.ActualSize
-		}
-	}
-
-	// Skip newChain[0], which is the backing image lvol and may be the ancestor of multiple replicas
-	newSnapshotMap, err := constructSnapshotMap(r.Name, newChain[1], bdevLvolMap)
-	if err != nil {
-		return err
-	}
-	if len(r.SnapshotMap) != len(newSnapshotMap) {
-		return fmt.Errorf("replica current active snapshot map length %d is not the same as the latest snapshot map length %d", len(r.SnapshotMap), len(newSnapshotMap))
-	}
-	for snapshotName := range r.SnapshotMap {
-		if err := compareSvcLvols(r.SnapshotMap[snapshotName], newSnapshotMap[snapshotName], true, true); err != nil {
-			return err
 		}
 	}
 
@@ -406,8 +408,58 @@ func (r *Replica) validateReplicaInfo(headBdevLvol *spdktypes.BdevInfo) (err err
 	return nil
 }
 
-// constructActiveChain retrieves the chain bottom up (from the head to the ancestor snapshot/backing image)
-func constructActiveChain(replicaName string, bdevLvolMap map[string]*spdktypes.BdevInfo) (res []*Lvol, err error) {
+// getRootLvolName relies on the lvol name to identify if a lvol belongs to the replica,
+// then figuring out whether it is the root by checking the parent
+func getRootLvolName(replicaName string, bdevLvolMap map[string]*spdktypes.BdevInfo) (rootLvolName string) {
+	for lvolName, bdevLvol := range bdevLvolMap {
+		if lvolName != replicaName && !IsReplicaSnapshotLvol(replicaName, lvolName) {
+			continue
+		}
+		// Consider that a backing image can be the parent of the replica root
+		if bdevLvol.DriverSpecific.Lvol.BaseSnapshot != "" && IsReplicaSnapshotLvol(replicaName, bdevLvol.DriverSpecific.Lvol.BaseSnapshot) {
+			continue
+		}
+		return lvolName
+	}
+
+	return ""
+}
+
+func constructSnapshotLvolMap(replicaName string, bdevLvolMap map[string]*spdktypes.BdevInfo) (res map[string]*Lvol, err error) {
+	rootLvolName := getRootLvolName(replicaName, bdevLvolMap)
+	if rootLvolName == "" {
+		return nil, fmt.Errorf("cannot find the root of the replica during snapshot lvol map construction")
+	}
+	res = map[string]*Lvol{}
+
+	queue := []*Lvol{BdevLvolInfoToServiceLvol(bdevLvolMap[rootLvolName])}
+	for ; len(queue) > 0; queue = queue[1:] {
+		curSvcLvol := queue[0]
+		if curSvcLvol == nil || curSvcLvol.Name == replicaName {
+			continue
+		}
+		if !IsReplicaSnapshotLvol(replicaName, curSvcLvol.Name) {
+			continue
+		}
+		res[curSvcLvol.Name] = curSvcLvol
+
+		if bdevLvolMap[curSvcLvol.Name].DriverSpecific.Lvol.Clones == nil {
+			continue
+		}
+		for _, childLvolName := range bdevLvolMap[curSvcLvol.Name].DriverSpecific.Lvol.Clones {
+			if bdevLvolMap[childLvolName] == nil {
+				return nil, fmt.Errorf("cannot find child lvol %v for lvol %v during the snapshot lvol map construction", childLvolName, curSvcLvol.Name)
+			}
+			curSvcLvol.Children[childLvolName] = BdevLvolInfoToServiceLvol(bdevLvolMap[childLvolName])
+			queue = append(queue, curSvcLvol.Children[childLvolName])
+		}
+	}
+
+	return res, nil
+}
+
+// constructActiveChainFromSnapshotLvolMap retrieves the chain bottom up (from the head to the ancestor snapshot/backing image).
+func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap map[string]*Lvol, bdevLvolMap map[string]*spdktypes.BdevInfo) (res []*Lvol, err error) {
 	newChain := []*Lvol{}
 
 	headBdevLvol := bdevLvolMap[replicaName]
@@ -415,64 +467,34 @@ func constructActiveChain(replicaName string, bdevLvolMap map[string]*spdktypes.
 		return nil, fmt.Errorf("found nil head bdev lvol for replica %s", replicaName)
 	}
 	headSvcLvol := BdevLvolInfoToServiceLvol(headBdevLvol)
+	newChain = append(newChain, headSvcLvol)
 	// TODO: Considering the clone, this function or `constructSnapshotMap` may need to construct the children map for the head
 
-	for childSvcLvol, curBdevLvol := headSvcLvol, bdevLvolMap[headBdevLvol.DriverSpecific.Lvol.BaseSnapshot]; curBdevLvol != nil; {
-		curSvcLvol := BdevLvolInfoToServiceLvol(curBdevLvol)
-		curSvcLvol.Children[childSvcLvol.Name] = childSvcLvol
-		childSvcLvol.Parent = curSvcLvol.Name
+	// Build the majority of the chain with `snapshotMap` so that it does not need to worry about the snap svc lvol children map maintenance.
+	for curSvcLvol := snapshotLvolMap[headSvcLvol.Parent]; curSvcLvol != nil; curSvcLvol = snapshotLvolMap[curSvcLvol.Parent] {
 		newChain = append(newChain, curSvcLvol)
-
-		childSvcLvol = curSvcLvol
-		curBdevLvol = bdevLvolMap[curBdevLvol.DriverSpecific.Lvol.BaseSnapshot]
 	}
 
-	// Check if the ancestor is a snapshot lvol. If YES, we need to append a nil as the backing image
-	if len(newChain) == 0 || IsReplicaSnapshotLvol(replicaName, newChain[len(newChain)-1].Name) {
-		newChain = append(newChain, nil)
+	// Check if the root snap/head lvol has a parent. If YES, it means that this replica contains a backing image
+	var biSvcLvol *Lvol
+	rootLvol := newChain[len(newChain)-1]
+	if rootLvol.Parent != "" {
+		// Here we won't maintain the complete children map for the backing image Lvol since it may contain root lvols of other replicas
+		biBdevLvol := bdevLvolMap[rootLvol.Parent]
+		if biBdevLvol == nil {
+			return nil, fmt.Errorf("cannot find backing image lvol %v for the current bdev lvol map for replica %s", rootLvol.Parent, replicaName)
+		}
+		biSvcLvol = BdevLvolInfoToServiceLvol(biBdevLvol)
+		biSvcLvol.Children[rootLvol.Name] = rootLvol
 	}
+	newChain = append(newChain, biSvcLvol)
 
-	// Need to flip r.ActiveSnapshotChain since the oldest should be the first entry
+	// Need to flip r.ActiveSnapshotChain. By convention the oldest one (backing image) should be at index 0
 	for head, tail := 0, len(newChain)-1; head < tail; head, tail = head+1, tail-1 {
 		newChain[head], newChain[tail] = newChain[tail], newChain[head]
 	}
-	newChain = append(newChain, headSvcLvol)
 
 	return newChain, nil
-}
-
-func constructSnapshotMap(replicaName string, rootSvcLvol *Lvol, bdevLvolMap map[string]*spdktypes.BdevInfo) (res map[string]*Lvol, err error) {
-	res = map[string]*Lvol{}
-
-	queue := []*Lvol{rootSvcLvol}
-	for ; len(queue) > 0; queue = queue[1:] {
-		curSvcLvol := queue[0]
-		if curSvcLvol == nil || curSvcLvol.Name == replicaName {
-			continue
-		}
-		snapshotName := GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, curSvcLvol.Name)
-		if snapshotName == "" {
-			continue
-		}
-		res[snapshotName] = curSvcLvol
-
-		if bdevLvolMap[curSvcLvol.Name].DriverSpecific.Lvol.Clones == nil {
-			continue
-		}
-		for _, childName := range bdevLvolMap[curSvcLvol.Name].DriverSpecific.Lvol.Clones {
-			if bdevLvolMap[childName] == nil {
-				return nil, fmt.Errorf("cannot find child lvol %v for lvol %v during the snapshot map construction", childName, curSvcLvol.Name)
-			}
-			tmpSvcLvol := curSvcLvol.Children[childName]
-			if tmpSvcLvol == nil {
-				tmpSvcLvol = BdevLvolInfoToServiceLvol(bdevLvolMap[childName])
-			}
-			curSvcLvol.Children[childName] = tmpSvcLvol
-			queue = append(queue, tmpSvcLvol)
-		}
-	}
-
-	return res, nil
 }
 
 func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, portCount int32, superiorPortAllocator *util.Bitmap) (ret *spdkrpc.Replica, err error) {
@@ -668,7 +690,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	}
 
 	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
-	if _, exists := r.SnapshotMap[snapshotName]; exists {
+	if _, exists := r.SnapshotLvolMap[snapLvolName]; exists {
 		return nil, fmt.Errorf("snapshot %s(%s) already exists in replica %s", snapshotName, snapLvolName, r.Name)
 	}
 
@@ -713,7 +735,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	r.ActiveChain[r.ChainLength-1] = snapSvcLvol
 	r.ActiveChain = append(r.ActiveChain, headSvcLvol)
 	r.ChainLength++
-	r.SnapshotMap[snapshotName] = snapSvcLvol
+	r.SnapshotLvolMap[snapLvolName] = snapSvcLvol
 	headSvcLvol.Parent = snapSvcLvol.Name
 	updateRequired = true
 
@@ -739,7 +761,7 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	}
 
 	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
-	snapSvcLvol := r.SnapshotMap[snapshotName]
+	snapSvcLvol := r.SnapshotLvolMap[snapLvolName]
 	if snapSvcLvol == nil {
 		return ServiceReplicaToProtoReplica(r), nil
 	}
@@ -766,7 +788,7 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	if _, err := spdkClient.BdevLvolDelete(snapSvcLvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return nil, err
 	}
-	r.removeLvolFromSnapshotMapWithoutLock(snapshotName)
+	r.removeLvolFromSnapshotLvolMapWithoutLock(snapLvolName)
 	r.removeLvolFromActiveChainWithoutLock(snapLvolName)
 
 	updateRequired = true
@@ -776,11 +798,11 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	return ServiceReplicaToProtoReplica(r), nil
 }
 
-func (r *Replica) removeLvolFromSnapshotMapWithoutLock(snapshotName string) {
+func (r *Replica) removeLvolFromSnapshotLvolMapWithoutLock(snapsLvolName string) {
 	var deletingSvcLvol, parentSvcLvol, childSvcLvol *Lvol
 
-	deletingSvcLvol = r.SnapshotMap[snapshotName]
-	parentSvcLvol = r.SnapshotMap[GetSnapshotNameFromReplicaSnapshotLvolName(r.Name, deletingSvcLvol.Parent)]
+	deletingSvcLvol = r.SnapshotLvolMap[snapsLvolName]
+	parentSvcLvol = r.SnapshotLvolMap[deletingSvcLvol.Parent]
 	if parentSvcLvol != nil {
 		delete(parentSvcLvol.Children, deletingSvcLvol.Name)
 	}
@@ -793,7 +815,7 @@ func (r *Replica) removeLvolFromSnapshotMapWithoutLock(snapshotName string) {
 		}
 	}
 
-	delete(r.SnapshotMap, snapshotName)
+	delete(r.SnapshotLvolMap, snapsLvolName)
 }
 
 func (r *Replica) removeLvolFromActiveChainWithoutLock(snapLvolName string) int {
@@ -837,7 +859,7 @@ func (r *Replica) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName str
 	}
 
 	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
-	snapSvcLvol := r.SnapshotMap[snapshotName]
+	snapSvcLvol := r.SnapshotLvolMap[snapLvolName]
 	if snapSvcLvol == nil {
 		return nil, fmt.Errorf("cannot revert to a non-existing snapshot %s(%s)", snapshotName, snapLvolName)
 	}
@@ -878,20 +900,18 @@ func (r *Replica) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName str
 		return nil, err
 	}
 
-	newChain, err := constructActiveChain(r.Name, bdevLvolMap)
+	newSnapshotLvolMap, err := constructSnapshotLvolMap(r.Name, bdevLvolMap)
 	if err != nil {
 		return nil, err
 	}
-
-	// Skip newChain[0], which is the backing image lvol and may be the ancestor of multiple replicas
-	newSnapshotMap, err := constructSnapshotMap(r.Name, newChain[1], bdevLvolMap)
+	newChain, err := constructActiveChainFromSnapshotLvolMap(r.Name, newSnapshotLvolMap, bdevLvolMap)
 	if err != nil {
 		return nil, err
 	}
 
 	r.ActiveChain = newChain
 	r.ChainLength = len(r.ActiveChain)
-	r.SnapshotMap = newSnapshotMap
+	r.SnapshotLvolMap = newSnapshotLvolMap
 
 	if r.IsExposed {
 		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
@@ -1011,7 +1031,8 @@ func (r *Replica) RebuildingSrcFinish(spdkClient *spdkclient.Client, dstReplicaN
 
 func (r *Replica) SnapshotShallowCopy(spdkClient *spdkclient.Client, snapshotName string) (err error) {
 	r.RLock()
-	srcSnapLvol := r.SnapshotMap[snapshotName]
+	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
+	srcSnapLvol := r.SnapshotLvolMap[snapLvolName]
 	dstBdevName := r.rebuildingDstBdevName
 	r.RUnlock()
 
@@ -1238,7 +1259,7 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 	snapSvcLvol := BdevLvolInfoToServiceLvol(&bdevLvolList[0])
 
 	// Do not update r.ActiveChain since we don't know which branch of the snapshot tree is the active one.
-	r.SnapshotMap[snapshotName] = snapSvcLvol
+	r.SnapshotLvolMap[snapLvolName] = snapSvcLvol
 	snapSvcLvol.Children[r.rebuildingLvol.Name] = r.rebuildingLvol
 	r.rebuildingLvol.Parent = snapSvcLvol.Name
 	updateRequired = true
