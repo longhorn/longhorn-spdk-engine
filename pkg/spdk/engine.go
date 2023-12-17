@@ -810,11 +810,11 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 		}
 
 		hasChildSnap := false
-		for childSnapLvolName := range rpcSrcReplica.Snapshots[currentSnapshotName].Children {
-			if childSnapLvolName == srcReplicaName {
+		for childSnapshotName := range rpcSrcReplica.Snapshots[currentSnapshotName].Children {
+			if childSnapshotName == srcReplicaName {
 				continue
 			}
-			stack = append(stack, GetSnapshotNameFromReplicaSnapshotLvolName(srcReplicaName, childSnapLvolName))
+			stack = append(stack, childSnapshotName)
 			hasChildSnap = true
 		}
 		if !hasChildSnap {
