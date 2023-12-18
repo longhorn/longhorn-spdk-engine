@@ -606,6 +606,8 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, por
 	}
 	r.State = types.InstanceStateRunning
 
+	r.log.Infof("Created replica")
+
 	return ServiceReplicaToProtoReplica(r), nil
 }
 
@@ -665,12 +667,24 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		return err
 	}
 	updateRequired = true
-	for snapshotName, snapSvcLvol := range r.SnapshotMap {
-		if _, err := spdkClient.BdevLvolDelete(snapSvcLvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+
+	// Retrieve the snapshot tree with BFS. Then do cleanup bottom up
+	var queue []*Lvol
+	if len(r.ActiveChain) > 1 {
+		queue = []*Lvol{r.ActiveChain[1]}
+	}
+	for idx := 0; idx < len(queue); idx++ {
+		for _, child := range queue[idx].Children {
+			queue = append(queue, child)
+		}
+	}
+	for idx := len(queue) - 1; idx >= 0; idx-- {
+		if _, err := spdkClient.BdevLvolDelete(queue[idx].UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return err
 		}
-		delete(r.SnapshotMap, snapshotName)
 	}
+
+	r.log.Infof("Deleted replica")
 
 	return nil
 }
