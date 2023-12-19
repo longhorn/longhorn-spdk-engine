@@ -395,20 +395,23 @@ func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error)
 	return api.NewEngineStream(stream), nil
 }
 
-func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) error {
-	if name == "" || snapshotName == "" {
-		return fmt.Errorf("failed to create SPDK engine snapshot: missing required parameter name or snapshot name")
+func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("failed to create SPDK engine snapshot: missing required parameter name")
 	}
 
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
 	defer cancel()
 
-	_, err := client.EngineSnapshotCreate(ctx, &spdkrpc.SnapshotRequest{
+	resp, err := client.EngineSnapshotCreate(ctx, &spdkrpc.SnapshotRequest{
 		Name:         name,
 		SnapshotName: snapshotName,
 	})
-	return errors.Wrapf(err, "failed to create SPDK engine %s snapshot %s", name, snapshotName)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to create SPDK engine %s snapshot %s", name, snapshotName)
+	}
+	return resp.SnapshotName, nil
 }
 
 func (c *SPDKClient) EngineSnapshotDelete(name, snapshotName string) error {

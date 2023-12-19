@@ -775,9 +775,9 @@ func (s *Server) EngineReplicaDelete(ctx context.Context, req *spdkrpc.EngineRep
 	return &emptypb.Empty{}, nil
 }
 
-func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Engine, err error) {
-	if req.Name == "" || req.SnapshotName == "" {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name and snapshot name are required")
+func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.SnapshotResponse, err error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name are required")
 	}
 
 	s.RLock()
@@ -788,7 +788,8 @@ func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.Snapshot
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot creation", req.Name)
 	}
 
-	return e.SnapshotCreate(req.SnapshotName)
+	snapshotName, err := e.SnapshotCreate(req.SnapshotName)
+	return &spdkrpc.SnapshotResponse{SnapshotName: snapshotName}, err
 }
 
 func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *emptypb.Empty, err error) {
@@ -804,7 +805,7 @@ func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.Snapshot
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot deletion", req.Name)
 	}
 
-	if _, err := e.SnapshotDelete(req.SnapshotName); err != nil {
+	if err := e.SnapshotDelete(req.SnapshotName); err != nil {
 		return nil, err
 	}
 
@@ -824,7 +825,7 @@ func (s *Server) EngineSnapshotRevert(ctx context.Context, req *spdkrpc.Snapshot
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot revert", req.Name)
 	}
 
-	if _, err := e.SnapshotRevert(req.SnapshotName); err != nil {
+	if err := e.SnapshotRevert(req.SnapshotName); err != nil {
 		return nil, err
 	}
 
