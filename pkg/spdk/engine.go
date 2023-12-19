@@ -10,6 +10,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
+	commonTypes "github.com/longhorn/go-common-libs/types"
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	"github.com/longhorn/go-spdk-helper/pkg/nvme"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
@@ -887,6 +888,28 @@ func (e *Engine) SnapshotRevert(snapshotName string) (res *spdkrpc.Engine, err e
 
 func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrpc.Engine, err error) {
 	updateRequired := false
+
+	if snapshotOp == SnapshotOperationCreate {
+		e.RLock()
+		devicePath := ""
+		if e.State == types.InstanceStateRunning && e.Frontend == types.FrontendSPDKTCPBlockdev {
+			devicePath = e.Endpoint
+		}
+		e.RUnlock()
+		if devicePath != "" {
+			ne, err := helperutil.NewExecutor(commonTypes.HostProcDirectory)
+			if err != nil {
+				e.log.WithError(err).Errorf("WARNING: failed to get the executor for snapshot op %v with snapshot %s, will skip the sync and continue", snapshotOp, inputSnapshotName)
+			} else {
+				e.log.Info("Requesting system sync before snapshot")
+				if _, err := ne.Execute("sync", []string{devicePath}, SyncTimeout); err != nil {
+					// sync should never fail though, so it more like due to the nsenter
+					e.log.WithError(err).Errorf("WARNING: failed to sync for snapshot op %v with snapshot %s, will skip the sync and continue", snapshotOp, snapshotName)
+				}
+
+			}
+		}
+	}
 
 	e.Lock()
 	defer func() {
