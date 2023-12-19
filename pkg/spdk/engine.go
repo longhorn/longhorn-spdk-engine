@@ -874,19 +874,21 @@ const (
 	SnapshotOperationRevert = "snapshot-revert"
 )
 
-func (e *Engine) SnapshotCreate(snapshotName string) (res *spdkrpc.Engine, err error) {
-	return e.snapshotOperation(snapshotName, SnapshotOperationCreate)
+func (e *Engine) SnapshotCreate(inputSnapshotName string) (snapshotName string, err error) {
+	return e.snapshotOperation(inputSnapshotName, SnapshotOperationCreate)
 }
 
-func (e *Engine) SnapshotDelete(snapshotName string) (res *spdkrpc.Engine, err error) {
-	return e.snapshotOperation(snapshotName, SnapshotOperationDelete)
+func (e *Engine) SnapshotDelete(snapshotName string) (err error) {
+	_, err = e.snapshotOperation(snapshotName, SnapshotOperationDelete)
+	return err
 }
 
-func (e *Engine) SnapshotRevert(snapshotName string) (res *spdkrpc.Engine, err error) {
-	return e.snapshotOperation(snapshotName, SnapshotOperationRevert)
+func (e *Engine) SnapshotRevert(snapshotName string) (err error) {
+	_, err = e.snapshotOperation(snapshotName, SnapshotOperationRevert)
+	return err
 }
 
-func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrpc.Engine, err error) {
+func (e *Engine) snapshotOperation(inputSnapshotName, snapshotOp string) (snapshotName string, err error) {
 	updateRequired := false
 
 	if snapshotOp == SnapshotOperationCreate {
@@ -904,7 +906,7 @@ func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrp
 				e.log.Info("Requesting system sync before snapshot")
 				if _, err := ne.Execute("sync", []string{devicePath}, SyncTimeout); err != nil {
 					// sync should never fail though, so it more like due to the nsenter
-					e.log.WithError(err).Errorf("WARNING: failed to sync for snapshot op %v with snapshot %s, will skip the sync and continue", snapshotOp, snapshotName)
+					e.log.WithError(err).Errorf("WARNING: failed to sync for snapshot op %v with snapshot %s, will skip the sync and continue", snapshotOp, inputSnapshotName)
 				}
 
 			}
@@ -922,16 +924,16 @@ func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrp
 
 	// Syncing with the SPDK TGT server only when the engine is running.
 	if e.State != types.InstanceStateRunning {
-		return nil, fmt.Errorf("invalid state %v for engine %s snapshot %s create", e.State, e.Name, snapshotName)
+		return "", fmt.Errorf("invalid state %v for engine %s snapshot %s create", e.State, e.Name, inputSnapshotName)
 	}
 
 	replicaClients, err := e.getReplicaClients()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	if err = e.snapshotOperationPreCheckWithoutLock(replicaClients, snapshotName, snapshotOp); err != nil {
-		return nil, err
+	if snapshotName, err = e.snapshotOperationPreCheckWithoutLock(replicaClients, inputSnapshotName, snapshotOp); err != nil {
+		return "", err
 	}
 
 	defer func() {
@@ -950,7 +952,7 @@ func (e *Engine) snapshotOperation(snapshotName, snapshotOp string) (res *spdkrp
 
 	e.log.Infof("Engine finished snapshot %s for %v", snapshotOp, snapshotName)
 
-	return e.getWithoutLock(), nil
+	return snapshotName, nil
 }
 
 func (e *Engine) getReplicaClients() (replicaClients map[string]*client.SPDKClient, err error) {
@@ -969,31 +971,40 @@ func (e *Engine) getReplicaClients() (replicaClients map[string]*client.SPDKClie
 	return replicaClients, nil
 }
 
-func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]*client.SPDKClient, snapshotName, snapshotOp string) (err error) {
+func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]*client.SPDKClient, snapshotName, snapshotOp string) (string, error) {
 	for replicaName := range replicaClients {
 		switch snapshotOp {
 		case SnapshotOperationCreate:
+			if snapshotName == "" {
+				snapshotName = util.UUID()[:8]
+			}
 		case SnapshotOperationDelete:
+			if snapshotName == "" {
+				return "", fmt.Errorf("empty snapshot name for engine %s snapshot deletion", e.Name)
+			}
 			if e.ReplicaModeMap[replicaName] == types.ModeWO {
-				return fmt.Errorf("engine %s contains WO replica %s during snapshot %s delete", e.Name, replicaName, snapshotName)
+				return "", fmt.Errorf("engine %s contains WO replica %s during snapshot %s delete", e.Name, replicaName, snapshotName)
 			}
 		case SnapshotOperationRevert:
+			if snapshotName == "" {
+				return "", fmt.Errorf("empty snapshot name for engine %s snapshot deletion", e.Name)
+			}
 			if e.ReplicaModeMap[replicaName] == types.ModeWO {
-				return fmt.Errorf("engine %s contains WO replica %s during snapshot %s revert", e.Name, replicaName, snapshotName)
+				return "", fmt.Errorf("engine %s contains WO replica %s during snapshot %s revert", e.Name, replicaName, snapshotName)
 			}
 			r, err := replicaClients[replicaName].ReplicaGet(replicaName)
 			if err != nil {
-				return err
+				return "", err
 			}
 			if r.Snapshots[snapshotName] == nil {
-				return fmt.Errorf("replica %s does not contain the reverting snapshot %s", replicaName, snapshotName)
+				return "", fmt.Errorf("replica %s does not contain the reverting snapshot %s", replicaName, snapshotName)
 			}
 		default:
-			return fmt.Errorf("unknown replica snapshot operation %s", snapshotOp)
+			return "", fmt.Errorf("unknown replica snapshot operation %s", snapshotOp)
 		}
 	}
 
-	return nil
+	return snapshotName, nil
 }
 
 func (e *Engine) snapshotOperationWithoutLock(replicaClients map[string]*client.SPDKClient, snapshotName, snapshotOp string) (updated bool) {
