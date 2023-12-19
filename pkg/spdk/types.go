@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
@@ -20,6 +21,8 @@ const (
 
 	ReplicaRebuildingLvolSuffix  = "rebuilding"
 	RebuildingSnapshotNamePrefix = "rebuild"
+
+	SyncTimeout = 60 * time.Minute
 )
 
 func GetReplicaSnapshotLvolNamePrefix(replicaName string) string {
