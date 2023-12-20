@@ -92,6 +92,8 @@ func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 		State:     string(r.State),
 		ErrorMsg:  r.ErrorMsg,
 	}
+
+	res.Head = ServiceLvolToProtoLvol(r.Name, r.ActiveChain[r.ChainLength-1])
 	// spdkrpc.Replica.Snapshots is map[<snapshot name>] rather than map[<snapshot lvol name>]
 	for lvolName, lvol := range r.SnapshotLvolMap {
 		res.Snapshots[GetSnapshotNameFromReplicaSnapshotLvolName(r.Name, lvolName)] = ServiceLvolToProtoLvol(r.Name, lvol)
@@ -102,17 +104,23 @@ func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 
 func ServiceLvolToProtoLvol(replicaName string, lvol *Lvol) *spdkrpc.Lvol {
 	res := &spdkrpc.Lvol{
-		Name:       GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, lvol.Name),
 		Uuid:       lvol.UUID,
 		SpecSize:   lvol.SpecSize,
 		ActualSize: lvol.ActualSize,
 		Parent:     GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, lvol.Parent),
 		Children:   map[string]bool{},
 	}
+
+	if lvol.Name == replicaName {
+		res.Name = types.VolumeHead
+	} else {
+		res.Name = GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, lvol.Name)
+	}
+
 	for childLvolName := range lvol.Children {
 		// spdkrpc.Lvol.Children is map[<snapshot name>] rather than map[<snapshot lvol name>]
 		if childLvolName == replicaName {
-			res.Children[replicaName] = true
+			res.Children[types.VolumeHead] = true
 		} else {
 			res.Children[GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, childLvolName)] = true
 		}

@@ -13,6 +13,7 @@ type Replica struct {
 	LvsUUID    string           `json:"lvs_uuid"`
 	SpecSize   uint64           `json:"spec_size"`
 	ActualSize uint64           `json:"actual_size"`
+	Head       *Lvol            `json:"head"`
 	Snapshots  map[string]*Lvol `json:"snapshots"`
 	IP         string           `json:"ip"`
 	PortStart  int32            `json:"port_start"`
@@ -47,6 +48,7 @@ func ProtoReplicaToReplica(r *spdkrpc.Replica) *Replica {
 		LvsUUID:    r.LvsUuid,
 		SpecSize:   r.SpecSize,
 		ActualSize: r.ActualSize,
+		Head:       ProtoLvolToLvol(r.Head),
 		Snapshots:  map[string]*Lvol{},
 		IP:         r.Ip,
 		PortStart:  r.PortStart,
