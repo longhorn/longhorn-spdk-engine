@@ -30,4 +30,6 @@ const (
 	InstanceTypeEngine  = InstanceType("engine")
 )
 
+const VolumeHead = "volume-head"
+
 const SPDKServicePort = 8504

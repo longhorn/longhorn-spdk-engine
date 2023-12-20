@@ -59,10 +59,11 @@ message Replica {
     string ip = 6;
     int32 port_start = 7;
     int32 port_end = 8;
-    map<string, Lvol> snapshots = 9;
-    bool rebuilding = 10;
-    string state = 11;
-    string error_msg = 12;
+    Lvol head = 9;
+    map<string, Lvol> snapshots = 10;
+    bool rebuilding = 11;
+    string state = 12;
+    string error_msg = 13;
 }
 
 message ReplicaCreateRequest {
