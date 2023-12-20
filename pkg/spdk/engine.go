@@ -769,7 +769,7 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 		if rpcSnapLvol.Parent == "" {
 			ancestorSnapshotName = snapshotName
 		}
-		if rpcSnapLvol.Children[srcReplicaName] {
+		if rpcSnapLvol.Children[types.VolumeHead] {
 			latestSnapshotName = snapshotName
 		}
 	}
@@ -811,7 +811,7 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 
 		hasChildSnap := false
 		for childSnapshotName := range rpcSrcReplica.Snapshots[currentSnapshotName].Children {
-			if childSnapshotName == srcReplicaName {
+			if childSnapshotName == types.VolumeHead {
 				continue
 			}
 			stack = append(stack, childSnapshotName)
