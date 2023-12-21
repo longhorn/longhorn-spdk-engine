@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/longhorn/go-spdk-helper/pkg/util"
+	commonNs "github.com/longhorn/go-common-libs/ns"
+
+	"github.com/longhorn/go-spdk-helper/pkg/types"
 )
 
 const (
@@ -60,11 +62,11 @@ type Path struct {
 	State     string `json:"State,omitempty"`
 }
 
-func cliVersion(executor util.Executor) (major, minor int, err error) {
+func cliVersion(executor *commonNs.Executor) (major, minor int, err error) {
 	opts := []string{
 		"--version",
 	}
-	outputStr, err := executor.Execute(nvmeBinary, opts)
+	outputStr, err := executor.Execute(nvmeBinary, opts, types.ExecuteTimeout)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -98,12 +100,12 @@ func cliVersion(executor util.Executor) (major, minor int, err error) {
 	return major, minor, nil
 }
 
-func showHostNQN(executor util.Executor) (string, error) {
+func showHostNQN(executor *commonNs.Executor) (string, error) {
 	opts := []string{
 		"--show-hostnqn",
 	}
 
-	outputStr, err := executor.Execute(nvmeBinary, opts)
+	outputStr, err := executor.Execute(nvmeBinary, opts, types.ExecuteTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -117,7 +119,7 @@ func showHostNQN(executor util.Executor) (string, error) {
 	return "", fmt.Errorf("failed to get host NQN from %s", outputStr)
 }
 
-func listSubsystems(devicePath string, executor util.Executor) ([]Subsystem, error) {
+func listSubsystems(devicePath string, executor *commonNs.Executor) ([]Subsystem, error) {
 	major, _, err := cliVersion(executor)
 	if err != nil {
 		return nil, err
@@ -132,7 +134,7 @@ func listSubsystems(devicePath string, executor util.Executor) ([]Subsystem, err
 		opts = append(opts, devicePath)
 	}
 
-	outputStr, err := executor.Execute(nvmeBinary, opts)
+	outputStr, err := executor.Execute(nvmeBinary, opts, types.ExecuteTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +149,7 @@ func listSubsystems(devicePath string, executor util.Executor) ([]Subsystem, err
 	return listSubsystemsV2(jsonStr, executor)
 }
 
-func listSubsystemsV1(jsonStr string, executor util.Executor) ([]Subsystem, error) {
+func listSubsystemsV1(jsonStr string, executor *commonNs.Executor) ([]Subsystem, error) {
 	output := map[string][]Subsystem{}
 	if err := json.Unmarshal([]byte(jsonStr), &output); err != nil {
 		return nil, err
@@ -162,7 +164,7 @@ type ListSubsystemsV2Output struct {
 	Subsystems []Subsystem `json:"Subsystems"`
 }
 
-func listSubsystemsV2(jsonStr string, executor util.Executor) ([]Subsystem, error) {
+func listSubsystemsV2(jsonStr string, executor *commonNs.Executor) ([]Subsystem, error) {
 	var output []ListSubsystemsV2Output
 	if err := json.Unmarshal([]byte(jsonStr), &output); err != nil {
 		return nil, err
@@ -190,12 +192,12 @@ type CliDevice struct {
 	SectorSize   int32  `json:"SectorSize,omitempty"`
 }
 
-func listControllers(executor util.Executor) ([]CliDevice, error) {
+func listControllers(executor *commonNs.Executor) ([]CliDevice, error) {
 	opts := []string{
 		"list",
 		"-o", "json",
 	}
-	outputStr, err := executor.Execute(nvmeBinary, opts)
+	outputStr, err := executor.Execute(nvmeBinary, opts, types.ExecuteTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +213,7 @@ func listControllers(executor util.Executor) ([]CliDevice, error) {
 	return output["Devices"], nil
 }
 
-func discovery(ip, port string, executor util.Executor) ([]DiscoveryPageEntry, error) {
+func discovery(ip, port string, executor *commonNs.Executor) ([]DiscoveryPageEntry, error) {
 	hostNQN, err := showHostNQN(executor)
 	if err != nil {
 		return nil, err
@@ -258,7 +260,7 @@ func discovery(ip, port string, executor util.Executor) ([]DiscoveryPageEntry, e
 	//	  }
 
 	// nvme discover does not respect the -s option, so we need to filter the output
-	outputStr, err := executor.Execute(nvmeBinary, opts)
+	outputStr, err := executor.Execute(nvmeBinary, opts, types.ExecuteTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -280,27 +282,36 @@ func discovery(ip, port string, executor util.Executor) ([]DiscoveryPageEntry, e
 	return output.Entries, nil
 }
 
-func connect(ip, port, nqn string, executor util.Executor) (string, error) {
-	hostNQN, err := showHostNQN(executor)
-	if err != nil {
-		return "", err
-	}
+func connect(hostNQN, nqn, transpotType, ip, port string, executor *commonNs.Executor) (string, error) {
+	var err error
 
 	opts := []string{
 		"connect",
-		"-q", hostNQN,
-		"-t", DefaultTransportType,
-		"-a", ip,
-		"-s", port,
+		"-t", transpotType,
 		"--nqn", nqn,
 		"-o", "json",
+	}
+
+	if hostNQN == "" {
+		hostNQN, err = showHostNQN(executor)
+		if err != nil {
+			return "", err
+		}
+	}
+	opts = append(opts, "-q", hostNQN)
+
+	if ip != "" {
+		opts = append(opts, "-a", ip)
+	}
+	if port != "" {
+		opts = append(opts, "-s", port)
 	}
 
 	// The output example:
 	// {
 	//  "device" : "nvme0"
 	// }
-	outputStr, err := executor.Execute(nvmeBinary, opts)
+	outputStr, err := executor.Execute(nvmeBinary, opts, types.ExecuteTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -318,7 +329,7 @@ func connect(ip, port, nqn string, executor util.Executor) (string, error) {
 	return output["device"], nil
 }
 
-func disconnect(nqn string, executor util.Executor) error {
+func disconnect(nqn string, executor *commonNs.Executor) error {
 	opts := []string{
 		"disconnect",
 		"--nqn", nqn,
@@ -328,7 +339,7 @@ func disconnect(nqn string, executor util.Executor) error {
 	// NQN:nqn.2023-01.io.spdk:raid01 disconnected 1 controller(s)
 	//
 	// And trying to disconnect a non-existing target would return exit code 0
-	_, err := executor.Execute(nvmeBinary, opts)
+	_, err := executor.Execute(nvmeBinary, opts, types.ExecuteTimeout)
 	return err
 }
 
