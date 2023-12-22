@@ -744,7 +744,7 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s with address %s add", req.EngineName, req.ReplicaName, req.ReplicaAddress)
 	}
 
-	if err := e.ReplicaAddStart(req.ReplicaName, req.ReplicaAddress); err != nil {
+	if err := e.ReplicaAddStart(spdkClient, req.ReplicaName, req.ReplicaAddress); err != nil {
 		return nil, err
 	}
 
@@ -784,13 +784,14 @@ func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.Snapshot
 
 	s.RLock()
 	e := s.engineMap[req.Name]
+	spdkClient := s.spdkClient
 	s.RUnlock()
 
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot creation", req.Name)
 	}
 
-	snapshotName, err := e.SnapshotCreate(req.SnapshotName)
+	snapshotName, err := e.SnapshotCreate(spdkClient, req.SnapshotName)
 	return &spdkrpc.SnapshotResponse{SnapshotName: snapshotName}, err
 }
 
@@ -801,13 +802,14 @@ func (s *Server) EngineSnapshotDelete(ctx context.Context, req *spdkrpc.Snapshot
 
 	s.RLock()
 	e := s.engineMap[req.Name]
+	spdkClient := s.spdkClient
 	s.RUnlock()
 
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot deletion", req.Name)
 	}
 
-	if err := e.SnapshotDelete(req.SnapshotName); err != nil {
+	if err := e.SnapshotDelete(spdkClient, req.SnapshotName); err != nil {
 		return nil, err
 	}
 
@@ -821,13 +823,14 @@ func (s *Server) EngineSnapshotRevert(ctx context.Context, req *spdkrpc.Snapshot
 
 	s.RLock()
 	e := s.engineMap[req.Name]
+	spdkClient := s.spdkClient
 	s.RUnlock()
 
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot revert", req.Name)
 	}
 
-	if err := e.SnapshotRevert(req.SnapshotName); err != nil {
+	if err := e.SnapshotRevert(spdkClient, req.SnapshotName); err != nil {
 		return nil, err
 	}
 
