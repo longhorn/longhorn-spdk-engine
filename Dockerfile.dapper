@@ -10,7 +10,7 @@ ENV PROTOBUF_VER_PY=4.24.3
 # Setup environment
 ENV PATH /go/bin:$PATH
 ENV DAPPER_DOCKER_SOCKET true
-ENV DAPPER_ENV TAG REPO DRONE_REPO DRONE_PULL_REQUEST
+ENV DAPPER_ENV TAG REPO DRONE_REPO DRONE_PULL_REQUEST DRONE_COMMIT_REF
 ENV DAPPER_OUTPUT bin coverage.out
 ENV DAPPER_RUN_ARGS --privileged --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.venv:exec --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.tox:exec -v /dev:/host/dev -v /proc:/host/proc -v /sys:/host/sys -v /tmp:/tmp
 ENV DAPPER_SOURCE /go/src/github.com/longhorn/longhorn-spdk-engine
