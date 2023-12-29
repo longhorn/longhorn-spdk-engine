@@ -1035,7 +1035,7 @@ func (r *Replica) RebuildingSrcStart(spdkClient *spdkclient.Client, localReplica
 		return fmt.Errorf("replica %s is being rebuilding hence it cannot be the source of rebuilding replica %s", r.Name, dstReplicaName)
 	}
 
-	dstRebuildingLvolIP, dstRebuildingLvolPort, err := net.SplitHostPort(dstRebuildingLvolAddress)
+	dstRebuildingLvolIP, _, err := net.SplitHostPort(dstRebuildingLvolAddress)
 	if err != nil {
 		return err
 	}
@@ -1050,16 +1050,11 @@ func (r *Replica) RebuildingSrcStart(spdkClient *spdkclient.Client, localReplica
 		r.rebuildingDstBdevName = spdktypes.GetLvolAlias(dstReplicaLvsName, dstRebuildingLvolName)
 		r.rebuildingDstBdevType = spdktypes.BdevTypeLvol
 	} else {
-		nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(dstRebuildingLvolName, helpertypes.GetNQN(dstRebuildingLvolName), dstRebuildingLvolIP, dstRebuildingLvolPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4,
-			helpertypes.DefaultCtrlrLossTimeoutSec, helpertypes.DefaultReconnectDelaySec, helpertypes.DefaultFastIOFailTimeoutSec)
-		if err != nil {
+		r.rebuildingDstBdevType = spdktypes.BdevTypeNvme
+		if err = r.RebuildingSrcAttach(spdkClient, dstReplicaName, dstRebuildingLvolAddress); err != nil {
+			r.rebuildingDstBdevType = ""
 			return err
 		}
-		if len(nvmeBdevNameList) != 1 {
-			return fmt.Errorf("got zero or multiple results when attaching rebuilding dst lvol %s with address %s as a NVMe bdev: %+v", dstRebuildingLvolName, dstRebuildingLvolAddress, nvmeBdevNameList)
-		}
-		r.rebuildingDstBdevName = nvmeBdevNameList[0]
-		r.rebuildingDstBdevType = spdktypes.BdevTypeNvme
 	}
 	r.rebuildingDstReplicaName = dstReplicaName
 	updateRequired = true
@@ -1096,13 +1091,8 @@ func (r *Replica) RebuildingSrcFinish(spdkClient *spdkclient.Client, dstReplicaN
 			r.log.Errorf("Found mismatching between the required dst bdev lvol name %d and the expected dst lvol name %d for replica %s rebuilding src finish, will do nothing but just clean up rebuilding dst info", dstRebuildingLvolName, lvolName, r.Name)
 		}
 	case spdktypes.BdevTypeNvme:
-		controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(r.rebuildingDstBdevName)
-		if dstRebuildingLvolName != controllerName {
-			r.log.Errorf("Found mismatching between the required dst bdev nvme controller name %d and the expected dst controller name %d for replica %s rebuilding src finish, will do nothing but just clean up rebuilding dst info", dstRebuildingLvolName, controllerName, r.Name)
-			break
-		}
-		if _, err := spdkClient.BdevNvmeDetachController(helperutil.GetNvmeControllerNameFromNamespaceName(r.rebuildingDstBdevName)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-			return err
+		if err = r.RebuildingSrcDetach(spdkClient, dstReplicaName); err != nil {
+			r.log.WithError(err).Errorf("Failed to unexpose rebuilding dst dev %s for dst replica %s, will do nothing but just clean up rebuilding dst info", r.rebuildingDstBdevName, r.rebuildingDstReplicaName)
 		}
 	default:
 		r.log.Errorf("Found unknown rebuilding dst bdev type %s with name %s for replica %s rebuilding src finish, will do nothing but just clean up rebuilding dst info", r.rebuildingDstBdevType, r.rebuildingDstBdevName, r.Name)
@@ -1114,6 +1104,66 @@ func (r *Replica) RebuildingSrcFinish(spdkClient *spdkclient.Client, dstReplicaN
 	updateRequired = true
 
 	return nil
+}
+
+func (r *Replica) RebuildingSrcAttach(spdkClient *spdkclient.Client, dstReplicaName, dstRebuildingLvolAddress string) (err error) {
+	if r.rebuildingDstBdevType != spdktypes.BdevTypeNvme {
+		return nil
+	}
+
+	// TODO: After launching online rebuilding, the destination lvol name would be GetReplicaRebuildingLvolName(dstReplicaName)
+	dstRebuildingLvolName := dstReplicaName
+	if r.rebuildingDstBdevName != "" {
+		controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(r.rebuildingDstBdevName)
+		if dstRebuildingLvolName != controllerName {
+			return fmt.Errorf("found mismatching between the required dst bdev nvme controller name %s and the expected dst controller name %s for replica %s rebuilding src unexpose", dstRebuildingLvolName, controllerName, r.Name)
+		}
+		return nil
+	}
+
+	dstRebuildingLvolIP, dstRebuildingLvolPort, err := net.SplitHostPort(dstRebuildingLvolAddress)
+	if err != nil {
+		return err
+	}
+	if dstRebuildingLvolIP == r.IP {
+		return fmt.Errorf("cannot attach the rebuilding dst when its IP is the same as the current src replica IP")
+	}
+
+	nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(dstRebuildingLvolName, helpertypes.GetNQN(dstRebuildingLvolName),
+		dstRebuildingLvolIP, dstRebuildingLvolPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4,
+		helpertypes.DefaultCtrlrLossTimeoutSec, helpertypes.DefaultReconnectDelaySec, helpertypes.DefaultFastIOFailTimeoutSec)
+	if err != nil {
+		return err
+	}
+	if len(nvmeBdevNameList) != 1 {
+		return fmt.Errorf("got zero or multiple results when attaching rebuilding dst lvol %s with address %s as a NVMe bdev: %+v", dstRebuildingLvolName, dstRebuildingLvolAddress, nvmeBdevNameList)
+	}
+	r.rebuildingDstBdevName = nvmeBdevNameList[0]
+
+	return nil
+}
+
+func (r *Replica) RebuildingSrcDetach(spdkClient *spdkclient.Client, dstReplicaName string) (err error) {
+	if r.rebuildingDstBdevType != spdktypes.BdevTypeNvme {
+		return nil
+	}
+	if r.rebuildingDstBdevName == "" {
+		return nil
+	}
+
+	// TODO: After launching online rebuilding, the destination lvol name would be GetReplicaRebuildingLvolName(dstReplicaName)
+	dstRebuildingLvolName := dstReplicaName
+	controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(r.rebuildingDstBdevName)
+	if dstRebuildingLvolName != controllerName {
+		return fmt.Errorf("found mismatching between the required dst bdev nvme controller name %s and the expected dst controller name %s for replica %s rebuilding src unexpose", dstRebuildingLvolName, controllerName, r.Name)
+	}
+
+	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return err
+	}
+	r.rebuildingDstBdevName = ""
+
+	return err
 }
 
 func (r *Replica) SnapshotShallowCopy(spdkClient *spdkclient.Client, snapshotName string) (err error) {
@@ -1358,6 +1408,86 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 	snapSvcLvol.Children[r.rebuildingLvol.Name] = r.rebuildingLvol
 	r.rebuildingLvol.Parent = snapSvcLvol.Name
 	updateRequired = true
+
+	return nil
+}
+
+func (r *Replica) RebuildingDstSnapshotRevert(spdkClient *spdkclient.Client, snapshotName string) (err error) {
+	updateRequired := false
+
+	r.Lock()
+	defer func() {
+		r.Unlock()
+
+		if updateRequired {
+			r.UpdateCh <- nil
+		}
+	}()
+
+	if r.State != types.InstanceStateRunning {
+		return fmt.Errorf("invalid state %v for replica %s rebuilding snapshot %s creation", r.State, r.Name, snapshotName)
+	}
+	if !r.isRebuilding {
+		return fmt.Errorf("replica %s is not in rebuilding", r.Name)
+	}
+	if r.rebuildingLvol == nil || (r.IsExposed && r.rebuildingPort == 0) {
+		return fmt.Errorf("rebuilding lvol is not existed, or exposed without rebuilding port for replica %s rebuilding snapshot %s creation", r.Name, snapshotName)
+	}
+
+	defer func() {
+		if err != nil {
+			if r.State != types.InstanceStateError {
+				r.State = types.InstanceStateError
+				updateRequired = true
+			}
+			r.ErrorMsg = err.Error()
+		} else {
+			if r.State != types.InstanceStateError {
+				r.ErrorMsg = ""
+			}
+		}
+	}()
+
+	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
+	snapLvolAlias := spdktypes.GetLvolAlias(r.LvsName, snapLvolName)
+
+	if r.IsExposed {
+		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.rebuildingLvol.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return err
+		}
+	}
+	if _, err := spdkClient.BdevLvolDelete(r.rebuildingLvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return err
+	}
+
+	rebuildingLvolUUID, err := spdkClient.BdevLvolClone(snapLvolAlias, r.rebuildingLvol.Name)
+	if err != nil {
+		return err
+	}
+
+	bdevLvolMap, err := GetBdevLvolMap(spdkClient)
+	if err != nil {
+		return err
+	}
+	newSnapshotLvolMap, err := constructSnapshotLvolMap(r.Name, bdevLvolMap)
+	if err != nil {
+		return err
+	}
+	r.SnapshotLvolMap = newSnapshotLvolMap
+	r.rebuildingLvol = r.SnapshotLvolMap[snapLvolName].Children[r.rebuildingLvol.Name]
+	if r.rebuildingLvol.UUID != rebuildingLvolUUID {
+		return fmt.Errorf("new rebuilding lvol %v UUID %v does not match the list result %v after snapshot %v revert", r.rebuildingLvol.Name, rebuildingLvolUUID, r.rebuildingLvol.UUID, snapshotName)
+	}
+
+	if r.IsExposed {
+		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.rebuildingLvol.Name), r.rebuildingLvol.UUID, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
+			return err
+		}
+	}
+
+	updateRequired = true
+
+	r.log.Infof("Rebuilding destination replica reverted snapshot %s(%s)", snapshotName, snapLvolAlias)
 
 	return nil
 }
