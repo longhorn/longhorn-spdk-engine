@@ -129,3 +129,9 @@ func GetNvmfSubsystemMap(cli *spdkclient.Client) (map[string]*spdktypes.NvmfSubs
 
 	return subsystemMap, nil
 }
+
+type BackupCreateInfo struct {
+	BackupName     string
+	IsIncremental  bool
+	ReplicaAddress string
+}
