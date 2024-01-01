@@ -17,6 +17,7 @@ import (
 	"github.com/longhorn/backupstore"
 	btypes "github.com/longhorn/backupstore/types"
 	butil "github.com/longhorn/backupstore/util"
+	commonNet "github.com/longhorn/go-common-libs/net"
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
@@ -609,7 +610,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, por
 		r.State = types.InstanceStateStopped
 	}
 
-	podIP, err := util.GetIPForPod()
+	podIP, err := commonNet.GetIPForPod()
 	if err != nil {
 		return nil, err
 	}

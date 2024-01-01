@@ -12,6 +12,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	commonNet "github.com/longhorn/go-common-libs/net"
 	commonTypes "github.com/longhorn/go-common-libs/types"
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	"github.com/longhorn/go-spdk-helper/pkg/nvme"
@@ -115,7 +116,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 
 	e.ErrorMsg = ""
 
-	podIP, err := util.GetIPForPod()
+	podIP, err := commonNet.GetIPForPod()
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +412,7 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 
 	e.ErrorMsg = ""
 
-	podIP, err := util.GetIPForPod()
+	podIP, err := commonNet.GetIPForPod()
 	if err != nil {
 		return err
 	}

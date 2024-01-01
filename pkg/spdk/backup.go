@@ -13,6 +13,7 @@ import (
 
 	"github.com/longhorn/backupstore"
 	btypes "github.com/longhorn/backupstore/types"
+	commonNet "github.com/longhorn/go-common-libs/net"
 	commonNs "github.com/longhorn/go-common-libs/ns"
 	commonTypes "github.com/longhorn/go-common-libs/types"
 	"github.com/longhorn/go-spdk-helper/pkg/nvme"
@@ -71,7 +72,7 @@ func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotNa
 
 	log.Info("Initializing backup")
 
-	podIP, err := util.GetIPForPod()
+	podIP, err := commonNet.GetIPForPod()
 	if err != nil {
 		return nil, err
 	}
