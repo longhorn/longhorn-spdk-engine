@@ -7,21 +7,29 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/longhorn/backupstore"
+	btypes "github.com/longhorn/backupstore/types"
+	butil "github.com/longhorn/backupstore/util"
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
-
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
+
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
+)
+
+const (
+	restorePeriodicRefreshInterval = 2 * time.Second
 )
 
 type Replica struct {
@@ -49,7 +57,8 @@ type Replica struct {
 	State    types.InstanceState
 	ErrorMsg string
 
-	IsExposed bool
+	IsExposeRequired bool
+	IsExposed        bool
 
 	isRebuilding   bool
 	rebuildingLvol *Lvol
@@ -58,6 +67,9 @@ type Replica struct {
 	rebuildingDstReplicaName string
 	rebuildingDstBdevName    string
 	rebuildingDstBdevType    spdktypes.BdevType
+
+	isRestoring bool
+	restore     *Restore
 
 	portAllocator *util.Bitmap
 	// UpdateCh should not be protected by the replica lock
@@ -76,7 +88,8 @@ type Lvol struct {
 	ActualSize uint64
 	Parent     string
 	// Children is map[<snapshot lvol name>] rather than map[<snapshot name>]. <snapshot lvol name> consists of `<replica name>-snap-<snapshot name>`
-	Children map[string]*Lvol
+	Children     map[string]*Lvol
+	CreationTime string
 }
 
 func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
@@ -104,11 +117,12 @@ func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 
 func ServiceLvolToProtoLvol(replicaName string, lvol *Lvol) *spdkrpc.Lvol {
 	res := &spdkrpc.Lvol{
-		Uuid:       lvol.UUID,
-		SpecSize:   lvol.SpecSize,
-		ActualSize: lvol.ActualSize,
-		Parent:     GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, lvol.Parent),
-		Children:   map[string]bool{},
+		Uuid:         lvol.UUID,
+		SpecSize:     lvol.SpecSize,
+		ActualSize:   lvol.ActualSize,
+		Parent:       GetSnapshotNameFromReplicaSnapshotLvolName(replicaName, lvol.Parent),
+		Children:     map[string]bool{},
+		CreationTime: lvol.CreationTime,
 	}
 
 	if lvol.Name == replicaName {
@@ -137,7 +151,8 @@ func BdevLvolInfoToServiceLvol(bdev *spdktypes.BdevInfo) *Lvol {
 		SpecSize: bdev.NumBlocks * uint64(bdev.BlockSize),
 		Parent:   bdev.DriverSpecific.Lvol.BaseSnapshot,
 		// Need to update this separately
-		Children: map[string]*Lvol{},
+		Children:     map[string]*Lvol{},
+		CreationTime: bdev.CreationTime,
 	}
 }
 
@@ -174,6 +189,8 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 		LvsUUID:         lvsUUID,
 		SpecSize:        roundedSpecSize,
 		State:           types.InstanceStatePending,
+
+		restore: &Restore{},
 
 		UpdateCh: updateCh,
 
@@ -256,7 +273,7 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 		if err != nil {
 			if r.State != types.InstanceStateError {
 				r.State = types.InstanceStateError
-				r.log.Errorf("Found error during validation and update: %v", err)
+				r.log.WithError(err).Error("Found error during validation and update")
 			}
 			r.ErrorMsg = err.Error()
 		}
@@ -295,9 +312,11 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 	if err != nil {
 		return err
 	}
+
 	if len(r.ActiveChain) != len(newChain) {
 		return fmt.Errorf("replica current active chain length %d is not the same as the latest chain length %d", len(r.ActiveChain), len(newChain))
 	}
+
 	for idx, svcLvol := range r.ActiveChain {
 		newSvcLvol := newChain[idx]
 		// Handle nil backing image separately
@@ -332,6 +351,11 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 	}
 
 	// In case of a stopped replica being wrongly exposed, this function will check the exposing state anyway.
+	if r.isRestoring {
+		r.log.Info("Replica is being restored, skip the exposing state check")
+		return nil
+	}
+
 	nqn := helpertypes.GetNQN(r.Name)
 	exposedPort, exposedPortErr := getExposedPort(subsystemMap[nqn])
 	if r.IsExposed {
@@ -570,7 +594,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, por
 			return nil, fmt.Errorf("found mismatching between the actual lvstore name %s with UUID %s and the recorded lvstore name %s with UUID %s during replica %s creation", lvsList[0].Name, lvsList[0].UUID, r.LvsName, r.LvsUUID, r.Name)
 		}
 
-		r.log.Infof("Creating a lvol bdev for the new replica")
+		r.log.Info("Creating a lvol bdev for the new replica")
 		if _, err := spdkClient.BdevLvolCreate("", r.LvsUUID, r.Name, util.BytesToMiB(r.SpecSize), "", true); err != nil {
 			return nil, err
 		}
@@ -602,11 +626,12 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, por
 		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), headSvcLvol.UUID, podIP, strconv.Itoa(int(r.PortStart))); err != nil {
 			return nil, err
 		}
+		r.IsExposeRequired = true
 		r.IsExposed = true
 	}
 	r.State = types.InstanceStateRunning
 
-	r.log.Infof("Created replica")
+	r.log.Info("Created replica")
 
 	return ServiceReplicaToProtoReplica(r), nil
 }
@@ -646,7 +671,14 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 	// 	return err
 	// }
 
+	if r.isRestoring {
+		r.log.Info("Canceling volume restoration before replica deletion")
+		r.restore.Stop()
+		return fmt.Errorf("waiting for volume restoration to stop")
+	}
+
 	if r.IsExposed {
+		r.log.Info("Unexposing lvol bdev for replica deletion")
 		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return err
 		}
@@ -675,6 +707,7 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 	if _, err := spdkClient.BdevLvolDelete(r.Alias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return err
 	}
+
 	updateRequired = true
 
 	// Retrieve the snapshot tree with BFS. Then do cleanup bottom up
@@ -693,7 +726,7 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		}
 	}
 
-	r.log.Infof("Deleted replica")
+	r.log.Info("Deleted replica")
 
 	return nil
 }
@@ -754,6 +787,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	if len(bdevLvolList) != 1 {
 		return nil, fmt.Errorf("zero or multiple snap lvols with UUID %s found after lvol snapshot", snapUUID)
 	}
+
 	snapSvcLvol := BdevLvolInfoToServiceLvol(&bdevLvolList[0])
 	snapSvcLvol.Children[headSvcLvol.Name] = headSvcLvol
 
@@ -1147,6 +1181,7 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, exposeRequir
 			if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.rebuildingLvol.Name), r.rebuildingLvol.UUID, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
 				return "", err
 			}
+			r.IsExposeRequired = true
 			r.IsExposed = true
 		}
 		r.rebuildingPort = r.PortStart
@@ -1200,6 +1235,7 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client, unexposeReq
 		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.rebuildingLvol.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return err
 		}
+		r.IsExposeRequired = false
 		r.IsExposed = false
 	}
 	r.rebuildingPort = 0
@@ -1294,6 +1330,197 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 	snapSvcLvol.Children[r.rebuildingLvol.Name] = r.rebuildingLvol
 	r.rebuildingLvol.Parent = snapSvcLvol.Name
 	updateRequired = true
+
+	return nil
+}
+
+func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapshotName string, credential map[string]string, concurrentLimit int32) (err error) {
+	r.Lock()
+	defer r.Unlock()
+
+	defer func() {
+		if err == nil {
+			r.isRestoring = true
+		}
+	}()
+
+	if r.isRestoring {
+		return fmt.Errorf("cannot initiate backup restore as there is one already in progress")
+	}
+
+	backupType, err := butil.CheckBackupType(backupUrl)
+	if err != nil {
+		err = errors.Wrapf(err, "failed to check the type for restoring backup %v", backupUrl)
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, err.Error())
+	}
+
+	err = butil.SetupCredential(backupType, credential)
+	if err != nil {
+		err = errors.Wrapf(err, "failed to setup credential for restoring backup %v", backupUrl)
+		return grpcstatus.Errorf(grpccodes.Internal, err.Error())
+	}
+
+	backupName, _, _, err := backupstore.DecodeBackupURL(util.UnescapeURL(backupUrl))
+	if err != nil {
+		err = errors.Wrapf(err, "failed to decode backup url %v", backupUrl)
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, err.Error())
+	}
+
+	if r.restore == nil {
+		return grpcstatus.Errorf(grpccodes.NotFound, "restoration for backup %v is not initialized", backupUrl)
+	}
+
+	restore := r.restore.DeepCopy()
+	if restore.State == btypes.ProgressStateError {
+		return fmt.Errorf("cannot start restoring backup %v of the previous failed restoration", backupUrl)
+	}
+
+	if restore.LastRestored == backupName {
+		return grpcstatus.Errorf(grpccodes.AlreadyExists, "already restored backup %v", backupName)
+	}
+
+	// Initialize `r.restore`
+	// First restore request. It must be a normal full restore.
+	if restore.LastRestored == "" && restore.State == "" {
+		r.log.Infof("Starting a new restore for backup %v", backupUrl)
+		lvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
+		r.restore, err = NewRestore(spdkClient, lvolName, backupUrl, backupName, r)
+		if err != nil {
+			err = errors.Wrapf(err, "failed to start new restore")
+			return grpcstatus.Errorf(grpccodes.Internal, err.Error())
+		}
+	} else {
+		var lvolName string
+
+		validLastRestoredBackup := r.canDoIncrementalRestore(restore, backupUrl, backupName)
+		if validLastRestoredBackup {
+			lvolName = GetReplicaSnapshotLvolName(r.Name, restore.LastRestored)
+		} else {
+			lvolName = GetReplicaSnapshotLvolName(r.Name, snapshotName)
+		}
+		r.restore.StartNewRestore(backupUrl, backupName, lvolName, validLastRestoredBackup)
+	}
+
+	// Initiate restore
+	newRestore := r.restore.DeepCopy()
+	defer func() {
+		if err != nil {
+			// TODO: Support snapshot revert
+		}
+	}()
+
+	if newRestore.LastRestored == "" {
+		r.log.Infof("Starting a new full restore for backup %v", backupUrl)
+		if err := BackupRestore(backupUrl, newRestore.LvolName, concurrentLimit, r.restore); err != nil {
+			return errors.Wrapf(err, "failed to start full backup restore")
+		}
+		r.log.Infof("Successfully initiated full restore for %v to %v", backupUrl, newRestore.LvolName)
+	} else {
+		return fmt.Errorf("incremental restore is not supported yet")
+	}
+
+	go r.completeBackupRestore(spdkClient)
+
+	return nil
+
+}
+
+func (r *Replica) canDoIncrementalRestore(restore *Restore, backupURL, requestedBackupName string) bool {
+	if restore.LastRestored == "" {
+		logrus.Warnf("There is a restore record in the server but last restored backup is empty with restore state is %v, will do full restore instead", restore.State)
+		return false
+	}
+	if _, err := backupstore.InspectBackup(strings.Replace(backupURL, requestedBackupName, restore.LastRestored, 1)); err != nil {
+		logrus.WithError(err).Warnf("The last restored backup %v becomes invalid for incremental restore, will do full restore instead", restore.LastRestored)
+		return false
+	}
+	return true
+}
+
+func (r *Replica) completeBackupRestore(spdkClient *spdkclient.Client) (err error) {
+	defer func() {
+		if extraErr := r.finishRestore(err); extraErr != nil {
+			r.log.WithError(extraErr).Error("Failed to finish backup restore")
+		}
+	}()
+
+	if err := r.waitForRestoreComplete(); err != nil {
+		return errors.Wrapf(err, "failed to wait for restore complete")
+	}
+
+	r.RLock()
+	restore := r.restore.DeepCopy()
+	r.RUnlock()
+
+	// TODO: Support postIncrementalRestoreOperations
+
+	return r.postFullRestoreOperations(spdkClient, restore)
+}
+
+func (r *Replica) waitForRestoreComplete() error {
+	periodicChecker := time.NewTicker(time.Duration(restorePeriodicRefreshInterval.Seconds()) * time.Second)
+
+	for range periodicChecker.C {
+		r.restore.RLock()
+		restoreProgress := r.restore.Progress
+		restoreError := r.restore.Error
+		r.restore.RUnlock()
+
+		if restoreProgress == 100 {
+			r.log.Info("Backup data restore completed successfully")
+			periodicChecker.Stop()
+			return nil
+		}
+		if restoreError != "" {
+			err := fmt.Errorf("%v", restoreError)
+			r.log.WithError(err).Errorf("Found backup restore error")
+			periodicChecker.Stop()
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Replica) postFullRestoreOperations(spdkClient *spdkclient.Client, restore *Restore) error {
+	r.log.Infof("Taking snapshot %v of the restored volume", restore.LvolName)
+
+	_, err := r.SnapshotCreate(spdkClient, restore.LvolName)
+	if err != nil {
+		r.log.WithError(err).Error("Failed to take snapshot of the restored volume")
+		return errors.Wrapf(err, "failed to take snapshot of the restored volume")
+	}
+
+	r.log.Infof("Done running full restore %v to %v", restore.BackupURL, restore.LvolName)
+	return nil
+}
+
+func (r *Replica) finishRestore(restoreErr error) error {
+	r.Lock()
+	defer r.Unlock()
+
+	defer func() {
+		if r.restore == nil {
+			return
+		}
+		if restoreErr != nil {
+			r.restore.UpdateRestoreStatus(r.restore.LvolName, 0, restoreErr)
+			return
+		}
+		r.restore.FinishRestore()
+	}()
+
+	if !r.isRestoring {
+		err := fmt.Errorf("BUG: volume is not restoring")
+		if restoreErr != nil {
+			restoreErr = util.CombineErrors(err, restoreErr)
+		} else {
+			restoreErr = err
+		}
+		return err
+	}
+
+	r.log.Infof("Finishing restore for %v", r.restore.BackupURL)
+	r.isRestoring = false
 
 	return nil
 }
