@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
+	commonNet "github.com/longhorn/go-common-libs/net"
 	commonTypes "github.com/longhorn/go-common-libs/types"
 	helperclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	"github.com/longhorn/go-spdk-helper/pkg/spdk/target"
@@ -158,9 +159,9 @@ func CleanupDiskFile(c *C, loopDevicePath string) {
 func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	fmt.Println("Testing SPDK basic operations with multiple threads")
 
-	ip, err := util.GetExternalIP()
+	ip, err := commonNet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(util.EnvPodIP, ip)
+	os.Setenv(commonNet.EnvPodIP, ip)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -402,9 +403,9 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 	fmt.Println("Testing SPDK snapshot operations with multiple threads")
 
-	ip, err := util.GetExternalIP()
+	ip, err := commonNet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(util.EnvPodIP, ip)
+	os.Setenv(commonNet.EnvPodIP, ip)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
