@@ -17,16 +17,14 @@ ENV DAPPER_SOURCE /go/src/github.com/longhorn/longhorn-spdk-engine
 WORKDIR ${DAPPER_SOURCE}
 
 RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/system:/snappy/SLE_15/system:snappy.repo && \
-    zypper -n addrepo --refresh https://download.opensuse.org/repositories/network:/utilities/SLE_15_SP5/network:utilities.repo && \
+    zypper -n addrepo --refresh https://download.opensuse.org/repositories/network:/utilities/SLE_15/network:utilities.repo && \
     zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:libraries:c_c++/15.5/devel:libraries:c_c++.repo && \
     zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:Factory/15.5/devel:languages:python:Factory.repo && \
     zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:backports/SLE_15/devel:languages:python:backports.repo && \
     zypper --gpg-auto-import-keys ref
 
-RUN zypper -n install kmod curl fuse wget tar gzip unzip git awk gcc \
-    libibverbs librdmacm1 rdma-core-devel perl-Config-General libaio-devel sg3_utils libuuid-devel libjson-c-devel \
-    iputils telnet iproute2 qemu-tools device-mapper \
-    e2fsprogs e2fsprogs-devel xfsprogs xfsprogs-devel util-linux-systemd python3 python3-pip python3-devel meson ninja
+RUN zypper -n install cmake curl wget git gcc unzip tar xsltproc docbook-xsl-stylesheets python3 meson ninja python3-pip \
+    e2fsprogs xfsprogs util-linux-systemd python3-pyelftools libcmocka-devel device-mapper
 
 # Install Go & tools
 ENV GOLANG_ARCH_amd64=amd64 GOLANG_ARCH_arm64=arm64 GOLANG_ARCH_s390x=s390x GOLANG_ARCH=GOLANG_ARCH_${ARCH} \
@@ -34,6 +32,42 @@ ENV GOLANG_ARCH_amd64=amd64 GOLANG_ARCH_arm64=arm64 GOLANG_ARCH_s390x=s390x GOLA
 RUN wget -O - https://storage.googleapis.com/golang/go1.21.3.linux-${!GOLANG_ARCH}.tar.gz | tar -xzf - -C /usr/local
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
 
+# Build SPDK
+ENV HUGEMEM=1024
+RUN echo "vm.nr_hugepages=$((HUGEMEM/2))" >> /etc/sysctl.conf
+ENV SPDK_DIR /usr/src/spdk
+ENV SPDK_COMMIT_ID 700b93962fba0dcd54091fd8f128a01bb0d86701
+RUN git clone https://github.com/longhorn/spdk.git ${SPDK_DIR} --recursive && \
+    cd ${SPDK_DIR} && \
+    git checkout ${SPDK_COMMIT_ID} && \
+    git submodule update --init && \
+    ./scripts/pkgdep.sh && \
+    if [ ${ARCH} = "amd64" ]; then \
+        ./configure --target-arch=nehalem --disable-tests --disable-unit-tests --disable-examples && \
+        make -j$(nproc) && \
+        make install; \
+    elif [ ${ARCH} = "arm64" ]; then \
+        ./configure --target-arch=native --disable-tests --disable-unit-tests --disable-examples && \
+        DPDKBUILD_FLAGS="-Dplatform=generic" make -j$(nproc) && \
+        make install; \
+    else \
+        echo "Unsupported architecture: ${ARCH}"; \
+        exit 1; \
+    fi
+
+# Build libjson-c-devel
+ENV LIBJSONC_COMMIT_ID b4c371fa0cbc4dcbaccc359ce9e957a22988fb34
+RUN cd /usr/src && \
+    git clone https://github.com/json-c/json-c.git && \
+    cd json-c && \
+    git checkout ${LIBJSONC_COMMIT_ID} && \
+    mkdir .build && \
+    cd .build && \
+    cmake ../ && \
+    make && \
+    make install
+
+# Build nvme-cli 2.5
 ENV NVME_CLI_DIR /usr/src/nvme-cli
 ENV NVME_CLI_COMMIT_ID d6c07e0de9be777009ebb9ab7475bee1ae3e0e95
 RUN git clone https://github.com/linux-nvme/nvme-cli.git ${NVME_CLI_DIR} && \
@@ -42,7 +76,6 @@ RUN git clone https://github.com/linux-nvme/nvme-cli.git ${NVME_CLI_DIR} && \
     meson setup --force-fallback-for=libnvme .build && \
     meson compile -C .build && \
     meson install -C .build
-
 
 # GRPC dependencies
 # GRPC health probe
@@ -78,22 +111,6 @@ RUN cd /go/src/github.com/ && \
 # buf
 ENV GO111MODULE=on
 RUN go install github.com/bufbuild/buf/cmd/buf@v1.4.0
-
-# longhorn/spdk
-ENV HUGEMEM=1024
-ENV SPDK_DIR /usr/src/spdk
-ENV SPDK_COMMIT_ID 4542f9b14010fc7192d42e05adaafc2ae863bac5
-RUN echo "vm.nr_hugepages=$((HUGEMEM/2))" >> /etc/sysctl.conf
-RUN git clone https://github.com/longhorn/spdk.git ${SPDK_DIR} --recursive && \
-    if [ ${ARCH} == "amd64" ]; then \
-    cd ${SPDK_DIR} && \
-    git checkout ${SPDK_COMMIT_ID} && \
-    git submodule update --init && \
-    ./scripts/pkgdep.sh && \
-    ./configure --target-arch=nehalem --disable-tests --disable-unit-tests --disable-examples && \
-    make -j$(nproc) && \
-    make install; \
-    fi
 
 # longhorn/go-spdk-helper binary for debugging
 ENV GO_SPDK_HELPER_DIR /usr/src/go-spdk-helper
