@@ -202,10 +202,14 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 		go func() {
 			defer func() {
 				// Do cleanup
-				spdkCli.EngineDelete(engineName)
-				spdkCli.ReplicaDelete(replicaName1, true)
-				spdkCli.ReplicaDelete(replicaName2, true)
-				spdkCli.ReplicaDelete(replicaName3, true)
+				err = spdkCli.EngineDelete(engineName)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName1, true)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName2, true)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName3, true)
+				c.Assert(err, IsNil)
 
 				wg.Done()
 			}()
@@ -445,9 +449,12 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 		go func() {
 			defer func() {
 				// Do cleanup
-				spdkCli.EngineDelete(engineName)
-				spdkCli.ReplicaDelete(replicaName1, true)
-				spdkCli.ReplicaDelete(replicaName2, true)
+				err = spdkCli.EngineDelete(engineName)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName1, true)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName2, true)
+				c.Assert(err, IsNil)
 
 				wg.Done()
 			}()
@@ -538,6 +545,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			// Write some extra data into the current head before reverting. This part of data will be discarded after revert
 			offsetInMB = 5 * dataCountInMB
 			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			c.Assert(err, IsNil)
 			cksumBefore16, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
 
