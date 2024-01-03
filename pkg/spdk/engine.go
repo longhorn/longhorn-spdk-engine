@@ -937,12 +937,12 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 			if err != nil {
 				e.log.WithError(err).Errorf("WARNING: failed to get the executor for snapshot op %v with snapshot %s, will skip the sync and continue", snapshotOp, inputSnapshotName)
 			} else {
-				e.log.Info("Requesting system sync before snapshot")
-				if _, err := ne.Execute("sync", []string{devicePath}, SyncTimeout); err != nil {
+				e.log.Infof("Requesting system sync %v before snapshot", devicePath)
+				// TODO: only sync the device path rather than all filesystems
+				if _, err := ne.Execute("sync", []string{}, SyncTimeout); err != nil {
 					// sync should never fail though, so it more like due to the nsenter
 					e.log.WithError(err).Errorf("WARNING: failed to sync for snapshot op %v with snapshot %s, will skip the sync and continue", snapshotOp, inputSnapshotName)
 				}
-
 			}
 		}
 	}
