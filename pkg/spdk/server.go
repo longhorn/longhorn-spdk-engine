@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/longhorn/backupstore"
+	butil "github.com/longhorn/backupstore/util"
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
@@ -894,6 +895,17 @@ func (s *Server) EngineBackupCreate(ctx context.Context, req *spdkrpc.BackupCrea
 
 func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCreateRequest) (ret *spdkrpc.BackupCreateResponse, err error) {
 	backupName := req.BackupName
+
+	backupType, err := butil.CheckBackupType(req.BackupTarget)
+	if err != nil {
+		return nil, err
+	}
+
+	err = butil.SetupCredential(backupType, req.Credential)
+	if err != nil {
+		err = errors.Wrapf(err, "failed to setup credential of backup target %v for backup %v", req.BackupTarget, backupName)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, err.Error())
+	}
 
 	var labelMap map[string]string
 	if req.Labels != nil {
