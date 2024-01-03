@@ -12,7 +12,16 @@ import (
 
 // DiscoverTarget discovers a target
 func DiscoverTarget(ip, port string, executor *commonNs.Executor) (subnqn string, err error) {
-	entries, err := discovery(ip, port, executor)
+	hostID, err := getHostID(executor)
+	if err != nil {
+		return "", err
+	}
+	hostNQN, err := showHostNQN(executor)
+	if err != nil {
+		return "", err
+	}
+
+	entries, err := discovery(hostID, hostNQN, ip, port, executor)
 	if err != nil {
 		return "", err
 	}
@@ -34,7 +43,16 @@ func ConnectTarget(ip, port, nqn string, executor *commonNs.Executor) (controlle
 		return devices[0].Controllers[0].Controller, nil
 	}
 
-	return connect("", nqn, DefaultTransportType, ip, port, executor)
+	hostNQN, err := showHostNQN(executor)
+	if err != nil {
+		return "", err
+	}
+	hostID, err := getHostID(executor)
+	if err != nil {
+		return "", err
+	}
+
+	return connect(hostID, hostNQN, nqn, DefaultTransportType, ip, port, executor)
 }
 
 // DisconnectTarget disconnects a target

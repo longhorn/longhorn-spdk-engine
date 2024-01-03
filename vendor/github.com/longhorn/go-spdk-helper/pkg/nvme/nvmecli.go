@@ -213,19 +213,33 @@ func listControllers(executor *commonNs.Executor) ([]CliDevice, error) {
 	return output["Devices"], nil
 }
 
-func discovery(ip, port string, executor *commonNs.Executor) ([]DiscoveryPageEntry, error) {
-	hostNQN, err := showHostNQN(executor)
-	if err != nil {
-		return nil, err
+func getHostID(executor *commonNs.Executor) (string, error) {
+	outputStr, err := executor.Execute("cat", []string{"/etc/nvme/hostid"}, types.ExecuteTimeout)
+	if err == nil {
+		return strings.TrimSpace(string(outputStr)), nil
 	}
 
+	outputStr, err = executor.Execute("cat", []string{"/sys/class/dmi/id/product_uuid"}, types.ExecuteTimeout)
+	if err == nil {
+		return strings.TrimSpace(string(outputStr)), nil
+	}
+
+	return "", err
+}
+
+func discovery(hostID, hostNQN, ip, port string, executor *commonNs.Executor) ([]DiscoveryPageEntry, error) {
 	opts := []string{
 		"discover",
-		"-q", hostNQN,
 		"-t", DefaultTransportType,
 		"-a", ip,
 		"-s", port,
 		"-o", "json",
+	}
+	if hostID != "" {
+		opts = append(opts, "-I", hostID)
+	}
+	if hostNQN != "" {
+		opts = append(opts, "-q", hostNQN)
 	}
 
 	// A valid output is like below:
@@ -282,7 +296,7 @@ func discovery(ip, port string, executor *commonNs.Executor) ([]DiscoveryPageEnt
 	return output.Entries, nil
 }
 
-func connect(hostNQN, nqn, transpotType, ip, port string, executor *commonNs.Executor) (string, error) {
+func connect(hostID, hostNQN, nqn, transpotType, ip, port string, executor *commonNs.Executor) (string, error) {
 	var err error
 
 	opts := []string{
@@ -292,14 +306,12 @@ func connect(hostNQN, nqn, transpotType, ip, port string, executor *commonNs.Exe
 		"-o", "json",
 	}
 
-	if hostNQN == "" {
-		hostNQN, err = showHostNQN(executor)
-		if err != nil {
-			return "", err
-		}
+	if hostID != "" {
+		opts = append(opts, "-I", hostID)
 	}
-	opts = append(opts, "-q", hostNQN)
-
+	if hostNQN != "" {
+		opts = append(opts, "-q", hostNQN)
+	}
 	if ip != "" {
 		opts = append(opts, "-a", ip)
 	}
