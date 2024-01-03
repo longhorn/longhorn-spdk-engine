@@ -234,7 +234,8 @@ func (s *Server) verify() (err error) {
 		}
 		lvsUUID := bdev.DriverSpecific.Lvol.LvolStoreUUID
 		specSize := bdev.NumBlocks * uint64(bdev.BlockSize)
-		replicaMap[lvolName] = NewReplica(s.ctx, lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeReplica])
+		actualSize := bdev.DriverSpecific.Lvol.NumAllocatedClusters * uint64(defaultClusterSize)
+		replicaMap[lvolName] = NewReplica(s.ctx, lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, actualSize, s.updateChs[types.InstanceTypeReplica])
 		replicaMapForSync[lvolName] = replicaMap[lvolName]
 	}
 	s.replicaMap = replicaMap
@@ -324,7 +325,7 @@ func (s *Server) newReplica(req *spdkrpc.ReplicaCreateRequest) (*Replica, error)
 		if err != nil || !ready {
 			return nil, err
 		}
-		s.replicaMap[req.Name] = NewReplica(s.ctx, req.Name, req.LvsName, req.LvsUuid, req.SpecSize, s.updateChs[types.InstanceTypeReplica])
+		s.replicaMap[req.Name] = NewReplica(s.ctx, req.Name, req.LvsName, req.LvsUuid, req.SpecSize, 0, s.updateChs[types.InstanceTypeReplica])
 	}
 
 	return s.replicaMap[req.Name], nil
