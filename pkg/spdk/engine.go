@@ -902,10 +902,12 @@ func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, repli
 	return nil
 }
 
+type SnapshotOperationType string
+
 const (
-	SnapshotOperationCreate = "snapshot-create"
-	SnapshotOperationDelete = "snapshot-delete"
-	SnapshotOperationRevert = "snapshot-revert"
+	SnapshotOperationCreate = SnapshotOperationType("snapshot-create")
+	SnapshotOperationDelete = SnapshotOperationType("snapshot-delete")
+	SnapshotOperationRevert = SnapshotOperationType("snapshot-revert")
 )
 
 func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName string) (snapshotName string, err error) {
@@ -922,7 +924,7 @@ func (e *Engine) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName stri
 	return err
 }
 
-func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotName, snapshotOp string) (snapshotName string, err error) {
+func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotName string, snapshotOp SnapshotOperationType) (snapshotName string, err error) {
 	updateRequired := false
 
 	if snapshotOp == SnapshotOperationCreate {
@@ -1007,7 +1009,7 @@ func (e *Engine) getReplicaClients() (replicaClients map[string]*client.SPDKClie
 	return replicaClients, nil
 }
 
-func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]*client.SPDKClient, snapshotName, snapshotOp string) (string, error) {
+func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]*client.SPDKClient, snapshotName string, snapshotOp SnapshotOperationType) (string, error) {
 	for replicaName := range replicaClients {
 		switch snapshotOp {
 		case SnapshotOperationCreate:
@@ -1046,7 +1048,7 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 	return snapshotName, nil
 }
 
-func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, replicaClients map[string]*client.SPDKClient, snapshotName, snapshotOp string) (updated bool, err error) {
+func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, replicaClients map[string]*client.SPDKClient, snapshotName string, snapshotOp SnapshotOperationType) (updated bool, err error) {
 	if snapshotOp == SnapshotOperationRevert {
 		if _, err := spdkClient.BdevRaidDelete(e.Name); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			e.log.WithError(err).Errorf("Failed to delete RAID after snapshot %s revert", snapshotName)
@@ -1083,7 +1085,7 @@ func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, rep
 	return updated, nil
 }
 
-func (e *Engine) replicaSnapshotOperation(spdkClient *spdkclient.Client, replicaClient *client.SPDKClient, replicaName, snapshotName, snapshotOp string) error {
+func (e *Engine) replicaSnapshotOperation(spdkClient *spdkclient.Client, replicaClient *client.SPDKClient, replicaName, snapshotName string, snapshotOp SnapshotOperationType) error {
 	switch snapshotOp {
 	case SnapshotOperationCreate:
 		// TODO: execute `sync` for the nvme initiator before snapshot start
