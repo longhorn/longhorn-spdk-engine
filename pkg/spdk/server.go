@@ -340,7 +340,7 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 
 	r, err := s.newReplica(req)
 	if err != nil {
-		return nil, err
+		return nil, grpcstatus.Error(grpccodes.Internal, "failed to create a new replica")
 	}
 
 	spdkClient := s.spdkClient
@@ -423,7 +423,7 @@ func (s *Server) ReplicaWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_Replic
 			done = true
 		case <-responseCh:
 			if err := srv.Send(&emptypb.Empty{}); err != nil {
-				return err
+				return grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to send response to replica watch").Error())
 			}
 		}
 		if done {
@@ -730,7 +730,7 @@ func (s *Server) EngineWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_EngineW
 			done = true
 		case <-responseCh:
 			if err := srv.Send(&emptypb.Empty{}); err != nil {
-				return err
+				return grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to send response to engine watch").Error())
 			}
 		}
 		if done {
@@ -896,21 +896,19 @@ func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCre
 
 	backupType, err := butil.CheckBackupType(req.BackupTarget)
 	if err != nil {
-		return nil, err
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, errors.Wrapf(err, "failed to check backup target %v for backup %v", req.BackupTarget, backupName).Error())
 	}
 
 	err = butil.SetupCredential(backupType, req.Credential)
 	if err != nil {
-		err = errors.Wrapf(err, "failed to setup credential of backup target %v for backup %v", req.BackupTarget, backupName)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, err.Error())
+		return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err, "failed to setup credential of backup target %v for backup %v", req.BackupTarget, backupName).Error())
 	}
 
 	var labelMap map[string]string
 	if req.Labels != nil {
 		labelMap, err = util.ParseLabels(req.Labels)
 		if err != nil {
-			err = errors.Wrapf(err, "failed to parse backup labels for backup %v", backupName)
-			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, err.Error())
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, errors.Wrapf(err, "failed to parse backup labels for backup %v", backupName).Error())
 		}
 	}
 
@@ -928,8 +926,7 @@ func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCre
 
 	backup, err := NewBackup(s.spdkClient, backupName, req.VolumeName, req.SnapshotName, replica, s.portAllocator)
 	if err != nil {
-		err = errors.Wrapf(err, "failed to create backup instance %v for volume %v", backupName, req.VolumeName)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, err.Error())
+		return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err, "failed to create backup instance %v for volume %v", backupName, req.VolumeName).Error())
 	}
 
 	config := &backupstore.DeltaBackupConfig{
@@ -958,8 +955,7 @@ func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCre
 	s.backupMap[backupName] = backup
 	if err := backup.BackupCreate(config); err != nil {
 		delete(s.backupMap, backupName)
-		err = errors.Wrapf(err, "failed to create backup %v for volume %v", backupName, req.VolumeName)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, err.Error())
+		return nil, err
 	}
 
 	return &spdkrpc.BackupCreateResponse{
@@ -1048,8 +1044,7 @@ func (s *Server) EngineBackupRestoreFinish(ctx context.Context, req *spdkrpc.Eng
 
 	err = e.BackupRestoreFinish(s.spdkClient)
 	if err != nil {
-		err = errors.Wrapf(err, "failed to finish backup restoration for engine %v", req.EngineName)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, err.Error())
+		return nil, err
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -1065,8 +1060,7 @@ func (s *Server) EngineRestoreStatus(ctx context.Context, req *spdkrpc.RestoreSt
 
 	resp, err := e.RestoreStatus()
 	if err != nil {
-		err = errors.Wrapf(err, "failed to get restore status for engine %v", req.EngineName)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, err.Error())
+		return nil, err
 	}
 	return resp, nil
 }

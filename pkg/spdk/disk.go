@@ -64,7 +64,11 @@ func svcDiskCreate(spdkClient *spdkclient.Client, diskName, diskUUID, diskPath s
 		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to add block device").Error())
 	}
 
-	return lvstoreToDisk(spdkClient, diskPath, "", uuid)
+	ret, err = lvstoreToDisk(spdkClient, diskPath, "", uuid)
+	if err != nil {
+		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to get disk info").Error())
+	}
+	return ret, nil
 }
 
 func svcDiskDelete(spdkClient *spdkclient.Client, diskName, diskUUID string) (ret *emptypb.Empty, err error) {
@@ -104,7 +108,7 @@ func svcDiskDelete(spdkClient *spdkclient.Client, diskName, diskUUID string) (re
 	}
 
 	if _, err := spdkClient.BdevAioDelete(aioBdevName); err != nil {
-		return nil, errors.Wrapf(err, "failed to delete AIO bdev %v", aioBdevName)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err, "failed to delete AIO bdev %v", aioBdevName).Error())
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -151,7 +155,11 @@ func svcDiskGet(spdkClient *spdkclient.Client, diskName string) (ret *spdkrpc.Di
 
 	diskPath := util.RemovePrefix(targetBdev.DriverSpecific.Aio.FileName, hostPrefix)
 
-	return lvstoreToDisk(spdkClient, diskPath, diskName, "")
+	ret, err = lvstoreToDisk(spdkClient, diskPath, diskName, "")
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err, "failed to get disk %v", diskName).Error())
+	}
+	return ret, nil
 }
 
 func getDiskPath(path string) string {

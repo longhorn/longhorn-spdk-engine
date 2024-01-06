@@ -98,7 +98,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 
 	if e.State != types.InstanceStatePending {
 		requireUpdate = false
-		return nil, fmt.Errorf("invalid state %s for engine %s creation", e.State, e.Name)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "invalid state %s for engine %s creation", e.State, e.Name)
 	}
 
 	defer func() {
@@ -120,7 +120,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 
 	podIP, err := commonNet.GetIPForPod()
 	if err != nil {
-		return nil, err
+		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to get pod IP").Error())
 	}
 	e.IP = podIP
 	e.log = e.log.WithField("ip", podIP)
@@ -144,12 +144,12 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 
 	e.log.Info("Launching RAID during engine creation")
 	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
-		return nil, err
+		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to create RAID bdev %v", e.Name).Error())
 	}
 
 	e.log.Info("Launching Frontend during engine creation")
 	if err := e.handleFrontend(spdkClient, portCount, superiorPortAllocator); err != nil {
-		return nil, err
+		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to handle frontend for engine %v", e.Name).Error())
 	}
 
 	e.State = types.InstanceStateRunning
@@ -278,14 +278,14 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 
 		initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
 		if err != nil {
-			return err
+			return grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to create NVMe initiator").Error())
 		}
 		if err := initiator.Stop(true); err != nil {
-			return err
+			return grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to stop NVMe initiator").Error())
 		}
 
 		if err := spdkClient.StopExposeBdev(nqn); err != nil {
-			return err
+			return grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to stop expose bdev for engine").Error())
 		}
 
 		e.Endpoint = ""
@@ -294,23 +294,24 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 
 	if e.Port != 0 {
 		if err := superiorPortAllocator.ReleaseRange(e.Port, e.Port); err != nil {
-			return err
+			return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to release port %v", e.Port).Error())
 		}
 		e.Port = 0
 		requireUpdate = true
 	}
 
 	if _, err := spdkClient.BdevRaidDelete(e.Name); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return err
+		return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to delete RAID bdev %v", e.Name).Error())
 	}
 
 	for replicaName := range e.ReplicaAddressMap {
+		e.log.Infof("Disconnecting replica %s", replicaName)
 		if err := e.disconnectReplica(spdkClient, replicaName); err != nil {
 			if e.ReplicaModeMap[replicaName] != types.ModeERR {
 				e.ReplicaModeMap[replicaName] = types.ModeERR
 				requireUpdate = true
 			}
-			return err
+			return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to disconnect replica %s", replicaName).Error())
 		}
 
 		delete(e.ReplicaAddressMap, replicaName)
@@ -643,20 +644,20 @@ func (e *Engine) ReplicaAddStart(spdkClient *spdkclient.Client, replicaName, rep
 
 	// Syncing with the SPDK TGT server only when the engine is running.
 	if e.State != types.InstanceStateRunning {
-		return fmt.Errorf("invalid state %v for engine %s replica %s add start", e.State, e.Name, replicaName)
+		return grpcstatus.Errorf(grpccodes.Internal, "invalid state %s for engine %s replica %s add start", e.State, e.Name, replicaName)
 	}
 
 	if e.Frontend != types.FrontendEmpty {
-		return fmt.Errorf("invalid frontend %v for engine %s replica %s add start", e.Frontend, e.Name, replicaName)
+		return grpcstatus.Errorf(grpccodes.Internal, "invalid frontend %v for engine %s replica %s add start", e.Frontend, e.Name, replicaName)
 	}
 
 	if _, exists := e.ReplicaAddressMap[replicaName]; exists {
-		return fmt.Errorf("replica %s already exists", replicaName)
+		return grpcstatus.Errorf(grpccodes.AlreadyExists, "replica %s already exists", replicaName)
 	}
 
 	replicaClients, err := e.getReplicaClients()
 	if err != nil {
-		return err
+		return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to get replica clients for engine %s replica %s add start", e.Name, replicaName).Error())
 	}
 
 	defer func() {
@@ -677,7 +678,7 @@ func (e *Engine) ReplicaAddStart(spdkClient *spdkclient.Client, replicaName, rep
 	snapshotName := GenerateRebuildingSnapshotName()
 	updateRequired, err = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, SnapshotOperationCreate)
 	if err != nil {
-		return err
+		return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to create snapshot %s for engine %s replica %s add start", snapshotName, e.Name, replicaName).Error())
 	}
 
 	// TODO: For online rebuilding, this replica should be attached (if it's a remote one) then added to the RAID base bdev list with mode WO
@@ -703,19 +704,19 @@ func (e *Engine) ReplicaAddFinish(spdkClient *spdkclient.Client, replicaName, re
 
 	// Syncing with the SPDK TGT server only when the engine is running.
 	if e.State != types.InstanceStateRunning {
-		return fmt.Errorf("invalid state %v for engine %s replica %s add finish", e.State, e.Name, replicaName)
+		return grpcstatus.Errorf(grpccodes.Internal, "invalid state %s for engine %s replica %s add finish", e.State, e.Name, replicaName)
 	}
 
 	if e.Frontend != types.FrontendEmpty {
-		return fmt.Errorf("invalid frontend %v for engine %s replica %s add finish", e.Frontend, e.Name, replicaName)
+		return grpcstatus.Errorf(grpccodes.Internal, "invalid frontend %v for engine %s replica %s add finish", e.Frontend, e.Name, replicaName)
 	}
 
 	if _, exists := e.ReplicaAddressMap[replicaName]; !exists {
-		return fmt.Errorf("replica %s does not exist in engine %s", replicaName, e.Name)
+		return grpcstatus.Errorf(grpccodes.Internal, "replica %s does not exist in engine %s", replicaName, e.Name)
 	}
 
 	if e.ReplicaModeMap[replicaName] != types.ModeWO {
-		return fmt.Errorf("invalid mode %s for engine %s replica %s add finish", e.ReplicaModeMap[replicaName], e.Name, replicaName)
+		return grpcstatus.Errorf(grpccodes.Internal, "invalid mode %s for engine %s replica %s add finish", e.ReplicaModeMap[replicaName], e.Name, replicaName)
 	}
 
 	replicaBdevList := []string{}
@@ -730,7 +731,8 @@ func (e *Engine) ReplicaAddFinish(spdkClient *spdkclient.Client, replicaName, re
 				e.ReplicaModeMap[replicaName] = types.ModeERR
 				e.ReplicaBdevNameMap[replicaName] = ""
 				updateRequired = true
-				return err
+				return grpcstatus.Error(grpccodes.Internal,
+					errors.Wrapf(err, "failed to get bdev from rebuilding replica %s with address %s for engine %s replica %s add finish", replicaName, replicaAddress, e.Name, replicaName).Error())
 			}
 			e.ReplicaModeMap[replicaName] = types.ModeRW
 			e.ReplicaBdevNameMap[replicaName] = bdevName
@@ -754,10 +756,10 @@ func (e *Engine) ReplicaAddFinish(spdkClient *spdkclient.Client, replicaName, re
 	}()
 
 	if _, err := spdkClient.BdevRaidDelete(e.Name); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return err
+		return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to delete RAID bdev %v", e.Name).Error())
 	}
 	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
-		return err
+		return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to create RAID bdev %v", e.Name).Error())
 	}
 
 	return nil
@@ -769,11 +771,11 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 	// Syncing with the SPDK TGT server only when the engine is running.
 	if e.State != types.InstanceStateRunning {
 		e.RUnlock()
-		return fmt.Errorf("invalid state %v for engine %s replica %s shallow copy", e.State, e.Name, dstReplicaName)
+		return grpcstatus.Errorf(grpccodes.Internal, "invalid state %v for engine %s replica %s shallow copy", e.State, e.Name, dstReplicaName)
 	}
 	if e.Frontend != types.FrontendEmpty {
 		e.RUnlock()
-		return fmt.Errorf("invalid frontend %v for engine %s replica %s shallow copy", e.Frontend, e.Name, dstReplicaName)
+		return grpcstatus.Errorf(grpccodes.Internal, "invalid frontend %v for engine %s replica %s shallow copy", e.Frontend, e.Name, dstReplicaName)
 	}
 
 	srcReplicaName, srcReplicaAddress := "", ""
@@ -788,17 +790,19 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 	e.RUnlock()
 
 	if srcReplicaName == "" || srcReplicaAddress == "" {
-		return fmt.Errorf("cannot find an RW replica for engine %s replica %s shallow copy", e.Name, dstReplicaName)
+		return grpcstatus.Errorf(grpccodes.Internal, "cannot find an RW replica for engine %s replica %s shallow copy", e.Name, dstReplicaName)
 	}
 
 	// TODO: Can we share the clients in the whole server?
 	srcReplicaServiceCli, err := GetServiceClient(srcReplicaAddress)
 	if err != nil {
-		return err
+		return grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "failed to get service client for src replica %s with address %s for engine %s replica %s shallow copy", srcReplicaName, srcReplicaAddress, e.Name, dstReplicaName).Error())
 	}
 	dstReplicaServiceCli, err := GetServiceClient(dstReplicaAddress)
 	if err != nil {
-		return err
+		return grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "failed to get service client for dst replica %s with address %s for engine %s replica %s shallow copy", dstReplicaName, dstReplicaAddress, e.Name, dstReplicaName).Error())
 	}
 
 	srcReplicaIP, _, _ := net.SplitHostPort(srcReplicaAddress)
@@ -806,7 +810,8 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 
 	rpcSrcReplica, err := srcReplicaServiceCli.ReplicaGet(srcReplicaName)
 	if err != nil {
-		return err
+		return grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "failed to get src replica %s for engine %s replica %s shallow copy", srcReplicaName, e.Name, dstReplicaName).Error())
 	}
 
 	// snapLvol.Name is the snapshot lvol name "<REPLICA NAME>-snap-<SNAPSHOT NAME>" rather than the snapshot name
@@ -820,7 +825,8 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 		}
 	}
 	if ancestorSnapshotName == "" || latestSnapshotName == "" {
-		return fmt.Errorf("cannot find the ancestor snapshot %s or latest snapshot %s from RW replica %s snapshot map during engine %s replica %s shallow copy", ancestorSnapshotName, latestSnapshotName, srcReplicaName, e.Name, dstReplicaName)
+		return grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "cannot find the ancestor snapshot %s or latest snapshot %s from RW replica %s snapshot map for engine %s replica %s shallow copy", ancestorSnapshotName, latestSnapshotName, srcReplicaName, e.Name, dstReplicaName).Error())
 	}
 
 	defer func() {
@@ -837,10 +843,12 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 
 	dstRebuildingLvolAddress, err := dstReplicaServiceCli.ReplicaRebuildingDstStart(dstReplicaName, srcReplicaIP != dstReplicaIP)
 	if err != nil {
-		return err
+		return grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "failed to start rebuilding dst replica %s with address %s for engine %s replica %s shallow copy", dstReplicaName, dstReplicaAddress, e.Name, dstReplicaName).Error())
 	}
 	if err = srcReplicaServiceCli.ReplicaRebuildingSrcStart(srcReplicaName, dstReplicaName, dstRebuildingLvolAddress); err != nil {
-		return err
+		return grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "failed to start rebuilding src replica %s with address %s for engine %s replica %s shallow copy", srcReplicaName, srcReplicaAddress, e.Name, dstReplicaName).Error())
 	}
 
 	// Reverse the src replica snapshot tree with a DFS way and do shallow copy one by one
@@ -849,10 +857,12 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 		currentSnapshotName = stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if err = srcReplicaServiceCli.ReplicaSnapshotShallowCopy(srcReplicaName, currentSnapshotName); err != nil {
-			return err
+			return grpcstatus.Errorf(grpccodes.Internal,
+				errors.Wrapf(err, "failed to shallow copy snapshot %s from src replica %s with address %s for engine %s replica %s shallow copy", currentSnapshotName, srcReplicaName, srcReplicaAddress, e.Name, dstReplicaName).Error())
 		}
 		if err = dstReplicaServiceCli.ReplicaRebuildingDstSnapshotCreate(dstReplicaName, currentSnapshotName); err != nil {
-			return err
+			return grpcstatus.Errorf(grpccodes.Internal,
+				errors.Wrapf(err, "failed to create snapshot %s for rebuilding dst replica %s with address %s for engine %s replica %s shallow copy", currentSnapshotName, dstReplicaName, dstReplicaAddress, e.Name, dstReplicaName).Error())
 		}
 
 		hasChildSnap := false
@@ -869,12 +879,14 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 	}
 
 	if err = srcReplicaServiceCli.ReplicaRebuildingSrcFinish(srcReplicaName, dstReplicaName); err != nil {
-		return err
+		return grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "failed to finish rebuilding src replica %s with address %s for engine %s replica %s shallow copy", srcReplicaName, srcReplicaAddress, e.Name, dstReplicaName).Error())
 	}
 	// TODO: Connect the previously found latest snapshot lvol with the head lvol chain
 	// TODO: For online rebuilding, the rebuilding lvol must be unexposed
 	if err = dstReplicaServiceCli.ReplicaRebuildingDstFinish(dstReplicaName, e.IP == dstReplicaIP); err != nil {
-		return err
+		return grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "failed to finish rebuilding dst replica %s with address %s for engine %s replica %s shallow copy", dstReplicaName, dstReplicaAddress, e.Name, dstReplicaName).Error())
 	}
 
 	return nil
@@ -893,17 +905,19 @@ func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, repli
 		}
 	}
 	if replicaName == "" {
-		return fmt.Errorf("cannot find replica name with address %s for engine %s replica delete", replicaAddress, e.Name)
+		return grpcstatus.Errorf(grpccodes.Internal, "cannot find replica name with address %s for engine %s replica delete", replicaAddress, e.Name)
 	}
 	if e.ReplicaAddressMap[replicaName] == "" {
-		return fmt.Errorf("cannot find replica %s for engine %s replica delete", replicaName, e.Name)
+		return grpcstatus.Errorf(grpccodes.Internal, "cannot find replica %s for engine %s replica delete", replicaName, e.Name)
 	}
 	if replicaAddress != "" && e.ReplicaAddressMap[replicaName] != replicaAddress {
-		return fmt.Errorf("replica %s recorded address %s does not match the input address %s for engine %s replica delete", replicaName, e.ReplicaAddressMap[replicaName], replicaAddress, e.Name)
+		return grpcstatus.Errorf(grpccodes.Internal,
+			"replica %s recorded address %s does not match the input address %s for engine %s replica delete", replicaName, e.ReplicaAddressMap[replicaName], replicaAddress, e.Name)
 	}
 
 	if _, err := spdkClient.BdevRaidRemoveBaseBdev(e.ReplicaBdevNameMap[replicaName]); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return err
+		return grpcstatus.Error(grpccodes.Internal,
+			errors.Wrapf(err, "failed to remove base bdev %s for engine %s replica %s delete", e.ReplicaBdevNameMap[replicaName], e.Name, replicaName).Error())
 	}
 
 	delete(e.ReplicaAddressMap, replicaName)
@@ -972,16 +986,16 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 
 	// Syncing with the SPDK TGT server only when the engine is running.
 	if e.State != types.InstanceStateRunning {
-		return "", fmt.Errorf("invalid state %v for engine %s snapshot %s operation", e.State, e.Name, inputSnapshotName)
+		return "", grpcstatus.Error(grpccodes.Internal, fmt.Sprintf("invalid state %s for engine %s snapshot %s operation", e.State, e.Name, inputSnapshotName))
 	}
 
 	replicaClients, err := e.getReplicaClients()
 	if err != nil {
-		return "", err
+		return "", grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to get replica clients for engine %s snapshot %s operation", e.Name, inputSnapshotName).Error())
 	}
 
 	if snapshotName, err = e.snapshotOperationPreCheckWithoutLock(replicaClients, inputSnapshotName, snapshotOp); err != nil {
-		return "", err
+		return "", grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to pre-check for engine %s snapshot %s operation", e.Name, inputSnapshotName).Error())
 	}
 
 	defer func() {
@@ -999,7 +1013,8 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 	}()
 
 	if updateRequired, err = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, snapshotOp); err != nil {
-		return "", err
+		return "", grpcstatus.Error(grpccodes.Internal,
+			errors.Wrapf(err, "failed to issue operation %s for engine %s snapshot %s", snapshotOp, e.Name, snapshotName).Error())
 	}
 
 	e.log.Infof("Engine finished snapshot %s for %v", snapshotOp, snapshotName)
@@ -1190,7 +1205,8 @@ func (e *Engine) BackupCreate(backupName, volumeName, engineName, snapshotName, 
 
 	replicaServiceCli, err := GetServiceClient(replicaAddress)
 	if err != nil {
-		return nil, grpcstatus.Errorf(grpccodes.Internal, err.Error())
+		return nil, grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "failed to get service client for replica %s with address %s", replicaName, replicaAddress).Error())
 	}
 
 	recv, err := replicaServiceCli.ReplicaBackupCreate(&client.BackupCreateRequest{
@@ -1234,15 +1250,22 @@ func (e *Engine) BackupStatus(backupName, replicaAddress string) (*spdkrpc.Backu
 	}
 
 	if !found {
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, fmt.Sprintf("replica address %s is not found in engine %s for getting backup %v status", replicaAddress, e.Name, backupName))
+		return nil, grpcstatus.Errorf(grpccodes.NotFound,
+			fmt.Sprintf("replica address %s is not found in engine %s for getting backup %v status", replicaAddress, e.Name, backupName))
 	}
 
 	replicaServiceCli, err := GetServiceClient(replicaAddress)
 	if err != nil {
-		return nil, grpcstatus.Errorf(grpccodes.Internal, err.Error())
+		return nil, grpcstatus.Errorf(grpccodes.Internal,
+			errors.Wrapf(err, "failed to get service client for replica %s with address %s for getting backup %v status", e.Name, replicaAddress, backupName).Error())
 	}
 
-	return replicaServiceCli.ReplicaBackupStatus(backupName)
+	resp, err := replicaServiceCli.ReplicaBackupStatus(backupName)
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err,
+			"failed to get backup %s status from replica %s with address %s", backupName, e.Name, replicaAddress).Error())
+	}
+	return resp, nil
 }
 
 func (e *Engine) getSnapshotsInfo() (map[string]*api.Lvol, error) {
@@ -1311,14 +1334,14 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineN
 
 	e.log.Infof("Deleting raid bdev %s before restoration", e.Name)
 	if _, err := spdkClient.BdevRaidDelete(e.Name); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return nil, errors.Wrapf(err, "failed to delete raid bdev %s before restoration", e.Name)
+		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to delete raid bdev %s before restoration", e.Name).Error())
 	}
 
 	e.log.Info("Disconnecting all replicas before restoration")
 	for replicaName := range e.ReplicaAddressMap {
 		if err := e.disconnectReplica(spdkClient, replicaName); err != nil {
 			e.log.Infof("Failed to remove replica %s before restoration", replicaName)
-			return nil, errors.Wrapf(err, "failed to remove replica %s before restoration", replicaName)
+			return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to disconnect replica %s before restoration", replicaName).Error())
 		}
 	}
 
@@ -1328,7 +1351,7 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineN
 	e.log.Info("Getting snapshot info before restoring backup")
 	snapshots, err := e.getSnapshotsInfo()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get snapshot info before the incremental restore")
+		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrap(err, "failed to get snapshot info before the incremental restore").Error())
 	}
 	if len(snapshots) == 0 {
 		if snapshotName == "" {
@@ -1336,7 +1359,7 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineN
 			e.log.Infof("Generating a snapshot name %s for the full restore", snapshotName)
 		}
 	} else {
-		return nil, errors.Errorf("incremental restore is not supported yet")
+		return nil, grpcstatus.Error(grpccodes.Unimplemented, "incremental restore is not supported yet")
 	}
 
 	resp := &spdkrpc.EngineBackupRestoreResponse{
@@ -1377,7 +1400,7 @@ func (e *Engine) BackupRestoreFinish(spdkClient *spdkclient.Client) error {
 		replicaAddress := e.ReplicaAddressMap[replicaName]
 		replicaIP, replicaPort, err := net.SplitHostPort(replicaAddress)
 		if err != nil {
-			return err
+			return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to split replica address %s for engine %s backup restore finish", replicaAddress, e.Name).Error())
 		}
 		if replicaIP == e.IP {
 			replicaBdevList = append(replicaBdevList, bdevName)
@@ -1387,7 +1410,7 @@ func (e *Engine) BackupRestoreFinish(spdkClient *spdkclient.Client) error {
 		_, err = spdkClient.BdevNvmeAttachController(replicaName, helpertypes.GetNQN(replicaName), replicaIP, replicaPort, spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4,
 			helpertypes.DefaultCtrlrLossTimeoutSec, helpertypes.DefaultReconnectDelaySec, helpertypes.DefaultFastIOFailTimeoutSec)
 		if err != nil {
-			return err
+			return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to attach replica %s with address %s for engine %s backup restore finish", replicaName, replicaAddress, e.Name).Error())
 		}
 		replicaBdevList = append(replicaBdevList, bdevName)
 	}
@@ -1396,7 +1419,7 @@ func (e *Engine) BackupRestoreFinish(spdkClient *spdkclient.Client) error {
 	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
 		if !jsonrpc.IsJSONRPCRespErrorFileExists(err) {
 			e.log.WithError(err).Errorf("Failed to create raid bdev before finishing restoration")
-			return err
+			return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to create raid bdev %s before finishing restoration", e.Name).Error())
 		}
 	}
 
@@ -1420,11 +1443,13 @@ func (e *Engine) RestoreStatus() (*spdkrpc.RestoreStatusResponse, error) {
 
 		replicaServiceCli, err := GetServiceClient(replicaAddress)
 		if err != nil {
-			return nil, err
+			return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err,
+				"failed to get service client for replica %s with address %s for getting restore status", replicaName, replicaAddress).Error())
 		}
 		status, err := replicaServiceCli.ReplicaRestoreStatus(replicaName)
 		if err != nil {
-			return nil, err
+			return nil, grpcstatus.Errorf(grpccodes.Internal, errors.Wrapf(err,
+				"failed to get restore status for replica %s with address %s", replicaName, replicaAddress).Error())
 		}
 		resp.Status[replicaAddress] = status
 	}

@@ -10,6 +10,8 @@ import (
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/bitmap"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/longhorn/backupstore"
 	btypes "github.com/longhorn/backupstore/types"
@@ -107,7 +109,7 @@ func (b *Backup) BackupCreate(config *backupstore.DeltaBackupConfig) error {
 
 	isIncremental, err := backupstore.CreateDeltaBlockBackup(b.Name, config)
 	if err != nil {
-		return err
+		return grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to create backup %v", b.Name).Error())
 	}
 
 	b.IsIncremental = isIncremental
