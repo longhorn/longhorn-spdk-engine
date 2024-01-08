@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.4.0
 	github.com/longhorn/backupstore v0.0.0-20231229024807-ccb82ae17a0e
 	github.com/longhorn/go-common-libs v0.0.0-20240103081802-3993c5908447
-	github.com/longhorn/go-spdk-helper v0.0.0-20240103085800-6ac35f37b3a7
+	github.com/longhorn/go-spdk-helper v0.0.0-20240107081652-89d49f81392b
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
