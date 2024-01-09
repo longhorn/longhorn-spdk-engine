@@ -9,9 +9,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
-	"github.com/longhorn/backupstore"
 	btypes "github.com/longhorn/backupstore/types"
-	butil "github.com/longhorn/backupstore/util"
 	commonNs "github.com/longhorn/go-common-libs/ns"
 	commonTypes "github.com/longhorn/go-common-libs/types"
 	"github.com/longhorn/go-spdk-helper/pkg/nvme"
@@ -112,23 +110,6 @@ func (r *Restore) DeepCopy() *Restore {
 		Error:                  r.Error,
 		Progress:               r.Progress,
 	}
-}
-
-func BackupRestore(backupURL, snapshotLvolName string, concurrentLimit int32, restoreObj *Restore) error {
-	backupURL = butil.UnescapeURL(backupURL)
-
-	logrus.WithFields(logrus.Fields{
-		"backupURL":        backupURL,
-		"snapshotLvolName": snapshotLvolName,
-		"concurrentLimit":  concurrentLimit,
-	}).Info("Start restoring backup")
-
-	return backupstore.RestoreDeltaBlockBackup(&backupstore.DeltaRestoreConfig{
-		BackupURL:       backupURL,
-		DeltaOps:        restoreObj,
-		Filename:        snapshotLvolName,
-		ConcurrentLimit: int32(concurrentLimit),
-	})
 }
 
 func (r *Restore) OpenVolumeDev(volDevName string) (*os.File, string, error) {
