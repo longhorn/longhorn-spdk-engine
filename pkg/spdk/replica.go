@@ -1566,13 +1566,13 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 	newRestore := r.restore.DeepCopy()
 	defer func() {
 		if err != nil {
-			// TODO: Support snapshot revert
+			// TODO: Support snapshot revert for incremental restore
 		}
 	}()
 
 	if newRestore.LastRestored == "" {
 		r.log.Infof("Starting a new full restore for backup %v", backupUrl)
-		if err := BackupRestore(backupUrl, newRestore.LvolName, concurrentLimit, r.restore); err != nil {
+		if err := r.backupRestore(backupUrl, newRestore.LvolName, concurrentLimit); err != nil {
 			return errors.Wrapf(err, "failed to start full backup restore")
 		}
 		r.log.Infof("Successfully initiated full restore for %v to %v", backupUrl, newRestore.LvolName)
@@ -1584,6 +1584,23 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 
 	return nil
 
+}
+
+func (r *Replica) backupRestore(backupURL, snapshotLvolName string, concurrentLimit int32) error {
+	backupURL = butil.UnescapeURL(backupURL)
+
+	logrus.WithFields(logrus.Fields{
+		"backupURL":        backupURL,
+		"snapshotLvolName": snapshotLvolName,
+		"concurrentLimit":  concurrentLimit,
+	}).Info("Start restoring backup")
+
+	return backupstore.RestoreDeltaBlockBackup(r.ctx, &backupstore.DeltaRestoreConfig{
+		BackupURL:       backupURL,
+		DeltaOps:        r.restore,
+		Filename:        snapshotLvolName,
+		ConcurrentLimit: int32(concurrentLimit),
+	})
 }
 
 func (r *Replica) canDoIncrementalRestore(restore *Restore, backupURL, requestedBackupName string) bool {
