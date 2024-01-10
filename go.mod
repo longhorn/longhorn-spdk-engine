@@ -6,7 +6,7 @@ require (
 	github.com/0xPolygon/polygon-edge v1.3.2
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/google/uuid v1.4.0
-	github.com/longhorn/backupstore v0.0.0-20240109133714-c0d33e4bd6cf
+	github.com/longhorn/backupstore v0.0.0-20240110081942-bd231cfb0c7b
 	github.com/longhorn/go-common-libs v0.0.0-20240103081802-3993c5908447
 	github.com/longhorn/go-spdk-helper v0.0.0-20240107081652-89d49f81392b
 	github.com/pkg/errors v0.9.1
