@@ -3,9 +3,11 @@ package types
 type ProgressState string
 
 const (
+	ProgressStateUndefined  = ProgressState("")
 	ProgressStateInProgress = ProgressState("in_progress")
 	ProgressStateComplete   = ProgressState("complete")
 	ProgressStateError      = ProgressState("error")
+	ProgressStateCanceled   = ProgressState("canceled")
 )
 
 const (
@@ -58,4 +60,8 @@ const (
 	// To prevent Longhorn from accidently considering it as another normal BackupVolume,
 	// we use upppercase here so it will be filtered out when listing.
 	BackupBackingImageLockName = "BACKINGIMAGE"
+)
+
+const (
+	ErrorMsgRestoreCancelled = "backup restoration is cancelled"
 )

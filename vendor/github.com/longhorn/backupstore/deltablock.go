@@ -996,11 +996,10 @@ func restoreBlocks(ctx context.Context, bsDriver BackupStoreDriver, deltaOps Del
 		for {
 			select {
 			case <-ctx.Done():
-				logrus.Infof("Closing goroutine for restoring blocks for volume %v", volumeName)
+				err = fmt.Errorf(types.ErrorMsgRestoreCancelled+" since server stop for volume %v", volumeName)
 				return
 			case <-deltaOps.GetStopChan():
-				logrus.Infof("Closing goroutine for restoring blocks for %v since received stop signal", volumeName)
-				err = fmt.Errorf("restoration is cancelled since received stop signal")
+				err = fmt.Errorf(types.ErrorMsgRestoreCancelled+" since received stop signal for volume %v", volumeName)
 				return
 			case block, open := <-in:
 				if !open {
