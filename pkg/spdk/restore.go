@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -184,14 +185,24 @@ func (r *Restore) UpdateRestoreStatus(snapshotLvolName string, progress int, err
 
 	r.LvolName = snapshotLvolName
 	r.Progress = progress
+
 	if err != nil {
-		if r.Error != "" {
-			r.Error = fmt.Sprintf("%v: %v", err.Error(), r.Error)
-		} else {
-			r.Error = err.Error()
-		}
-		r.State = btypes.ProgressStateError
 		r.CurrentRestoringBackup = ""
+
+		// No need to mark restore as error if it's cancelled.
+		// The restoration will be restarted after the engine is restarted.
+		if strings.Contains(err.Error(), btypes.ErrorMsgRestoreCancelled) {
+			r.log.WithError(err).Warn("Backup restoration is cancelled")
+			r.State = btypes.ProgressStateCanceled
+		} else {
+			r.log.WithError(err).Error("Backup restoration is failed")
+			r.State = btypes.ProgressStateError
+			if r.Error != "" {
+				r.Error = fmt.Sprintf("%v: %v", err.Error(), r.Error)
+			} else {
+				r.Error = err.Error()
+			}
+		}
 	}
 }
 
@@ -199,7 +210,7 @@ func (r *Restore) FinishRestore() {
 	r.Lock()
 	defer r.Unlock()
 
-	if r.State != btypes.ProgressStateError {
+	if r.State != btypes.ProgressStateError && r.State != btypes.ProgressStateCanceled {
 		r.State = btypes.ProgressStateComplete
 		r.LastRestored = r.CurrentRestoringBackup
 		r.CurrentRestoringBackup = ""

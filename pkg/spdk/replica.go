@@ -1409,8 +1409,8 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 
 	// Initialize `r.restore`
 	// First restore request. It must be a normal full restore.
-	if restore.LastRestored == "" && restore.State == "" {
-		r.log.Infof("Starting a new restore for backup %v", backupUrl)
+	if restore.LastRestored == "" && (restore.State == btypes.ProgressStateUndefined || restore.State == btypes.ProgressStateCanceled) {
+		r.log.Infof("Starting a new restore for backup %v with restore state %v", backupUrl, restore.State)
 		lvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
 		r.restore, err = NewRestore(spdkClient, lvolName, snapshotName, backupUrl, backupName, r)
 		if err != nil {
@@ -1507,22 +1507,26 @@ func (r *Replica) completeBackupRestore(spdkClient *spdkclient.Client) (err erro
 
 func (r *Replica) waitForRestoreComplete() error {
 	periodicChecker := time.NewTicker(time.Duration(restorePeriodicRefreshInterval.Seconds()) * time.Second)
+	defer periodicChecker.Stop()
 
 	for range periodicChecker.C {
 		r.restore.RLock()
 		restoreProgress := r.restore.Progress
 		restoreError := r.restore.Error
+		restoreState := r.restore.State
 		r.restore.RUnlock()
 
 		if restoreProgress == 100 {
-			r.log.Info("Backup data restore completed successfully")
-			periodicChecker.Stop()
+			r.log.Info("Backup restoration completed successfully")
+			return nil
+		}
+		if restoreState == btypes.ProgressStateCanceled {
+			r.log.Info("Backup restoration is cancelled")
 			return nil
 		}
 		if restoreError != "" {
 			err := fmt.Errorf("%v", restoreError)
-			r.log.WithError(err).Errorf("Found backup restore error")
-			periodicChecker.Stop()
+			r.log.WithError(err).Errorf("Found backup restoration error")
 			return err
 		}
 	}
@@ -1530,6 +1534,11 @@ func (r *Replica) waitForRestoreComplete() error {
 }
 
 func (r *Replica) postFullRestoreOperations(spdkClient *spdkclient.Client, restore *Restore) error {
+	if r.restore.State == btypes.ProgressStateCanceled {
+		r.log.Info("Doing nothing for canceled backup restoration")
+		return nil
+	}
+
 	r.log.Infof("Taking snapshot %v of the restored volume", restore.SnapshotName)
 
 	_, err := r.SnapshotCreate(spdkClient, restore.SnapshotName)
@@ -1558,7 +1567,7 @@ func (r *Replica) finishRestore(restoreErr error) error {
 	}()
 
 	if !r.isRestoring {
-		err := fmt.Errorf("BUG: volume is not restoring")
+		err := fmt.Errorf("BUG: volume is not being restored")
 		if restoreErr != nil {
 			restoreErr = util.CombineErrors(err, restoreErr)
 		} else {
@@ -1567,7 +1576,7 @@ func (r *Replica) finishRestore(restoreErr error) error {
 		return err
 	}
 
-	r.log.Infof("Finishing restore for %v", r.restore.BackupURL)
+	r.log.Infof("Unflagging isRestoring")
 	r.isRestoring = false
 
 	return nil
