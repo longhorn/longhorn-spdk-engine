@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -48,6 +49,9 @@ type Engine struct {
 	State    types.InstanceState
 	ErrorMsg string
 
+	Head        *api.Lvol
+	SnapshotMap map[string]*api.Lvol
+
 	IsRestoring bool
 
 	// UpdateCh should not be protected by the engine lock
@@ -79,6 +83,8 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		ReplicaModeMap:     map[string]types.Mode{},
 
 		State: types.InstanceStatePending,
+
+		SnapshotMap: map[string]*api.Lvol{},
 
 		UpdateCh: engineUpdateCh,
 
@@ -143,6 +149,8 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 	}
 	e.ReplicaAddressMap = replicaAddressMap
 	e.log = e.log.WithField("replicaAddressMap", replicaAddressMap)
+
+	e.updateInfoFromReplica()
 
 	e.log.Info("Launching RAID during engine creation")
 	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
@@ -364,6 +372,7 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 		ReplicaModeMap:    map[string]spdkrpc.ReplicaMode{},
 		Ip:                e.IP,
 		Port:              e.Port,
+		Snapshots:         map[string]*spdkrpc.Lvol{},
 		Frontend:          e.Frontend,
 		Endpoint:          e.Endpoint,
 		State:             string(e.State),
@@ -372,6 +381,10 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 
 	for replicaName, replicaMode := range e.ReplicaModeMap {
 		res.ReplicaModeMap[replicaName] = spdkrpc.ReplicaModeToGRPCReplicaMode(replicaMode)
+	}
+	res.Head = api.LvolToProtoLvol(e.Head)
+	for snapshotName, snapApiLvol := range e.SnapshotMap {
+		res.Snapshots[snapshotName] = api.LvolToProtoLvol(snapApiLvol)
 	}
 
 	return res
@@ -510,7 +523,67 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		// TODO: should we delete the engine automatically here?
 	}
 
+	e.updateInfoFromReplica()
+
 	return nil
+}
+
+func (e *Engine) updateInfoFromReplica() {
+	replicaMap := map[string]*api.Replica{}
+	replicaAncestorSnapshotMap := map[string]string{}
+	ancestorSnapshotCounterMap := map[string]int{}
+	for replicaName, address := range e.ReplicaAddressMap {
+		if e.ReplicaModeMap[replicaName] != types.ModeRW {
+			continue
+		}
+		replicaServiceCli, err := GetServiceClient(address)
+		if err != nil {
+			e.log.WithError(err).Warnf("failed to get service client for replica %s with address %s, will skip this replica and continue the sync-up", replicaName, address)
+			continue
+		}
+		replica, err := replicaServiceCli.ReplicaGet(replicaName)
+		if err != nil {
+			e.log.WithError(err).Warnf("failed to get replica %s with address %s, will skip this replica and continue the sync-up", replicaName, address)
+			continue
+		}
+		replicaMap[replicaName] = replica
+		for snapshotName, snapApiLvol := range replica.Snapshots {
+			if snapApiLvol.Parent == "" || replica.Snapshots[snapApiLvol.Parent] == nil {
+				replicaAncestorSnapshotMap[replicaName] = snapshotName
+				ancestorSnapshotCounterMap[snapshotName] += 1
+				break
+			}
+		}
+	}
+
+	ancestorCount := 0
+	ancestorSnapshotName := ""
+	for snapshotName, cnt := range ancestorSnapshotCounterMap {
+		if ancestorCount < cnt {
+			ancestorSnapshotName = snapshotName
+		}
+	}
+	if len(ancestorSnapshotCounterMap) > 1 {
+		e.log.Errorf("BUG: Found the ancestor snapshot is different among RW replicas, will pick up ancestor snapshot %s hold by most of the replicas and continue the sync-up: %+v", ancestorSnapshotName, replicaAncestorSnapshotMap)
+	}
+
+	earliestCreationTime := time.Now()
+	e.ActualSize = 0
+	for replicaName, replica := range replicaMap {
+		if replica.Snapshots[ancestorSnapshotName] == nil {
+			continue
+		}
+		ancestorCreationTime, err := time.Parse(time.RFC3339, replica.Snapshots[ancestorSnapshotName].CreationTime)
+		if err != nil {
+			e.log.WithError(err).Warnf("failed to parse replica %s ancestor snapshot creation time %s, will skip this replica and continue the sync-up", replicaName, replica.Snapshots[ancestorSnapshotName].CreationTime)
+			continue
+		}
+		// Pick up the snapshot map that contains the earliest creation time then cache it in engine
+		if earliestCreationTime.After(ancestorCreationTime) {
+			e.SnapshotMap = replica.Snapshots
+			e.Head = replica.Head
+		}
+	}
 }
 
 func (e *Engine) validateAndUpdateFrontend(subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
@@ -814,11 +887,11 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 	}
 
 	ancestorSnapshotName, latestSnapshotName := "", ""
-	for snapshotName, rpcSnapLvol := range rpcSrcReplica.Snapshots {
-		if rpcSnapLvol.Parent == "" {
+	for snapshotName, snapApiLvol := range rpcSrcReplica.Snapshots {
+		if snapApiLvol.Parent == "" {
 			ancestorSnapshotName = snapshotName
 		}
-		if rpcSnapLvol.Children[types.VolumeHead] {
+		if snapApiLvol.Children[types.VolumeHead] {
 			latestSnapshotName = snapshotName
 		}
 	}
@@ -875,8 +948,8 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 	// TODO: The rebuilding lvol of the dst replica is actually the head. Need to make sure the head stands behind to the correct snapshot.
 	//  Once we start to use a separate rebuilding lvol rather than the head, we can remove the below code.
 	if !rpcSrcReplica.Snapshots[prevSnapshotName].Children[types.VolumeHead] {
-		for snapshotName, snapshotLvol := range rpcSrcReplica.Snapshots {
-			if !snapshotLvol.Children[types.VolumeHead] {
+		for snapshotName, snapApiLvol := range rpcSrcReplica.Snapshots {
+			if !snapApiLvol.Children[types.VolumeHead] {
 				continue
 			}
 			if err = srcReplicaServiceCli.ReplicaRebuildingSrcDetach(srcReplicaName, dstReplicaName); err != nil {
@@ -1033,6 +1106,8 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 	if updateRequired, err = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, snapshotOp); err != nil {
 		return "", err
 	}
+
+	e.updateInfoFromReplica()
 
 	e.log.Infof("Engine finished snapshot %s for %v", snapshotOp, snapshotName)
 
@@ -1277,66 +1352,6 @@ func (e *Engine) BackupStatus(backupName, replicaAddress string) (*spdkrpc.Backu
 	return replicaServiceCli.ReplicaBackupStatus(backupName)
 }
 
-func (e *Engine) getSnapshotsInfo() (map[string]*api.Lvol, error) {
-	lvols := map[string]*api.Lvol{}
-
-	for name, address := range e.ReplicaAddressMap {
-		if e.ReplicaModeMap[name] != types.ModeRW {
-			continue
-		}
-
-		replicaServiceCli, err := GetServiceClient(address)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to get service client for replica %s with address %s", name, address)
-		}
-
-		replica, err := replicaServiceCli.ReplicaGet(name)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to get replica %s with address %s", name, address)
-		}
-
-		newLvols := make(map[string]*api.Lvol)
-		for name, lvol := range replica.Snapshots {
-			snapshot := ""
-			if name == replica.Name {
-				snapshot = types.VolumeHead
-			} else {
-				snapshot = lvol.Name
-			}
-
-			children := map[string]bool{}
-			for childName := range lvol.Children {
-				child := ""
-				if name == replica.Name {
-					child = types.VolumeHead
-				} else {
-					child = childName
-				}
-				children[child] = true
-			}
-			parent := ""
-			if lvol.Parent != "" {
-				parent = lvol.Parent
-			}
-			lvol := &api.Lvol{
-				Name:         snapshot,
-				UUID:         lvol.UUID,
-				SpecSize:     lvol.SpecSize,
-				ActualSize:   lvol.ActualSize,
-				Parent:       parent,
-				Children:     children,
-				CreationTime: lvol.CreationTime,
-			}
-			newLvols[snapshot] = lvol
-		}
-
-		if len(newLvols) > len(lvols) {
-			lvols = newLvols
-		}
-	}
-	return lvols, nil
-}
-
 func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineName, snapshotName string, credential map[string]string, concurrentLimit int32) (*spdkrpc.EngineBackupRestoreResponse, error) {
 	e.Lock()
 	defer e.Unlock()
@@ -1357,12 +1372,7 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineN
 	e.IsRestoring = true
 
 	// TODO: support DR volume
-	e.log.Info("Getting snapshot info before restoring backup")
-	snapshots, err := e.getSnapshotsInfo()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get snapshot info before the incremental restore")
-	}
-	if len(snapshots) == 0 {
+	if len(e.SnapshotMap) == 0 {
 		if snapshotName == "" {
 			snapshotName = util.UUID()
 			e.log.Infof("Generating a snapshot name %s for the full restore", snapshotName)

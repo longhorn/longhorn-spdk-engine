@@ -34,6 +34,9 @@ type Lvol struct {
 }
 
 func ProtoLvolToLvol(l *spdkrpc.Lvol) *Lvol {
+	if l == nil {
+		return nil
+	}
 	return &Lvol{
 		Name:         l.Name,
 		UUID:         l.Uuid,
@@ -46,6 +49,9 @@ func ProtoLvolToLvol(l *spdkrpc.Lvol) *Lvol {
 }
 
 func LvolToProtoLvol(l *Lvol) *spdkrpc.Lvol {
+	if l == nil {
+		return nil
+	}
 	return &spdkrpc.Lvol{
 		Name:         l.Name,
 		Uuid:         l.UUID,
@@ -112,6 +118,8 @@ type Engine struct {
 	Port              int32                 `json:"port"`
 	ReplicaAddressMap map[string]string     `json:"replica_address_map"`
 	ReplicaModeMap    map[string]types.Mode `json:"replica_mode_map"`
+	Head              *Lvol                 `json:"head"`
+	Snapshots         map[string]*Lvol      `json:"snapshots"`
 	Frontend          string                `json:"frontend"`
 	Endpoint          string                `json:"endpoint"`
 	State             string                `json:"state"`
@@ -128,6 +136,8 @@ func ProtoEngineToEngine(e *spdkrpc.Engine) *Engine {
 		Port:              e.Port,
 		ReplicaAddressMap: e.ReplicaAddressMap,
 		ReplicaModeMap:    map[string]types.Mode{},
+		Head:              ProtoLvolToLvol(e.Head),
+		Snapshots:         map[string]*Lvol{},
 		Frontend:          e.Frontend,
 		Endpoint:          e.Endpoint,
 		State:             e.State,
@@ -135,6 +145,9 @@ func ProtoEngineToEngine(e *spdkrpc.Engine) *Engine {
 	}
 	for rName, mode := range e.ReplicaModeMap {
 		res.ReplicaModeMap[rName] = spdkrpc.GRPCReplicaModeToReplicaMode(mode)
+	}
+	for snapshotName, snapProtoLvol := range e.Snapshots {
+		res.Snapshots[snapshotName] = ProtoLvolToLvol(snapProtoLvol)
 	}
 
 	return res
