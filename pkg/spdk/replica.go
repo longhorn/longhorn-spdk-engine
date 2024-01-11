@@ -906,7 +906,11 @@ func (r *Replica) removeLvolFromSnapshotLvolMapWithoutLock(snapsLvolName string)
 	var deletingSvcLvol, parentSvcLvol, childSvcLvol *Lvol
 
 	deletingSvcLvol = r.SnapshotLvolMap[snapsLvolName]
-	parentSvcLvol = r.SnapshotLvolMap[deletingSvcLvol.Parent]
+	if IsReplicaSnapshotLvol(r.Name, deletingSvcLvol.Parent) {
+		parentSvcLvol = r.SnapshotLvolMap[deletingSvcLvol.Parent]
+	} else {
+		parentSvcLvol = r.ActiveChain[0]
+	}
 	if parentSvcLvol != nil {
 		delete(parentSvcLvol.Children, deletingSvcLvol.Name)
 	}
