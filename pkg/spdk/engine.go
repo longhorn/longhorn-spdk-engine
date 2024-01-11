@@ -582,6 +582,7 @@ func (e *Engine) updateInfoFromReplica() {
 		if earliestCreationTime.After(ancestorCreationTime) {
 			e.SnapshotMap = replica.Snapshots
 			e.Head = replica.Head
+			e.ActualSize = replica.ActualSize
 		}
 	}
 }

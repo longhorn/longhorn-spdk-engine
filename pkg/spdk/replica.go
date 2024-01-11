@@ -46,14 +46,15 @@ type Replica struct {
 	// SnapshotLvolMap map[<snapshot lvol name>]. <snapshot lvol name> consists of `<replica name>-snap-<snapshot name>`
 	SnapshotLvolMap map[string]*Lvol
 
-	Name      string
-	Alias     string
-	LvsName   string
-	LvsUUID   string
-	SpecSize  uint64
-	IP        string
-	PortStart int32
-	PortEnd   int32
+	Name       string
+	Alias      string
+	LvsName    string
+	LvsUUID    string
+	SpecSize   uint64
+	ActualSize uint64
+	IP         string
+	PortStart  int32
+	PortEnd    int32
 
 	State    types.InstanceState
 	ErrorMsg string
@@ -347,6 +348,12 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 			svcLvol.ActualSize = newSvcLvol.ActualSize
 		}
 	}
+
+	replicaActualSize := newChain[r.ChainLength-1].ActualSize
+	for _, snapLvol := range newSnapshotLvolMap {
+		replicaActualSize += snapLvol.ActualSize
+	}
+	r.ActualSize = replicaActualSize
 
 	if r.State == types.InstanceStateRunning {
 		if r.IP == "" {
