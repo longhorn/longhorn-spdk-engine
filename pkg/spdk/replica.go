@@ -884,6 +884,16 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	}
 	r.removeLvolFromSnapshotLvolMapWithoutLock(snapLvolName)
 	r.removeLvolFromActiveChainWithoutLock(snapLvolName)
+	for _, childSvcLvol := range snapSvcLvol.Children {
+		bdevLvol, err := spdkClient.BdevLvolGet(childSvcLvol.UUID, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(bdevLvol) != 1 {
+			return nil, fmt.Errorf("failed to get the bdev of the only child lvol %s after snapshot %s delete", childSvcLvol.Name, snapshotName)
+		}
+		childSvcLvol.ActualSize = bdevLvol[0].DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
+	}
 
 	updateRequired = true
 
