@@ -38,8 +38,8 @@ func ProtoLvolToLvol(l *spdkrpc.Lvol) *Lvol {
 		return nil
 	}
 	return &Lvol{
-		Name:         l.Name,
-		UUID:         l.Uuid,
+		Name: l.Name,
+		// UUID:         l.Uuid,
 		SpecSize:     l.SpecSize,
 		ActualSize:   l.ActualSize,
 		Parent:       l.Parent,
@@ -53,8 +53,8 @@ func LvolToProtoLvol(l *Lvol) *spdkrpc.Lvol {
 		return nil
 	}
 	return &spdkrpc.Lvol{
-		Name:         l.Name,
-		Uuid:         l.UUID,
+		Name: l.Name,
+		// Uuid:         l.UUID,
 		SpecSize:     l.SpecSize,
 		ActualSize:   l.ActualSize,
 		Parent:       l.Parent,
