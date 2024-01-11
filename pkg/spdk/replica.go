@@ -986,9 +986,6 @@ func (r *Replica) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName str
 	if snapSvcLvol == nil {
 		return nil, fmt.Errorf("cannot revert to a non-existing snapshot %s(%s)", snapshotName, snapLvolName)
 	}
-	if snapSvcLvol.Children[r.Name] != nil {
-		return nil, fmt.Errorf("cannot revert to the same snapshot %s(%s)", snapshotName, snapLvolName)
-	}
 
 	defer func() {
 		if err != nil && r.State != types.InstanceStateError {
