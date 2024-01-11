@@ -266,7 +266,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(err, IsNil)
 
 			// Check both replica snapshot map after the snapshot operations
-			checkReplicaSnapshots(c, spdkCli, []string{replicaName1, replicaName2},
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName1: {snapshotName2},
 					snapshotName2: {types.VolumeHead},
@@ -318,7 +318,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(engine.Endpoint, Equals, endpoint)
 
 			// Check both replica snapshot map after the snapshot deletion and volume re-attachment
-			checkReplicaSnapshots(c, spdkCli, []string{replicaName1, replicaName2},
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName1: {types.VolumeHead},
 				})
@@ -560,7 +560,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			cksumBefore16, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
 
-			checkReplicaSnapshots(c, spdkCli, []string{replicaName1, replicaName2},
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12},
 					snapshotName12: {snapshotName13},
@@ -626,7 +626,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			// 	                                                                       \
 			// 	                                                                        -> snap21[30,40] -> snap22[40,50] -> snap23[50,60] -> head[60,60]
 
-			checkReplicaSnapshots(c, spdkCli, []string{replicaName1, replicaName2},
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12},
 					snapshotName12: {snapshotName13},
@@ -681,7 +681,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 			c.Assert(cksumAfter23, Equals, cksumBefore23)
 
-			checkReplicaSnapshots(c, spdkCli, []string{replicaName1, replicaName2},
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName13},
 					snapshotName13: {snapshotName15, snapshotName23},
@@ -739,7 +739,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 			c.Assert(cksumAfter32, Equals, cksumBefore32)
 
-			checkReplicaSnapshots(c, spdkCli, []string{replicaName1, replicaName2},
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName13, snapshotName32},
 					snapshotName13: {snapshotName15, snapshotName23},
@@ -785,7 +785,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 			c.Assert(cksumAfter11, Equals, cksumBefore11)
 
-			checkReplicaSnapshots(c, spdkCli, []string{replicaName1, replicaName2},
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName13, snapshotName32, snapshotName41},
 					snapshotName13: {snapshotName15, snapshotName23},
@@ -981,7 +981,10 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 	}
 }
 
-func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, replicaList []string, snapshotMap map[string][]string) {
+func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, replicaList []string, snapshotMap map[string][]string) {
+	engine, err := spdkCli.EngineGet(engineName)
+	c.Assert(err, IsNil)
+
 	for _, replicaName := range replicaList {
 		replica, err := spdkCli.ReplicaGet(replicaName)
 		c.Assert(err, IsNil)
@@ -990,6 +993,8 @@ func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, replicaList []strin
 		for snapName, childrenList := range snapshotMap {
 			snap := replica.Snapshots[snapName]
 			c.Assert(snap, NotNil)
+			c.Assert(engine.Snapshots[snapName], NotNil)
+			c.Assert(engine.Snapshots[snapName].Children, DeepEquals, snap.Children)
 
 			for _, childSnapName := range childrenList {
 				c.Assert(snap.Children[childSnapName], Equals, true)
