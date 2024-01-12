@@ -150,7 +150,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap, localR
 	e.ReplicaAddressMap = replicaAddressMap
 	e.log = e.log.WithField("replicaAddressMap", replicaAddressMap)
 
-	e.updateInfoFromReplica()
+	e.CheckAndUpdateInfoFromReplica()
 
 	e.log.Info("Launching RAID during engine creation")
 	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
@@ -523,66 +523,101 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		// TODO: should we delete the engine automatically here?
 	}
 
-	e.updateInfoFromReplica()
+	e.CheckAndUpdateInfoFromReplica()
 
 	return nil
 }
 
-func (e *Engine) updateInfoFromReplica() {
+func (e *Engine) CheckAndUpdateInfoFromReplica() {
 	replicaMap := map[string]*api.Replica{}
-	replicaAncestorSnapshotMap := map[string]string{}
-	ancestorSnapshotCounterMap := map[string]int{}
+	replicaAncestorMap := map[string]*api.Lvol{}
+	//hasBackingImage := false
+	hasSnapshot := false
 	for replicaName, address := range e.ReplicaAddressMap {
 		if e.ReplicaModeMap[replicaName] != types.ModeRW {
 			continue
 		}
 		replicaServiceCli, err := GetServiceClient(address)
 		if err != nil {
-			e.log.WithError(err).Warnf("failed to get service client for replica %s with address %s, will skip this replica and continue the sync-up", replicaName, address)
+			e.log.WithError(err).Warnf("failed to get service client for replica %s with address %s, will skip this replica and continue info update from replica", replicaName, address)
 			continue
 		}
 		replica, err := replicaServiceCli.ReplicaGet(replicaName)
 		if err != nil {
-			e.log.WithError(err).Warnf("failed to get replica %s with address %s, will skip this replica and continue the sync-up", replicaName, address)
+			e.log.WithError(err).Warnf("failed to get replica %s with address %s, will skip this replica and continue info update from replica", replicaName, address)
+			continue
+		}
+
+		// The ancestor check sequence: the backing image, then the oldest snapshot, finally head
+		// TODO: Check the backing image first
+
+		//if replica.BackingImage != nil {
+		//	hasBackingImage = true
+		//	replicaAncestorMap[replicaName] = replica.BackingImage
+		//} else
+		if len(replica.Snapshots) != 0 {
+			//if hasBackingImage {
+			//	e.log.Warnf("Found replica %s does not have a backing image while other replicas have during info update from replica", replicaName)
+			//} else {}
+			hasSnapshot = true
+			for snapshotName, snapApiLvol := range replica.Snapshots {
+				if snapApiLvol.Parent == "" {
+					replicaAncestorMap[replicaName] = replica.Snapshots[snapshotName]
+					break
+				}
+			}
+		} else {
+			if hasSnapshot {
+				e.log.Warnf("Found replica %s does not have a snapshot while other replicas have during info update from replica", replicaName)
+			} else {
+				replicaAncestorMap[replicaName] = replica.Head
+			}
+		}
+		if replicaAncestorMap[replicaName] == nil {
+			e.log.Warnf("Cannot find replica %s ancestor, will skip this replica and continue info update from replica", replicaName)
 			continue
 		}
 		replicaMap[replicaName] = replica
-		for snapshotName, snapApiLvol := range replica.Snapshots {
-			if snapApiLvol.Parent == "" || replica.Snapshots[snapApiLvol.Parent] == nil {
-				replicaAncestorSnapshotMap[replicaName] = snapshotName
-				ancestorSnapshotCounterMap[snapshotName] += 1
-				break
+	}
+
+	// If there are multiple candidates, the priority is:
+	//  1. the earliest backing image if one replica contains a backing image
+	//  2. the earliest snapshot if one replica contains a snapshot
+	//  3. the earliest volume head
+	candidateReplicaName := ""
+	earliestCreationTime := time.Now()
+	for replicaName, ancestorApiLvol := range replicaAncestorMap {
+		//if hasBackingImage {
+		//	if ancestorApiLvol.Name == types.VolumeHead || IsReplicaSnapshotLvol(replicaName, ancestorApiLvol.Name) {
+		//		continue
+		//	}
+		//} else
+		if hasSnapshot {
+			if ancestorApiLvol.Name == types.VolumeHead {
+				continue
+			}
+		} else {
+			if ancestorApiLvol.Name != types.VolumeHead {
+				continue
 			}
 		}
-	}
 
-	ancestorCount := 0
-	ancestorSnapshotName := ""
-	for snapshotName, cnt := range ancestorSnapshotCounterMap {
-		if ancestorCount < cnt {
-			ancestorSnapshotName = snapshotName
-		}
-	}
-	if len(ancestorSnapshotCounterMap) > 1 {
-		e.log.Errorf("BUG: Found the ancestor snapshot is different among RW replicas, will pick up ancestor snapshot %s hold by most of the replicas and continue the sync-up: %+v", ancestorSnapshotName, replicaAncestorSnapshotMap)
-	}
-
-	earliestCreationTime := time.Now()
-	e.ActualSize = 0
-	for replicaName, replica := range replicaMap {
-		if replica.Snapshots[ancestorSnapshotName] == nil {
-			continue
-		}
-		ancestorCreationTime, err := time.Parse(time.RFC3339, replica.Snapshots[ancestorSnapshotName].CreationTime)
+		creationTime, err := time.Parse(time.RFC3339, ancestorApiLvol.CreationTime)
 		if err != nil {
-			e.log.WithError(err).Warnf("failed to parse replica %s ancestor snapshot creation time %s, will skip this replica and continue the sync-up", replicaName, replica.Snapshots[ancestorSnapshotName].CreationTime)
+			e.log.WithError(err).Warnf("Failed to parse replica %s ancestor creation time, will skip this replica and continue info update from replica: %+v", replicaName, ancestorApiLvol)
 			continue
 		}
-		// Pick up the snapshot map that contains the earliest creation time then cache it in engine
-		if earliestCreationTime.After(ancestorCreationTime) {
-			e.SnapshotMap = replica.Snapshots
-			e.Head = replica.Head
-			e.ActualSize = replica.ActualSize
+		if earliestCreationTime.After(creationTime) {
+			earliestCreationTime = creationTime
+			e.SnapshotMap = replicaMap[replicaName].Snapshots
+			e.Head = replicaMap[replicaName].Head
+			e.ActualSize = replicaMap[replicaName].ActualSize
+			if candidateReplicaName != replicaName {
+				if candidateReplicaName != "" {
+					e.log.Warnf("Comparing with replica %s ancestor %s, replica %s has a different and earlier ancestor %s, will update info from this replica", candidateReplicaName, replicaAncestorMap[candidateReplicaName].Name, replicaName, ancestorApiLvol.Name)
+				}
+				candidateReplicaName = replicaName
+			}
 		}
 	}
 }
@@ -1108,7 +1143,7 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 		return "", err
 	}
 
-	e.updateInfoFromReplica()
+	e.CheckAndUpdateInfoFromReplica()
 
 	e.log.Infof("Engine finished snapshot %s for %v", snapshotOp, snapshotName)
 
