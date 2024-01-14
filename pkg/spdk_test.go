@@ -221,12 +221,20 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
 			c.Assert(replica1.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica1.PortStart, Not(Equals), int32(0))
+			c.Assert(replica1.Head, NotNil)
+			c.Assert(replica1.Head.UUID, Not(Equals), "")
+			c.Assert(replica1.Head.CreationTime, Not(Equals), "")
+			c.Assert(replica1.Head.Parent, Equals, "")
 			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
 			c.Assert(err, IsNil)
 			c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
 			c.Assert(replica2.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica2.PortStart, Not(Equals), int32(0))
+			c.Assert(replica2.Head, NotNil)
+			c.Assert(replica2.Head.UUID, Not(Equals), "")
+			c.Assert(replica2.Head.CreationTime, Not(Equals), "")
+			c.Assert(replica2.Head.Parent, Equals, "")
 
 			replicaAddressMap := map[string]string{
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
@@ -362,6 +370,10 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica3.LvsUUID, Equals, disk.Uuid)
 			c.Assert(replica3.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica3.PortStart, Not(Equals), int32(0))
+			c.Assert(replica3.Head, NotNil)
+			c.Assert(replica3.Head.UUID, Not(Equals), "")
+			c.Assert(replica3.Head.CreationTime, Not(Equals), "")
+			c.Assert(replica3.Head.Parent, Equals, "")
 
 			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))))
 			c.Assert(err, IsNil)

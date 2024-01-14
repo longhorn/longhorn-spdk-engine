@@ -398,7 +398,7 @@ func compareSvcLvols(prev, cur *Lvol, checkChildren, checkActualSize bool) error
 	if cur == nil {
 		return fmt.Errorf("cannot find the corresponding cur lvol")
 	}
-	if prev.Name != cur.Name || prev.UUID != cur.UUID || prev.SpecSize != cur.SpecSize || prev.Parent != cur.Parent || len(prev.Children) != len(cur.Children) {
+	if prev.Name != cur.Name || prev.UUID != cur.UUID || prev.CreationTime != cur.CreationTime || prev.SpecSize != cur.SpecSize || prev.Parent != cur.Parent || len(prev.Children) != len(cur.Children) {
 		return fmt.Errorf("found mismatching lvol %+v with recorded prev lvol %+v", cur, prev)
 	}
 	if checkChildren {
@@ -626,6 +626,8 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, exposeRequired bool, por
 			return nil, fmt.Errorf("cannot find lvol %v after creation", r.Alias)
 		}
 		headSvcLvol.UUID = bdevLvolList[0].UUID
+		headSvcLvol.CreationTime = bdevLvolList[0].CreationTime
+		headSvcLvol.ActualSize = bdevLvolList[0].DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
 		r.State = types.InstanceStateStopped
 	}
 
