@@ -510,14 +510,27 @@ func constructSnapshotLvolMap(replicaName string, bdevLvolMap map[string]*spdkty
 
 // constructActiveChainFromSnapshotLvolMap retrieves the chain bottom up (from the head to the ancestor snapshot/backing image).
 func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap map[string]*Lvol, bdevLvolMap map[string]*spdktypes.BdevInfo) (res []*Lvol, err error) {
-	newChain := []*Lvol{}
-
 	headBdevLvol := bdevLvolMap[replicaName]
 	if headBdevLvol == nil {
 		return nil, fmt.Errorf("found nil head bdev lvol for replica %s", replicaName)
 	}
-	headSvcLvol := BdevLvolInfoToServiceLvol(headBdevLvol)
-	newChain = append(newChain, headSvcLvol)
+
+	var headSvcLvol *Lvol
+	headParentSnapshotName := headBdevLvol.DriverSpecific.Lvol.BaseSnapshot
+	if IsReplicaSnapshotLvol(replicaName, headParentSnapshotName) {
+		headParentSnapSvcLvol := snapshotLvolMap[headParentSnapshotName]
+		if headParentSnapSvcLvol == nil {
+			fmt.Errorf("cannot find the parent snapshot %s of the head for replica %s", headParentSnapshotName, replicaName)
+		}
+		headSvcLvol = headParentSnapSvcLvol.Children[replicaName]
+	} else { // The parent of the head is nil or a backing image
+		headSvcLvol = BdevLvolInfoToServiceLvol(headBdevLvol)
+	}
+	if headSvcLvol == nil {
+		return nil, fmt.Errorf("found nil head svc lvol for replica %s", replicaName)
+	}
+
+	newChain := []*Lvol{headSvcLvol}
 	// TODO: Considering the clone, this function or `constructSnapshotMap` may need to construct the children map for the head
 
 	// Build the majority of the chain with `snapshotMap` so that it does not need to worry about the snap svc lvol children map maintenance.
