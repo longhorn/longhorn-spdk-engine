@@ -531,7 +531,7 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 func (e *Engine) CheckAndUpdateInfoFromReplica() {
 	replicaMap := map[string]*api.Replica{}
 	replicaAncestorMap := map[string]*api.Lvol{}
-	//hasBackingImage := false
+	// hasBackingImage := false
 	hasSnapshot := false
 	for replicaName, address := range e.ReplicaAddressMap {
 		if e.ReplicaModeMap[replicaName] != types.ModeRW {
@@ -551,14 +551,14 @@ func (e *Engine) CheckAndUpdateInfoFromReplica() {
 		// The ancestor check sequence: the backing image, then the oldest snapshot, finally head
 		// TODO: Check the backing image first
 
-		//if replica.BackingImage != nil {
+		// if replica.BackingImage != nil {
 		//	hasBackingImage = true
 		//	replicaAncestorMap[replicaName] = replica.BackingImage
-		//} else
+		// } else
 		if len(replica.Snapshots) != 0 {
-			//if hasBackingImage {
+			// if hasBackingImage {
 			//	e.log.Warnf("Found replica %s does not have a backing image while other replicas have during info update from replica", replicaName)
-			//} else {}
+			// } else {}
 			hasSnapshot = true
 			for snapshotName, snapApiLvol := range replica.Snapshots {
 				if snapApiLvol.Parent == "" {
@@ -587,11 +587,11 @@ func (e *Engine) CheckAndUpdateInfoFromReplica() {
 	candidateReplicaName := ""
 	earliestCreationTime := time.Now()
 	for replicaName, ancestorApiLvol := range replicaAncestorMap {
-		//if hasBackingImage {
+		// if hasBackingImage {
 		//	if ancestorApiLvol.Name == types.VolumeHead || IsReplicaSnapshotLvol(replicaName, ancestorApiLvol.Name) {
 		//		continue
 		//	}
-		//} else
+		// } else
 		if hasSnapshot {
 			if ancestorApiLvol.Name == types.VolumeHead {
 				continue
@@ -1179,6 +1179,16 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 			}
 			if e.ReplicaModeMap[replicaName] == types.ModeWO {
 				return "", fmt.Errorf("engine %s contains WO replica %s during snapshot %s delete", e.Name, replicaName, snapshotName)
+			}
+			e.CheckAndUpdateInfoFromReplica()
+			if len(e.SnapshotMap[snapshotName].Children) > 1 {
+				return "", fmt.Errorf("engine %s cannot delete snapshot %s since it contains multiple children %+v", e.Name, snapshotName, e.SnapshotMap[snapshotName].Children)
+			}
+			// TODO: SPDK allows deleting the parent of the volume head. To make the behavior consistent between v1 and v2 engines, we manually disable if for now.
+			for childName := range e.SnapshotMap[snapshotName].Children {
+				if childName == types.VolumeHead {
+					return "", fmt.Errorf("engine %s cannot delete snapshot %s since it is the parent of volume head", e.Name, snapshotName)
+				}
 			}
 		case SnapshotOperationRevert:
 			if snapshotName == "" {
