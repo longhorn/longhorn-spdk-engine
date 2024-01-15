@@ -222,7 +222,6 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica1.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica1.PortStart, Not(Equals), int32(0))
 			c.Assert(replica1.Head, NotNil)
-			c.Assert(replica1.Head.UUID, Not(Equals), "")
 			c.Assert(replica1.Head.CreationTime, Not(Equals), "")
 			c.Assert(replica1.Head.Parent, Equals, "")
 			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
@@ -232,7 +231,6 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica2.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica2.PortStart, Not(Equals), int32(0))
 			c.Assert(replica2.Head, NotNil)
-			c.Assert(replica2.Head.UUID, Not(Equals), "")
 			c.Assert(replica2.Head.CreationTime, Not(Equals), "")
 			c.Assert(replica2.Head.Parent, Equals, "")
 
@@ -280,7 +278,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 					snapshotName2: {types.VolumeHead},
 				})
 
-			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName2)
+			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName1)
 			c.Assert(err, IsNil)
 
 			// Detach and re-attach the volume
@@ -328,7 +326,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			// Check both replica snapshot map after the snapshot deletion and volume re-attachment
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
-					snapshotName1: {types.VolumeHead},
+					snapshotName2: {types.VolumeHead},
 				})
 
 			// Data keeps intact after the snapshot deletion and volume re-attachment
@@ -371,7 +369,6 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica3.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica3.PortStart, Not(Equals), int32(0))
 			c.Assert(replica3.Head, NotNil)
-			c.Assert(replica3.Head.UUID, Not(Equals), "")
 			c.Assert(replica3.Head.CreationTime, Not(Equals), "")
 			c.Assert(replica3.Head.Parent, Equals, "")
 
@@ -655,11 +652,15 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName22)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName23)
+			c.Assert(strings.Contains(err.Error(), "since it is the parent of volume head"), Equals, true)
 
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName12)
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName14)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName13)
+			c.Assert(strings.Contains(err.Error(), "since it contains multiple children"), Equals, true)
 
 			// Current snapshot tree (with backing image):
 			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50]
