@@ -613,7 +613,7 @@ func (e *Engine) CheckAndUpdateInfoFromReplica() {
 			e.Head = replicaMap[replicaName].Head
 			e.ActualSize = replicaMap[replicaName].ActualSize
 			if candidateReplicaName != replicaName {
-				if candidateReplicaName != "" {
+				if candidateReplicaName != "" && replicaAncestorMap[candidateReplicaName].Name != ancestorApiLvol.Name {
 					e.log.Warnf("Comparing with replica %s ancestor %s, replica %s has a different and earlier ancestor %s, will update info from this replica", candidateReplicaName, replicaAncestorMap[candidateReplicaName].Name, replicaName, ancestorApiLvol.Name)
 				}
 				candidateReplicaName = replicaName
