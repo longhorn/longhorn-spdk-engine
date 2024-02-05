@@ -6,6 +6,16 @@ import (
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 )
 
+type Xattr struct {
+	Name  string
+	Value string
+}
+
+const (
+	UserCreated       = "user_created"
+	SnapshotTimestamp = "snapshot_timestamp"
+)
+
 // BdevGetBdevs get information about block devices (bdevs).
 //
 //	"name": Optional. If this is not specified, the function will list all block devices.
@@ -255,6 +265,17 @@ func (c *Client) BdevLvolGet(name string, timeout uint64) (bdevLvolInfoList []sp
 		if spdktypes.GetBdevType(&b) != spdktypes.BdevTypeLvol {
 			continue
 		}
+
+		b.DriverSpecific.Lvol.Xattrs = make(map[string]string)
+		user_created, err := c.BdevLvolGetXattr(name, UserCreated)
+		if err == nil {
+			b.DriverSpecific.Lvol.Xattrs[UserCreated] = user_created
+		}
+		snapshot_timestamp, err := c.BdevLvolGetXattr(name, SnapshotTimestamp)
+		if err == nil {
+			b.DriverSpecific.Lvol.Xattrs[SnapshotTimestamp] = snapshot_timestamp
+		}
+
 		bdevLvolInfoList = append(bdevLvolInfoList, b)
 	}
 
@@ -266,10 +287,15 @@ func (c *Client) BdevLvolGet(name string, timeout uint64) (bdevLvolInfoList []sp
 //	"name": Required. UUID or alias of the logical volume to create a snapshot from. The alias of a lvol is <LVSTORE NAME>/<LVOL NAME>.
 //
 //	"snapshotName": Required. the logical volume name for the newly created snapshot.
-func (c *Client) BdevLvolSnapshot(name, snapshotName string) (uuid string, err error) {
+func (c *Client) BdevLvolSnapshot(name, snapshotName string, xattrs []Xattr) (uuid string, err error) {
 	req := spdktypes.BdevLvolSnapshotRequest{
 		LvolName:     name,
 		SnapshotName: snapshotName,
+	}
+
+	req.Xattrs = make(map[string]string)
+	for _, s := range xattrs {
+		req.Xattrs[s.Name] = s.Value
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("bdev_lvol_snapshot", req)

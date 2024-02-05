@@ -451,7 +451,7 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.Snapsho
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during snapshot create", req.Name)
 	}
 
-	return r.SnapshotCreate(spdkClient, req.SnapshotName)
+	return r.SnapshotCreate(spdkClient, req.SnapshotName, &api.SnapshotOptions{UserCreated: req.UserCreated})
 }
 
 func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *emptypb.Empty, err error) {
@@ -893,7 +893,11 @@ func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.Snapshot
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot creation", req.Name)
 	}
 
-	snapshotName, err := e.SnapshotCreate(spdkClient, req.SnapshotName)
+	opts := api.SnapshotOptions{
+		UserCreated: req.UserCreated,
+	}
+
+	snapshotName, err := e.SnapshotCreate(spdkClient, req.SnapshotName, &opts)
 	return &spdkrpc.SnapshotResponse{SnapshotName: snapshotName}, err
 }
 
