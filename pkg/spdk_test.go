@@ -159,6 +159,8 @@ func CleanupDiskFile(c *C, loopDevicePath string) {
 func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	fmt.Println("Testing SPDK basic operations with multiple threads")
 
+	diskDriverName := "aio"
+
 	ip, err := commonNet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
 	os.Setenv(commonNet.EnvPodIP, ip)
@@ -178,13 +180,13 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
 
-	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, int64(defaultTestBlockSize))
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
 	c.Assert(disk.Path, Equals, loopDevicePath)
 	c.Assert(disk.Uuid, Not(Equals), "")
 
 	defer func() {
-		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid)
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, diskDriverName)
 		c.Assert(err, IsNil)
 	}()
 
@@ -422,6 +424,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 	fmt.Println("Testing SPDK snapshot operations with multiple threads")
+	diskDriverName := "aio"
 
 	ip, err := commonNet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
@@ -442,13 +445,13 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
 
-	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, int64(defaultTestBlockSize))
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
 	c.Assert(disk.Path, Equals, loopDevicePath)
 	c.Assert(disk.Uuid, Not(Equals), "")
 
 	defer func() {
-		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid)
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, diskDriverName)
 		c.Assert(err, IsNil)
 	}()
 

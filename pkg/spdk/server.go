@@ -1176,7 +1176,7 @@ func (s *Server) DiskCreate(ctx context.Context, req *spdkrpc.DiskCreateRequest)
 	spdkClient := s.spdkClient
 	s.RUnlock()
 
-	return svcDiskCreate(spdkClient, req.DiskName, req.DiskUuid, req.DiskPath, req.BlockSize)
+	return svcDiskCreate(spdkClient, req.DiskName, req.DiskUuid, req.DiskPath, req.DiskDriver, req.BlockSize)
 }
 
 func (s *Server) DiskDelete(ctx context.Context, req *spdkrpc.DiskDeleteRequest) (ret *emptypb.Empty, err error) {
@@ -1184,7 +1184,7 @@ func (s *Server) DiskDelete(ctx context.Context, req *spdkrpc.DiskDeleteRequest)
 	spdkClient := s.spdkClient
 	s.RUnlock()
 
-	return svcDiskDelete(spdkClient, req.DiskName, req.DiskUuid)
+	return svcDiskDelete(spdkClient, req.DiskName, req.DiskUuid, req.DiskDriver)
 }
 
 func (s *Server) DiskGet(ctx context.Context, req *spdkrpc.DiskGetRequest) (ret *spdkrpc.Disk, err error) {
@@ -1192,7 +1192,7 @@ func (s *Server) DiskGet(ctx context.Context, req *spdkrpc.DiskGetRequest) (ret 
 	spdkClient := s.spdkClient
 	s.RUnlock()
 
-	return svcDiskGet(spdkClient, req.DiskName)
+	return svcDiskGet(spdkClient, req.DiskName, req.DiskPath, req.DiskDriver)
 }
 
 func (s *Server) VersionDetailGet(context.Context, *emptypb.Empty) (*spdkrpc.VersionDetailGetReply, error) {

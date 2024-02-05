@@ -682,7 +682,7 @@ func (c *SPDKClient) ReplicaRestoreStatus(replicaName string) (*spdkrpc.ReplicaR
 
 // DiskCreate creates a disk with the given name and path.
 // diskUUID is optional, if not provided, it indicates the disk is newly added.
-func (c *SPDKClient) DiskCreate(diskName, diskUUID, diskPath string, blockSize int64) (*spdkrpc.Disk, error) {
+func (c *SPDKClient) DiskCreate(diskName, diskUUID, diskPath, diskDriver string, blockSize int64) (*spdkrpc.Disk, error) {
 	if diskName == "" || diskPath == "" {
 		return nil, fmt.Errorf("failed to create disk: missing required parameters")
 	}
@@ -692,14 +692,15 @@ func (c *SPDKClient) DiskCreate(diskName, diskUUID, diskPath string, blockSize i
 	defer cancel()
 
 	return client.DiskCreate(ctx, &spdkrpc.DiskCreateRequest{
-		DiskName:  diskName,
-		DiskUuid:  diskUUID,
-		DiskPath:  diskPath,
-		BlockSize: blockSize,
+		DiskName:   diskName,
+		DiskUuid:   diskUUID,
+		DiskPath:   diskPath,
+		BlockSize:  blockSize,
+		DiskDriver: diskDriver,
 	})
 }
 
-func (c *SPDKClient) DiskGet(diskName string) (*spdkrpc.Disk, error) {
+func (c *SPDKClient) DiskGet(diskName, diskPath, diskDriver string) (*spdkrpc.Disk, error) {
 	if diskName == "" {
 		return nil, fmt.Errorf("failed to get disk info: missing required parameter")
 	}
@@ -709,11 +710,13 @@ func (c *SPDKClient) DiskGet(diskName string) (*spdkrpc.Disk, error) {
 	defer cancel()
 
 	return client.DiskGet(ctx, &spdkrpc.DiskGetRequest{
-		DiskName: diskName,
+		DiskName:   diskName,
+		DiskPath:   diskPath,
+		DiskDriver: diskDriver,
 	})
 }
 
-func (c *SPDKClient) DiskDelete(diskName, diskUUID string) error {
+func (c *SPDKClient) DiskDelete(diskName, diskUUID, diskDriver string) error {
 	if diskName == "" || diskUUID == "" {
 		return fmt.Errorf("failed to delete disk: missing required parameters")
 	}
@@ -723,8 +726,9 @@ func (c *SPDKClient) DiskDelete(diskName, diskUUID string) error {
 	defer cancel()
 
 	_, err := client.DiskDelete(ctx, &spdkrpc.DiskDeleteRequest{
-		DiskName: diskName,
-		DiskUuid: diskUUID,
+		DiskName:   diskName,
+		DiskUuid:   diskUUID,
+		DiskDriver: diskDriver,
 	})
 	return err
 }
