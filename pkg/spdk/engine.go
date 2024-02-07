@@ -49,6 +49,7 @@ type Engine struct {
 	Nqn                string
 	Nguid              string
 
+	initiator    *nvme.Initiator
 	dmDeviceBusy bool
 
 	State    types.InstanceState
@@ -372,7 +373,7 @@ func (e *Engine) handleFrontend(spdkClient *spdkclient.Client, portCount int32, 
 		}
 		//dmDeviceBusy = true
 	}
-
+	e.initiator = initiator
 	e.dmDeviceBusy = dmDeviceBusy
 	e.Endpoint = initiator.GetEndpoint()
 
@@ -419,12 +420,11 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *ut
 	if e.Endpoint != "" {
 		nqn := helpertypes.GetNQN(e.Name)
 
-		initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
-		if err != nil {
-			return err
-		}
-		if _, err := initiator.Stop(true, true, true); err != nil {
-			return err
+		if e.initiator != nil {
+			if _, err := e.initiator.Stop(true, true, true); err != nil {
+				return err
+			}
+			e.initiator = nil
 		}
 
 		if err := spdkClient.StopExposeBdev(nqn); err != nil {
@@ -800,11 +800,14 @@ func (e *Engine) validateAndUpdateFrontend(subsystemMap map[string]*spdktypes.Nv
 
 	switch e.Frontend {
 	case types.FrontendSPDKTCPBlockdev:
-		initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
-		if err != nil {
-			return err
+		if e.initiator == nil {
+			initiator, err := nvme.NewInitiator(e.VolumeName, nqn, nvme.HostProc)
+			if err != nil {
+				return err
+			}
+			e.initiator = initiator
 		}
-		if err := initiator.LoadNVMeDeviceInfo(initiator.TransportAddress, initiator.TransportServiceID, initiator.SubsystemNQN); err != nil {
+		if err := e.initiator.LoadNVMeDeviceInfo(e.initiator.TransportAddress, e.initiator.TransportServiceID, e.initiator.SubsystemNQN); err != nil {
 			if strings.Contains(err.Error(), "connecting state") ||
 				strings.Contains(err.Error(), "resetting state") {
 				e.log.WithError(err).Warnf("Ignored to validate and update engine %v, because the device is still in a transient state", e.Name)
@@ -812,10 +815,10 @@ func (e *Engine) validateAndUpdateFrontend(subsystemMap map[string]*spdktypes.Nv
 			}
 			return err
 		}
-		if err := initiator.LoadEndpoint(e.dmDeviceBusy); err != nil {
+		if err := e.initiator.LoadEndpoint(e.dmDeviceBusy); err != nil {
 			return err
 		}
-		blockDevEndpoint := initiator.GetEndpoint()
+		blockDevEndpoint := e.initiator.GetEndpoint()
 		if e.Endpoint == "" {
 			e.Endpoint = blockDevEndpoint
 		}
