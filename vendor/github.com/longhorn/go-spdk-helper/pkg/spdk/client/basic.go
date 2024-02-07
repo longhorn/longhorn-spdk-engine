@@ -3,7 +3,19 @@ package client
 import (
 	"encoding/json"
 
+	"github.com/pkg/errors"
+
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
+)
+
+type Xattr struct {
+	Name  string
+	Value string
+}
+
+const (
+	UserCreated       = "user_created"
+	SnapshotTimestamp = "snapshot_timestamp"
 )
 
 // BdevGetBdevs get information about block devices (bdevs).
@@ -255,6 +267,17 @@ func (c *Client) BdevLvolGet(name string, timeout uint64) (bdevLvolInfoList []sp
 		if spdktypes.GetBdevType(&b) != spdktypes.BdevTypeLvol {
 			continue
 		}
+
+		b.DriverSpecific.Lvol.Xattrs = make(map[string]string)
+		user_created, err := c.BdevLvolGetXattr(name, UserCreated)
+		if err == nil {
+			b.DriverSpecific.Lvol.Xattrs[UserCreated] = user_created
+		}
+		snapshot_timestamp, err := c.BdevLvolGetXattr(name, SnapshotTimestamp)
+		if err == nil {
+			b.DriverSpecific.Lvol.Xattrs[SnapshotTimestamp] = snapshot_timestamp
+		}
+
 		bdevLvolInfoList = append(bdevLvolInfoList, b)
 	}
 
@@ -266,10 +289,15 @@ func (c *Client) BdevLvolGet(name string, timeout uint64) (bdevLvolInfoList []sp
 //	"name": Required. UUID or alias of the logical volume to create a snapshot from. The alias of a lvol is <LVSTORE NAME>/<LVOL NAME>.
 //
 //	"snapshotName": Required. the logical volume name for the newly created snapshot.
-func (c *Client) BdevLvolSnapshot(name, snapshotName string) (uuid string, err error) {
+func (c *Client) BdevLvolSnapshot(name, snapshotName string, xattrs []Xattr) (uuid string, err error) {
 	req := spdktypes.BdevLvolSnapshotRequest{
 		LvolName:     name,
 		SnapshotName: snapshotName,
+	}
+
+	req.Xattrs = make(map[string]string)
+	for _, s := range xattrs {
+		req.Xattrs[s.Name] = s.Value
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("bdev_lvol_snapshot", req)
@@ -917,4 +945,41 @@ func (c *Client) NvmfSubsystemGetListeners(nqn, tgtName string) (listenerList []
 	}
 
 	return listenerList, json.Unmarshal(cmdOutput, &listenerList)
+}
+
+// BdevVirtioAttachController creates new initiator Virtio SCSI or Virtio Block and expose all found bdevs.
+func (c *Client) BdevVirtioAttachController(name, trtype, traddr, devType string) ([]string, error) {
+	req := spdktypes.BdevVirtioAttachControllerRequest{
+		Name:    name,
+		Trtype:  trtype,
+		Traddr:  traddr,
+		DevType: devType,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_virtio_attach_controller", req)
+	if err != nil {
+		return nil, err
+	}
+
+	var disks []string
+	err = json.Unmarshal([]byte(cmdOutput), &disks)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to unmarshal disks: %s", cmdOutput)
+	}
+
+	return disks, nil
+}
+
+// BdevVirtioDetachController removes a Virtio device.
+func (c *Client) BdevVirtioDetachController(name string) (deleted bool, err error) {
+	req := spdktypes.BdevVirtioDetachControllerRequest{
+		Name: name,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_virtio_detach_controller", req)
+	if err != nil {
+		return false, err
+	}
+
+	return deleted, json.Unmarshal(cmdOutput, &deleted)
 }

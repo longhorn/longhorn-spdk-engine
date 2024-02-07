@@ -53,3 +53,7 @@ require (
 	k8s.io/mount-utils v0.26.0 // indirect
 	k8s.io/utils v0.0.0-20221107191617-1a15be271d1d // indirect
 )
+
+replace github.com/longhorn/go-spdk-helper v0.0.0-20240117135122-26f8acb2a13d => github.com/derekbit/go-spdk-helper v0.0.0-20240207091434-c23d7ed7fade
+
+replace github.com/longhorn/go-common-libs v0.0.0-20240103081802-3993c5908447 => github.com/derekbit/go-common-libs v0.0.0-20240207042018-b592223bef9f
