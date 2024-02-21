@@ -63,7 +63,7 @@ func GetSPDKDir() string {
 	return filepath.Join(os.Getenv("GOPATH"), "src/github.com/longhorn/spdk")
 }
 
-func LaunchTestSPDKTarget(c *C, execute func(name string, args []string, timeout time.Duration) (string, error)) {
+func LaunchTestSPDKTarget(c *C, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error)) {
 	targetReady := false
 	if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
 		if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
@@ -91,7 +91,7 @@ func LaunchTestSPDKTarget(c *C, execute func(name string, args []string, timeout
 	c.Assert(targetReady, Equals, true)
 }
 
-func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(name string, args []string, timeout time.Duration) (string, error)) {
+func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error)) {
 	LaunchTestSPDKTarget(c, execute)
 	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort)
 	c.Assert(err, IsNil)
@@ -132,13 +132,13 @@ func PrepareDiskFile(c *C) string {
 
 	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	output, err := ne.Execute("losetup", []string{"-f"}, defaultTestExecuteTimeout)
+	output, err := ne.Execute(nil, "losetup", []string{"-f"}, defaultTestExecuteTimeout)
 	c.Assert(err, IsNil)
 
 	loopDevicePath := strings.TrimSpace(output)
 	c.Assert(loopDevicePath, Not(Equals), "")
 
-	_, err = ne.Execute("losetup", []string{loopDevicePath, defaultTestDiskPath}, defaultTestExecuteTimeout)
+	_, err = ne.Execute(nil, "losetup", []string{loopDevicePath, defaultTestDiskPath}, defaultTestExecuteTimeout)
 	c.Assert(err, IsNil)
 
 	return loopDevicePath
@@ -152,7 +152,7 @@ func CleanupDiskFile(c *C, loopDevicePath string) {
 
 	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	_, err = ne.Execute("losetup", []string{"-d", loopDevicePath}, time.Second)
+	_, err = ne.Execute(nil, "losetup", []string{"-d", loopDevicePath}, time.Second)
 	c.Assert(err, IsNil)
 }
 
@@ -251,7 +251,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(engine.Port, Not(Equals), int32(0))
 			c.Assert(engine.Endpoint, Equals, endpoint)
 
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), "seek=0", "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), "seek=0", "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore1, err := util.GetFileChunkChecksum(endpoint, 0, 100*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -261,7 +261,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName1)
 			c.Assert(err, IsNil)
 
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), "seek=200", "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), "seek=200", "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore2, err := util.GetFileChunkChecksum(endpoint, 200*helpertypes.MiB, 100*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -510,7 +510,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(engine.Endpoint, Equals, endpoint)
 
 			offsetInMB := int64(0)
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore11, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -520,7 +520,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 
 			offsetInMB = dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore12, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -530,7 +530,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore13, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -540,7 +540,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 
 			offsetInMB = 3 * dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore14, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -550,7 +550,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 
 			offsetInMB = 4 * dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore15, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -564,7 +564,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 
 			// Write some extra data into the current head before reverting. This part of data will be discarded after revert
 			offsetInMB = 5 * dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore16, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -601,7 +601,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(cksumAfter14, Not(Equals), cksumBefore14)
 
 			offsetInMB = 3 * dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore21, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -611,7 +611,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 
 			offsetInMB = 4 * dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore22, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -621,7 +621,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 
 			offsetInMB = 5 * dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore23, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -709,7 +709,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 
 			// Create and delete some snapshots for the new chain (chain 3)
 			offsetInMB = dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore31, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -719,7 +719,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(err, IsNil)
 
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore32, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -766,7 +766,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 
 			// Create some snapshots for the new chain (chain 4)
 			offsetInMB = dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore41, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -775,7 +775,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName41)
 			c.Assert(err, IsNil)
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute("dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			cksumBefore42, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
