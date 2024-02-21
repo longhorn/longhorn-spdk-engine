@@ -4,7 +4,6 @@ set -e
 cd "$(dirname $0)"/..
 
 ./generate_grpc.sh
-set +e
 
 echo Running proto validation
 
