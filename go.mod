@@ -6,9 +6,9 @@ require (
 	github.com/0xPolygon/polygon-edge v1.3.2
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/google/uuid v1.4.0
-	github.com/longhorn/backupstore v0.0.0-20240110081942-bd231cfb0c7b
+	github.com/longhorn/backupstore v0.0.0-20240219094812-3a87ee02df77
 	github.com/longhorn/go-common-libs v0.0.0-20240219094750-e7176c332156
-	github.com/longhorn/go-spdk-helper v0.0.0-20240219160403-5fe20e7f7542
+	github.com/longhorn/go-spdk-helper v0.0.0-20240222125115-a6f538717427
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
