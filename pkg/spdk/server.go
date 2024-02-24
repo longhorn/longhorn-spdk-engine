@@ -1140,6 +1140,21 @@ func (s *Server) EngineRestoreStatus(ctx context.Context, req *spdkrpc.RestoreSt
 	return resp, nil
 }
 
+func (s *Server) EngineVolumeResize(ctx context.Context, req *spdkrpc.EngineVolumeResizeRequest) (ret *emptypb.Empty, err error) {
+	s.RLock()
+	e := s.engineMap[req.EngineName]
+	s.RUnlock()
+
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for volume resize", req.EngineName)
+	}
+
+	if err := e.resizeVolume(s.spdkClient, req.Size); err != nil {
+		return nil, err
+	}
+	return &emptypb.Empty{}, nil
+}
+
 func (s *Server) ReplicaRestoreStatus(ctx context.Context, req *spdkrpc.ReplicaRestoreStatusRequest) (ret *spdkrpc.ReplicaRestoreStatusResponse, err error) {
 	s.RLock()
 	defer s.RUnlock()

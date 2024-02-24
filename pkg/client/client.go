@@ -539,6 +539,22 @@ func (c *SPDKClient) EngineReplicaDelete(engineName, replicaName, replicaAddress
 	return errors.Wrapf(err, "failed to delete replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
 }
 
+func (c *SPDKClient) EngineVolumeResize(engineName string, size uint64) error {
+	if engineName == "" {
+		return fmt.Errorf("failed to resize volume for SPDK engine: missing required parameter engine name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineVolumeResize(ctx, &spdkrpc.EngineVolumeResizeRequest{
+		EngineName: engineName,
+		Size:       size,
+	})
+	return errors.Wrapf(err, "failed to resize volume for engine %s", engineName)
+}
+
 func (c *SPDKClient) EngineBackupCreate(req *BackupCreateRequest) (*spdkrpc.BackupCreateResponse, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)

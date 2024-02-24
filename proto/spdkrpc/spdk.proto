@@ -45,6 +45,7 @@ service SPDKService {
     rpc EngineBackupRestore(EngineBackupRestoreRequest) returns (EngineBackupRestoreResponse) {}
     rpc EngineBackupRestoreFinish(EngineBackupRestoreFinishRequest) returns (google.protobuf.Empty) {}
     rpc EngineRestoreStatus(RestoreStatusRequest) returns (RestoreStatusResponse) {}
+    rpc EngineVolumeResize(EngineVolumeResizeRequest) returns (google.protobuf.Empty) {}
 
     rpc DiskCreate(DiskCreateRequest) returns (Disk);
     rpc DiskDelete(DiskDeleteRequest) returns (google.protobuf.Empty);
@@ -177,6 +178,11 @@ message EngineCreateRequest {
     map<string, string> replica_address_map = 4;
     string frontend = 5;
     int32 port_count = 6;
+}
+
+message EngineVolumeResizeRequest {
+    string engine_name = 1;
+    uint64 size = 2;
 }
 
 message EngineDeleteRequest {
