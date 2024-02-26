@@ -7,11 +7,20 @@ cd "$(dirname $0)"/..
 
 echo Running proto validation
 
-output=$(git diff --stat|grep -e '.pb.go' -e '_pb2.py' -e '_pb2_grpc.py')
-if [ $? -eq 0 ]
-then
-	echo $output
-	echo GRPC generated code is not up to date
+check_proto_generated_code() {
+	local output=$(git diff --stat | grep -q -e '.pb.go' -e '_pb2.py' -e '_pb2_grpc.py')
+	if [ -z "$output" ]; then
+		return 0
+	else
+		return 1
+    fi
+}
+
+check_proto_generated_code
+if [ $? -eq 0 ]; then
+	echo "GRPC generated code is up to date"
+else
+	echo "GRPC generated code is not up to date"
 	exit 1
 fi
 
