@@ -13,6 +13,16 @@ then
   exit 1
 fi
 
+modules=("uio_pci_generic" "nvme_tcp")
+for module in "${modules[@]}"
+do
+  if ! lsmod | grep -q $module
+  then
+    echo $module is not loaded
+    exit 1
+  fi
+done
+
 mount --rbind /host/dev /dev
 mount --rbind /host/sys /sys
 trap "umount /dev && umount /sys" EXIT
