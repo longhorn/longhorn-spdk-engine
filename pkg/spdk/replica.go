@@ -524,7 +524,7 @@ func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap
 	if IsReplicaSnapshotLvol(replicaName, headParentSnapshotName) {
 		headParentSnapSvcLvol := snapshotLvolMap[headParentSnapshotName]
 		if headParentSnapSvcLvol == nil {
-			fmt.Errorf("cannot find the parent snapshot %s of the head for replica %s", headParentSnapshotName, replicaName)
+			return nil, fmt.Errorf("cannot find the parent snapshot %s of the head for replica %s", headParentSnapshotName, replicaName)
 		}
 		headSvcLvol = headParentSnapSvcLvol.Children[replicaName]
 	} else { // The parent of the head is nil or a backing image
@@ -1627,6 +1627,7 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 	defer func() {
 		if err != nil {
 			// TODO: Support snapshot revert for incremental restore
+			logrus.Infof("Failed to start restore for backup %v, will cancel the restore", backupUrl)
 		}
 	}()
 
@@ -1640,7 +1641,12 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 		return fmt.Errorf("incremental restore is not supported yet")
 	}
 
-	go r.completeBackupRestore(spdkClient)
+	go func() {
+		err := r.completeBackupRestore(spdkClient)
+		if err != nil {
+			r.log.WithError(err).Error("Failed to complete backup restore")
+		}
+	}()
 
 	return nil
 
