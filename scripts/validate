@@ -3,19 +3,6 @@ set -e
 
 cd "$(dirname $0)"/..
 
-./generate_grpc.sh
-set +e
-
-echo Running proto validation
-
-output=$(git diff --stat|grep -e '.pb.go' -e '_pb2.py' -e '_pb2_grpc.py')
-if [ $? -eq 0 ]
-then
-	echo $output
-	echo GRPC generated code is not up to date
-	exit 1
-fi
-
 echo Running go validation
 
 PACKAGES="$(find . -name '*.go' -print0 | xargs -0 -I{} dirname {} |  cut -f2 -d/ | sort -u | grep -Ev '(^\.$|.git|.trash-cache|vendor|bin)' | sed -e 's!^!./!' -e 's!$!/...!')"

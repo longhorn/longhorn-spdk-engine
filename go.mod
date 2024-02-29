@@ -1,6 +1,6 @@
 module github.com/longhorn/longhorn-spdk-engine
 
-go 1.21
+go 1.21.7
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.2
@@ -9,6 +9,7 @@ require (
 	github.com/longhorn/backupstore v0.0.0-20240219094812-3a87ee02df77
 	github.com/longhorn/go-common-libs v0.0.0-20240219094750-e7176c332156
 	github.com/longhorn/go-spdk-helper v0.0.0-20240222125115-a6f538717427
+	github.com/longhorn/types v0.0.0-00010101000000-000000000000
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
@@ -53,3 +54,5 @@ require (
 	k8s.io/mount-utils v0.26.0 // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect
 )
+
+replace github.com/longhorn/types => github.com/FrankYang0529/types v0.0.0-20240229024041-25f1b5bbec5b
