@@ -7,13 +7,13 @@ require (
 	github.com/RoaringBitmap/roaring v1.9.0
 	github.com/google/uuid v1.6.0
 	github.com/longhorn/backupstore v0.0.0-20240219094812-3a87ee02df77
-	github.com/longhorn/go-common-libs v0.0.0-20240219094750-e7176c332156
-	github.com/longhorn/go-spdk-helper v0.0.0-20240222125115-a6f538717427
+	github.com/longhorn/go-common-libs v0.0.0-20240307063052-6e77996eda29
+	github.com/longhorn/go-spdk-helper v0.0.0-20240308030201-9b252d6f7250
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.22.0
-	google.golang.org/grpc v1.62.0
+	google.golang.org/grpc v1.62.1
 	google.golang.org/protobuf v1.33.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	k8s.io/apimachinery v0.29.2
@@ -43,13 +43,13 @@ require (
 	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.11.1 // indirect
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
-	github.com/shirou/gopsutil/v3 v3.23.7 // indirect
+	github.com/shirou/gopsutil/v3 v3.24.2 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
-	github.com/yusufpapurcu/wmi v1.2.3 // indirect
+	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/sys v0.18.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 // indirect
 	k8s.io/klog/v2 v2.110.1 // indirect
-	k8s.io/mount-utils v0.26.0 // indirect
+	k8s.io/mount-utils v0.29.2 // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect
 )
