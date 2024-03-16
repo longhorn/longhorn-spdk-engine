@@ -7,8 +7,8 @@ require (
 	github.com/RoaringBitmap/roaring v1.9.0
 	github.com/google/uuid v1.6.0
 	github.com/longhorn/backupstore v0.0.0-20240219094812-3a87ee02df77
-	github.com/longhorn/go-common-libs v0.0.0-20240307063052-6e77996eda29
-	github.com/longhorn/go-spdk-helper v0.0.0-20240308030201-9b252d6f7250
+	github.com/longhorn/go-common-libs v0.0.0-20240315062830-5aa0ac1dac62
+	github.com/longhorn/go-spdk-helper v0.0.0-20240315133419-fd71aaab4a11
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
@@ -16,7 +16,7 @@ require (
 	google.golang.org/grpc v1.62.1
 	google.golang.org/protobuf v1.33.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
-	k8s.io/apimachinery v0.29.2
+	k8s.io/apimachinery v0.29.3
 )
 
 require (
@@ -28,7 +28,7 @@ require (
 	github.com/gammazero/workerpool v1.1.2 // indirect
 	github.com/go-logr/logr v1.3.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/golang/protobuf v1.5.3 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/longhorn/nsfilelock v0.0.0-20200723175406-fa7c83ad0003 // indirect
