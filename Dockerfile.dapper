@@ -36,7 +36,7 @@ RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/i
 ENV HUGEMEM=1024
 RUN echo "vm.nr_hugepages=$((HUGEMEM/2))" >> /etc/sysctl.conf
 ENV SPDK_DIR /usr/src/spdk
-ENV SPDK_COMMIT_ID 086836c8d1ee2d622c86965dfb0245d966420309
+ENV SPDK_COMMIT_ID 880cd9cb41a47481e46743082057781e1063dd1c
 RUN git clone https://github.com/longhorn/spdk.git ${SPDK_DIR} --recursive && \
     cd ${SPDK_DIR} && \
     git checkout ${SPDK_COMMIT_ID} && \
