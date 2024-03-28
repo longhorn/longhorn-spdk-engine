@@ -24,7 +24,7 @@ RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/syste
     zypper --gpg-auto-import-keys ref
 
 RUN zypper -n install cmake curl wget git gcc unzip tar xsltproc docbook-xsl-stylesheets python3 meson ninja python3-pip \
-    e2fsprogs xfsprogs util-linux-systemd python3-pyelftools libcmocka-devel device-mapper
+    e2fsprogs xfsprogs util-linux-systemd python3-pyelftools libcmocka-devel device-mapper kmod
 
 # Install Go & tools
 ENV GOLANG_ARCH_amd64=amd64 GOLANG_ARCH_arm64=arm64 GOLANG_ARCH_s390x=s390x GOLANG_ARCH=GOLANG_ARCH_${ARCH} \

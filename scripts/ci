@@ -5,8 +5,4 @@ cd "$(dirname $0)"
 
 ./build
 ./validate
-
-# TODO Enable return error detection when the CI env is ready
-set +e
 ./test
-set -e
