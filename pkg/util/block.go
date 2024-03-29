@@ -1,8 +1,10 @@
 package util
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -41,17 +43,66 @@ func GetDevNameFromBDF(bdf string) (string, error) {
 	return "", fmt.Errorf("failed to find device for BDF %s", bdf)
 }
 
-func GetBlockDiskSubsystems(devPath string) ([]string, error) {
+type BlockDevice struct {
+	Name       string   `json:"name"`
+	Path       string   `json:"path"`
+	Subsystems []string `json:"subsystems"`
+	Maj        int      `json:"maj"`
+	Min        int      `json:"min"`
+}
+
+type BlockDevices struct {
+	BlockDevices []struct {
+		Name       string `json:"name"`
+		Path       string `json:"path"`
+		MajMin     string `json:"maj:min"`
+		Subsystems string `json:"subsystems"`
+	} `json:"blockdevices"`
+}
+
+func GetBlockDevice(devPath string) (BlockDevice, error) {
 	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create executor")
+		return BlockDevice{}, errors.Wrap(err, "failed to create executor")
 	}
 
-	cmdArgs := []string{"-n", "-d", "-o", "subsystems", devPath}
+	cmdArgs := []string{"-O", "-J", devPath}
 	output, err := ne.Execute(nil, "lsblk", cmdArgs, types.ExecuteTimeout)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get disk subsystems")
+		return BlockDevice{}, errors.Wrap(err, "failed to get disk subsystems")
 	}
 
-	return strings.Split(strings.TrimSpace(string(output)), ":"), nil
+	var blockDevices BlockDevices
+	err = json.Unmarshal([]byte(output), &blockDevices)
+	if err != nil {
+		return BlockDevice{}, err
+	}
+
+	if len(blockDevices.BlockDevices) == 0 {
+		return BlockDevice{}, fmt.Errorf("no blockdevices found")
+	}
+
+	bd := blockDevices.BlockDevices[0]
+	majMinParts := strings.Split(bd.MajMin, ":")
+	if len(majMinParts) != 2 {
+		return BlockDevice{}, fmt.Errorf("invalid maj:min format")
+	}
+	maj, err := strconv.Atoi(majMinParts[0])
+	if err != nil {
+		return BlockDevice{}, err
+	}
+	min, err := strconv.Atoi(majMinParts[1])
+	if err != nil {
+		return BlockDevice{}, err
+	}
+
+	subsystems := strings.Split(bd.Subsystems, ":")
+
+	return BlockDevice{
+		Name:       bd.Name,
+		Path:       bd.Path,
+		Subsystems: subsystems,
+		Maj:        maj,
+		Min:        min,
+	}, nil
 }
