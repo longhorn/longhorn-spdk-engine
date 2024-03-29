@@ -82,14 +82,14 @@ func getDriverForAuto(diskStatus *helpertypes.DiskStatus, diskPath string) (comm
 	case string(commonTypes.DiskDriverNvme):
 		return commonTypes.DiskDriverNvme, nil
 	case string(commonTypes.DiskDriverVirtioPci):
-		subsystems, err := util.GetBlockDiskSubsystems(diskPath)
+		blockdevice, err := util.GetBlockDevice(diskPath)
 		if err != nil {
-			return commonTypes.DiskDriverNone, errors.Wrapf(err, "failed to get disk subsystems for %s", diskPath)
+			return commonTypes.DiskDriverNone, errors.Wrapf(err, "failed to get blockdevice info for %s", diskPath)
 		}
 
-		if slices.Contains(subsystems, string(BlockDiskSubsystemVirtio)) && slices.Contains(subsystems, string(BlockDiskSubsystemPci)) {
+		if slices.Contains(blockdevice.Subsystems, string(BlockDiskSubsystemVirtio)) && slices.Contains(blockdevice.Subsystems, string(BlockDiskSubsystemPci)) {
 			diskDriver := commonTypes.DiskDriverVirtioBlk
-			if slices.Contains(subsystems, string(BlockDiskSubsystemScsi)) {
+			if slices.Contains(blockdevice.Subsystems, string(BlockDiskSubsystemScsi)) {
 				diskDriver = commonTypes.DiskDriverVirtioScsi
 			}
 			return diskDriver, nil
