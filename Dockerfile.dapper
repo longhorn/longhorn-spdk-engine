@@ -4,8 +4,6 @@ ARG DAPPER_HOST_ARCH=amd64
 ARG http_proxy
 ARG https_proxy
 ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
-ENV PROTOBUF_VER=24.3
-ENV PROTOBUF_VER_PY=4.24.3
 
 # Setup environment
 ENV PATH /go/bin:$PATH
@@ -86,31 +84,6 @@ ENV GRPC_HEALTH_PROBE_amd64=https://github.com/grpc-ecosystem/grpc-health-probe/
 
 RUN wget ${!GRPC_HEALTH_PROBE} -O /usr/local/bin/grpc_health_probe && \
     chmod +x /usr/local/bin/grpc_health_probe
-
-# protoc
-ENV PROTOC_amd64=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-x86_64.zip \
-    PROTOC_arm64=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-aarch_64.zip \
-    PROTOC_s390x=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VER}/protoc-${PROTOBUF_VER}-linux-s390_64.zip \
-    PROTOC=PROTOC_${ARCH}
-
-RUN cd /usr/src && \
-    wget ${!PROTOC} -O protoc_${ARCH}.zip && \
-    unzip protoc_${ARCH}.zip -d /usr/local/
-
-# protoc-gen-go
-RUN cd /go/src/github.com/ && \
-    mkdir golang/ && \
-    cd golang && \
-    git clone https://github.com/golang/protobuf.git && \
-    cd protobuf && \
-    git checkout v1.5.3 && \
-    cd protoc-gen-go && \
-    go build && \
-    cp protoc-gen-go /usr/local/bin
-
-# buf
-ENV GO111MODULE=on
-RUN go install github.com/bufbuild/buf/cmd/buf@v1.4.0
 
 # longhorn/go-spdk-helper binary for debugging
 ENV GO_SPDK_HELPER_DIR /usr/src/go-spdk-helper

@@ -23,13 +23,13 @@ import (
 	"github.com/longhorn/go-spdk-helper/pkg/spdk/target"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
+	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	server "github.com/longhorn/longhorn-spdk-engine/pkg/spdk"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
-	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 
 	. "gopkg.in/check.v1"
 )

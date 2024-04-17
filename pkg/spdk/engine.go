@@ -21,12 +21,12 @@ import (
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
+	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
-	"github.com/longhorn/longhorn-spdk-engine/proto/spdkrpc"
 )
 
 type Engine struct {
@@ -380,7 +380,7 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 	}
 
 	for replicaName, replicaMode := range e.ReplicaModeMap {
-		res.ReplicaModeMap[replicaName] = spdkrpc.ReplicaModeToGRPCReplicaMode(replicaMode)
+		res.ReplicaModeMap[replicaName] = types.ReplicaModeToGRPCReplicaMode(replicaMode)
 	}
 	res.Head = api.LvolToProtoLvol(e.Head)
 	for snapshotName, snapApiLvol := range e.SnapshotMap {
