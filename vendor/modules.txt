@@ -1,7 +1,7 @@
 # github.com/0xPolygon/polygon-edge v1.3.2
 ## explicit; go 1.20
 github.com/0xPolygon/polygon-edge/consensus/polybft/bitmap
-# github.com/RoaringBitmap/roaring v1.9.1
+# github.com/RoaringBitmap/roaring v1.9.3
 ## explicit; go 1.14
 github.com/RoaringBitmap/roaring
 github.com/RoaringBitmap/roaring/internal
@@ -43,13 +43,13 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20240219094812-3a87ee02df77
+# github.com/longhorn/backupstore v0.0.0-20240417071544-3bd377eeefeb
 ## explicit; go 1.21
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20240319112414-b75404dc7fbc
+# github.com/longhorn/go-common-libs v0.0.0-20240411093823-b8862efb8e03
 ## explicit; go 1.21
 github.com/longhorn/go-common-libs/exec
 github.com/longhorn/go-common-libs/io
@@ -60,7 +60,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.0.0-20240328085119-7ab2393959d9
+# github.com/longhorn/go-spdk-helper v0.0.0-20240415074119-eb1e91922189
 ## explicit; go 1.21
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
 github.com/longhorn/go-spdk-helper/pkg/nvme
@@ -73,7 +73,7 @@ github.com/longhorn/go-spdk-helper/pkg/util
 # github.com/longhorn/nsfilelock v0.0.0-20200723175406-fa7c83ad0003
 ## explicit
 github.com/longhorn/nsfilelock
-# github.com/longhorn/types v0.0.0-20240417064442-e7df610ea802
+# github.com/longhorn/types v0.0.0-20240417112740-a0d8514936b8
 ## explicit; go 1.21
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/matttproud/golang_protobuf_extensions v1.0.4
@@ -121,7 +121,7 @@ github.com/prometheus/procfs/internal/util
 # github.com/rogpeppe/go-internal v1.10.0
 ## explicit; go 1.19
 github.com/rogpeppe/go-internal/fmtsort
-# github.com/shirou/gopsutil/v3 v3.24.2
+# github.com/shirou/gopsutil/v3 v3.24.3
 ## explicit; go 1.15
 github.com/shirou/gopsutil/v3/common
 github.com/shirou/gopsutil/v3/disk
@@ -141,7 +141,7 @@ github.com/yusufpapurcu/wmi
 # go.uber.org/multierr v1.11.0
 ## explicit; go 1.19
 go.uber.org/multierr
-# golang.org/x/net v0.22.0
+# golang.org/x/net v0.23.0
 ## explicit; go 1.18
 golang.org/x/net/context
 golang.org/x/net/http/httpguts
@@ -150,7 +150,7 @@ golang.org/x/net/http2/hpack
 golang.org/x/net/idna
 golang.org/x/net/internal/timeseries
 golang.org/x/net/trace
-# golang.org/x/sys v0.18.0
+# golang.org/x/sys v0.19.0
 ## explicit; go 1.18
 golang.org/x/sys/unix
 golang.org/x/sys/windows
@@ -261,7 +261,7 @@ google.golang.org/protobuf/types/known/timestamppb
 # gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 ## explicit; go 1.11
 gopkg.in/check.v1
-# k8s.io/apimachinery v0.29.3
+# k8s.io/apimachinery v0.29.4
 ## explicit; go 1.21
 k8s.io/apimachinery/pkg/util/errors
 k8s.io/apimachinery/pkg/util/runtime

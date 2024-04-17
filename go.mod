@@ -4,20 +4,20 @@ go 1.21
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.2
-	github.com/RoaringBitmap/roaring v1.9.1
+	github.com/RoaringBitmap/roaring v1.9.3
 	github.com/google/uuid v1.6.0
-	github.com/longhorn/backupstore v0.0.0-20240219094812-3a87ee02df77
-	github.com/longhorn/go-common-libs v0.0.0-20240319112414-b75404dc7fbc
-	github.com/longhorn/go-spdk-helper v0.0.0-20240328085119-7ab2393959d9
-	github.com/longhorn/types v0.0.0-20240417064442-e7df610ea802
+	github.com/longhorn/backupstore v0.0.0-20240417071544-3bd377eeefeb
+	github.com/longhorn/go-common-libs v0.0.0-20240411093823-b8862efb8e03
+	github.com/longhorn/go-spdk-helper v0.0.0-20240415074119-eb1e91922189
+	github.com/longhorn/types v0.0.0-20240417112740-a0d8514936b8
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
-	golang.org/x/net v0.22.0
+	golang.org/x/net v0.23.0
 	google.golang.org/grpc v1.63.2
 	google.golang.org/protobuf v1.33.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
-	k8s.io/apimachinery v0.29.3
+	k8s.io/apimachinery v0.29.4
 )
 
 require (
@@ -44,10 +44,10 @@ require (
 	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.11.1 // indirect
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
-	github.com/shirou/gopsutil/v3 v3.24.2 // indirect
+	github.com/shirou/gopsutil/v3 v3.24.3 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/sys v0.18.0 // indirect
+	golang.org/x/sys v0.19.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240227224415-6ceb2ff114de // indirect
 	k8s.io/klog/v2 v2.110.1 // indirect
