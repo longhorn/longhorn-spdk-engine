@@ -1,6 +1,6 @@
 module github.com/longhorn/longhorn-spdk-engine
 
-go 1.22.2
+go 1.22
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.2
