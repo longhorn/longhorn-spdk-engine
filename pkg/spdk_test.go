@@ -218,7 +218,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				wg.Done()
 			}()
 
-			replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
+			replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
 			c.Assert(err, IsNil)
 			c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
@@ -227,7 +227,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica1.Head, NotNil)
 			c.Assert(replica1.Head.CreationTime, Not(Equals), "")
 			c.Assert(replica1.Head.Parent, Equals, "")
-			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
+			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
 			c.Assert(err, IsNil)
 			c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
@@ -312,10 +312,10 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica2.PortStart, Equals, int32(0))
 			c.Assert(replica2.PortEnd, Equals, int32(0))
 
-			replica1, err = spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
+			replica1, err = spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
 			c.Assert(err, IsNil)
 			c.Assert(replica1.State, Equals, types.InstanceStateRunning)
-			replica2, err = spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
+			replica2, err = spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
 			c.Assert(err, IsNil)
 			c.Assert(replica2.State, Equals, types.InstanceStateRunning)
 
@@ -370,7 +370,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 			// Start testing offline rebuilding
 			// Launch a new replica then ask the engine to rebuild it
-			replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
+			replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
 			c.Assert(err, IsNil)
 			c.Assert(replica3.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica3.LvsUUID, Equals, disk.Uuid)
@@ -488,13 +488,13 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 				wg.Done()
 			}()
 
-			replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
+			replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
 			c.Assert(err, IsNil)
 			c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
 			c.Assert(replica1.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica1.PortStart, Not(Equals), int32(0))
-			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
+			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
 			c.Assert(err, IsNil)
 			c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
@@ -846,7 +846,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 
 			// Start testing offline rebuilding
 			// Launch a new replica then ask the engine to rebuild it
-			replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, false, defaultTestReplicaPortCount)
+			replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
 			c.Assert(err, IsNil)
 			c.Assert(replica3.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica3.LvsUUID, Equals, disk.Uuid)
