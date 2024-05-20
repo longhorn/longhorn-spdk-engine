@@ -61,8 +61,7 @@ type Replica struct {
 	State    types.InstanceState
 	ErrorMsg string
 
-	IsExposeRequired bool
-	IsExposed        bool
+	IsExposed bool
 
 	isRebuilding   bool
 	rebuildingLvol *Lvol
