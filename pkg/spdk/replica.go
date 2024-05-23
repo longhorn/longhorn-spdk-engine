@@ -274,7 +274,7 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 	}()
 
 	// Stop syncing with the SPDK TGT server if the replica does not contain any valid SPDK components.
-	if r.State != types.InstanceStateRunning && r.State != types.InstanceStateStopped {
+	if r.State != types.InstanceStateRunning {
 		return nil
 	}
 
