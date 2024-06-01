@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/longhorn/backupstore v0.0.0-20240509144945-3bce6e69af15
 	github.com/longhorn/go-common-libs v0.0.0-20240514074907-351459694cbf
-	github.com/longhorn/go-spdk-helper v0.0.0-20240514082311-4069f4804017
+	github.com/longhorn/go-spdk-helper v0.0.0-20240601023418-52e722327c43
 	github.com/longhorn/types v0.0.0-20240510221052-ab949bbedea3
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
