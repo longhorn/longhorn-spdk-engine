@@ -2,16 +2,16 @@ module github.com/longhorn/longhorn-spdk-engine
 
 go 1.22.0
 
-toolchain go1.22.3
+toolchain go1.22.4
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
-	github.com/RoaringBitmap/roaring v1.9.3
+	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/google/uuid v1.6.0
-	github.com/longhorn/backupstore v0.0.0-20240509144945-3bce6e69af15
-	github.com/longhorn/go-common-libs v0.0.0-20240514074907-351459694cbf
+	github.com/longhorn/backupstore v0.0.0-20240603134532-5ec9a300bef4
+	github.com/longhorn/go-common-libs v0.0.0-20240605094403-68743dacbcb1
 	github.com/longhorn/go-spdk-helper v0.0.0-20240601023418-52e722327c43
-	github.com/longhorn/types v0.0.0-20240510221052-ab949bbedea3
+	github.com/longhorn/types v0.0.0-20240605091135-ef450e1c04cd
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0

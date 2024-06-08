@@ -1,7 +1,7 @@
 # github.com/0xPolygon/polygon-edge v1.3.3
 ## explicit; go 1.20
 github.com/0xPolygon/polygon-edge/consensus/polybft/bitmap
-# github.com/RoaringBitmap/roaring v1.9.3
+# github.com/RoaringBitmap/roaring v1.9.4
 ## explicit; go 1.14
 github.com/RoaringBitmap/roaring
 github.com/RoaringBitmap/roaring/internal
@@ -39,13 +39,13 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20240509144945-3bce6e69af15
+# github.com/longhorn/backupstore v0.0.0-20240603134532-5ec9a300bef4
 ## explicit; go 1.21
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20240514074907-351459694cbf
+# github.com/longhorn/go-common-libs v0.0.0-20240605094403-68743dacbcb1
 ## explicit; go 1.22.0
 github.com/longhorn/go-common-libs/exec
 github.com/longhorn/go-common-libs/io
@@ -69,7 +69,7 @@ github.com/longhorn/go-spdk-helper/pkg/util
 # github.com/longhorn/nsfilelock v0.0.0-20200723175406-fa7c83ad0003
 ## explicit
 github.com/longhorn/nsfilelock
-# github.com/longhorn/types v0.0.0-20240510221052-ab949bbedea3
+# github.com/longhorn/types v0.0.0-20240605091135-ef450e1c04cd
 ## explicit; go 1.21
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0
