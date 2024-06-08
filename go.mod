@@ -9,8 +9,8 @@ require (
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/google/uuid v1.6.0
 	github.com/longhorn/backupstore v0.0.0-20240603134532-5ec9a300bef4
-	github.com/longhorn/go-common-libs v0.0.0-20240605094403-68743dacbcb1
-	github.com/longhorn/go-spdk-helper v0.0.0-20240601023418-52e722327c43
+	github.com/longhorn/go-common-libs v0.0.0-20240608152738-1a76fc3def09
+	github.com/longhorn/go-spdk-helper v0.0.0-20240608155626-8c5b05a35206
 	github.com/longhorn/types v0.0.0-20240605091135-ef450e1c04cd
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
@@ -45,13 +45,13 @@ require (
 	github.com/prometheus/common v0.45.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
-	github.com/shirou/gopsutil/v3 v3.24.4 // indirect
+	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/sys v0.20.0 // indirect
 	golang.org/x/text v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240429193739-8cf5692501f6 // indirect
 	k8s.io/klog/v2 v2.120.1 // indirect
-	k8s.io/mount-utils v0.30.0 // indirect
+	k8s.io/mount-utils v0.30.1 // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect
 )
