@@ -9,7 +9,7 @@ require (
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/google/uuid v1.6.0
 	github.com/longhorn/backupstore v0.0.0-20240603134532-5ec9a300bef4
-	github.com/longhorn/go-common-libs v0.0.0-20240608152738-1a76fc3def09
+	github.com/longhorn/go-common-libs v0.0.0-20240609084059-38227ce2cbc9
 	github.com/longhorn/go-spdk-helper v0.0.0-20240608155626-8c5b05a35206
 	github.com/longhorn/types v0.0.0-20240605091135-ef450e1c04cd
 	github.com/pkg/errors v0.9.1
