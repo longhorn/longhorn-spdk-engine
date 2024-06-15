@@ -9,17 +9,17 @@ require (
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/google/uuid v1.6.0
 	github.com/longhorn/backupstore v0.0.0-20240603134532-5ec9a300bef4
-	github.com/longhorn/go-common-libs v0.0.0-20240609084059-38227ce2cbc9
-	github.com/longhorn/go-spdk-helper v0.0.0-20240608155626-8c5b05a35206
-	github.com/longhorn/types v0.0.0-20240605091135-ef450e1c04cd
+	github.com/longhorn/go-common-libs v0.0.0-20240609144924-f37bf784b1df
+	github.com/longhorn/go-spdk-helper v0.0.0-20240610031152-f42eff36aa73
+	github.com/longhorn/types v0.0.0-20240612122407-553c71ad6514
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.26.0
 	google.golang.org/grpc v1.64.0
-	google.golang.org/protobuf v1.34.1
+	google.golang.org/protobuf v1.34.2
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
-	k8s.io/apimachinery v0.30.1
+	k8s.io/apimachinery v0.30.2
 )
 
 require (
