@@ -8,9 +8,9 @@ require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/google/uuid v1.6.0
-	github.com/longhorn/backupstore v0.0.0-20240603134532-5ec9a300bef4
+	github.com/longhorn/backupstore v0.0.0-20240616091913-84428641a11d
 	github.com/longhorn/go-common-libs v0.0.0-20240616051056-103c7d62a0d5
-	github.com/longhorn/go-spdk-helper v0.0.0-20240610031152-f42eff36aa73
+	github.com/longhorn/go-spdk-helper v0.0.0-20240616091844-5afd86a1d892
 	github.com/longhorn/types v0.0.0-20240612122407-553c71ad6514
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
@@ -27,8 +27,8 @@ require (
 	github.com/bits-and-blooms/bitset v1.12.0 // indirect
 	github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
-	github.com/gammazero/deque v0.1.0 // indirect
-	github.com/gammazero/workerpool v1.1.2 // indirect
+	github.com/gammazero/deque v0.2.0 // indirect
+	github.com/gammazero/workerpool v1.1.3 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
@@ -38,7 +38,7 @@ require (
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/moby/sys/mountinfo v0.6.2 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.17 // indirect
+	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_golang v1.18.0 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
