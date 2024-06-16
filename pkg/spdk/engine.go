@@ -140,7 +140,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 
 	replicaBdevList := []string{}
 	for replicaName, replicaAddr := range replicaAddressMap {
-		bdevName, err := e.getBdevNameForReplica(spdkClient, replicaName, replicaAddr, podIP)
+		bdevName, err := e.connectReplica(spdkClient, replicaName, replicaAddr)
 		if err != nil {
 			e.log.WithError(err).Errorf("Failed to get bdev from replica %s with address %s, will skip it and continue", replicaName, replicaAddr)
 			e.ReplicaModeMap[replicaName] = types.ModeERR
@@ -172,10 +172,6 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 	e.log.Info("Created engine")
 
 	return e.getWithoutLock(), nil
-}
-
-func (e *Engine) getBdevNameForReplica(spdkClient *spdkclient.Client, replicaName, replicaAddress, podIP string) (bdevName string, err error) {
-	return e.connectReplica(spdkClient, replicaName, replicaAddress)
 }
 
 func (e *Engine) connectReplica(spdkClient *spdkclient.Client, replicaName, replicaAddress string) (bdevName string, err error) {
@@ -825,7 +821,7 @@ func (e *Engine) ReplicaAddFinish(spdkClient *spdkclient.Client, replicaName, re
 			replicaBdevList = append(replicaBdevList, e.ReplicaBdevNameMap[rName])
 		}
 		if rName == replicaName {
-			bdevName, err := e.getBdevNameForReplica(spdkClient, replicaName, replicaAddress, e.IP)
+			bdevName, err := e.connectReplica(spdkClient, replicaName, replicaAddress)
 			if err != nil {
 				e.log.WithError(err).Errorf("Failed to get bdev from rebuilding replica %s with address %s, will mark it as ERR and error out", replicaName, replicaAddress)
 				e.ReplicaModeMap[replicaName] = types.ModeERR
