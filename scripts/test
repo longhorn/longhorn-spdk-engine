@@ -5,6 +5,9 @@ cd "$(dirname $0)"/..
 
 echo Running unit tests
 
+# in case there is error before calling go test ...
+touch coverage.out
+
 # Check if hugepages are configured
 hugepages="$(grep HugePages_Total < /proc/meminfo | awk '{print $2}')"
 if [ -z "$hugepages" ] || [ 1 -gt $hugepages ]
@@ -24,4 +27,4 @@ trap "losetup -D" EXIT
 PACKAGES="$(find . -name '*.go' -print0 | xargs -0 -I{} dirname {} |  cut -f2 -d/ | sort -u | grep -Ev '(^\.$|.git|.trash-cache|vendor|bin)' | sed -e 's!^!./!' -e 's!$!/...!')"
 
 trap "rm -f /tmp/test-disk" EXIT
-go test -v -race -cover ${PACKAGES} -timeout 12m
+go test -v -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 12m

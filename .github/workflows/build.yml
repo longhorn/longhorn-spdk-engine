@@ -1,0 +1,48 @@
+name: build
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+jobs:
+  build-amd64:
+    name: Build AMD64 binaries
+    runs-on: longhorn-infra-amd64-runners
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install make curl git kmod
+      run: |
+        sudo apt update
+        sudo apt-get -y install make curl git kmod
+    # Build binaries
+    - name: Run ci
+      run: make ci
+
+    - uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage.out
+        flags: unittests
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+  build-arm64:
+    name: Build ARM64 binaries
+    runs-on: longhorn-infra-arm64-runners
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install make curl git kmod
+      run: |
+        sudo apt update
+        sudo apt-get -y install make curl git kmod
+    # Build binaries
+    - name: Run ci
+      run: sudo make ci
+
+    - uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage.out
+        flags: unittests
+        token: ${{ secrets.CODECOV_TOKEN }}
