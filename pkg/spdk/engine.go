@@ -1061,10 +1061,14 @@ const (
 	SnapshotOperationRevert = SnapshotOperationType("snapshot-revert")
 )
 
-func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName string, opts *api.SnapshotOptions) (snapshotName string, err error) {
+func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName string) (snapshotName string, err error) {
 	e.log.Infof("Creating snapshot %s", inputSnapshotName)
 
-	return e.snapshotOperation(spdkClient, inputSnapshotName, SnapshotOperationCreate, opts)
+	opts := api.SnapshotOptions{
+		UserCreated: true,
+	}
+
+	return e.snapshotOperation(spdkClient, inputSnapshotName, SnapshotOperationCreate, &opts)
 }
 
 func (e *Engine) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) (err error) {
