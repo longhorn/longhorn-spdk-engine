@@ -19,6 +19,8 @@ import (
 
 	commonNet "github.com/longhorn/go-common-libs/net"
 	commonTypes "github.com/longhorn/go-common-libs/types"
+	helperclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
+	"github.com/longhorn/go-spdk-helper/pkg/spdk/target"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
@@ -62,7 +64,36 @@ func GetSPDKDir() string {
 	return filepath.Join(os.Getenv("GOPATH"), "src/github.com/longhorn/spdk")
 }
 
-func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string) {
+func LaunchTestSPDKTarget(c *C, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error)) {
+	targetReady := false
+	if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
+		if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
+			targetReady = true
+		}
+	}
+
+	if !targetReady {
+		go func() {
+			err := target.StartTarget(GetSPDKDir(), []string{"--logflag all", "2>&1 | tee /tmp/spdk_tgt.log"}, execute)
+			c.Assert(err, IsNil)
+		}()
+
+		for cnt := 0; cnt < 30; cnt++ {
+			if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
+				if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
+					targetReady = true
+					break
+				}
+			}
+			time.Sleep(time.Second)
+		}
+	}
+
+	c.Assert(targetReady, Equals, true)
+}
+
+func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error)) {
+	LaunchTestSPDKTarget(c, execute)
 	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort)
 	c.Assert(err, IsNil)
 
@@ -140,7 +171,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
@@ -410,7 +441,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 
 	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
