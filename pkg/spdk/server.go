@@ -893,11 +893,7 @@ func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.Snapshot
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot creation", req.Name)
 	}
 
-	opts := api.SnapshotOptions{
-		UserCreated: req.UserCreated,
-	}
-
-	snapshotName, err := e.SnapshotCreate(spdkClient, req.SnapshotName, &opts)
+	snapshotName, err := e.SnapshotCreate(spdkClient, req.SnapshotName)
 	return &spdkrpc.SnapshotResponse{SnapshotName: snapshotName}, err
 }
 
