@@ -772,7 +772,10 @@ func (e *Engine) ReplicaAddStart(spdkClient *spdkclient.Client, replicaName, rep
 
 	// TODO: For online rebuilding, the IO should be paused first
 	snapshotName := GenerateRebuildingSnapshotName()
-	updateRequired, err = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, SnapshotOperationCreate, nil)
+	opts := &api.SnapshotOptions{
+		Timestamp: time.Now().String(),
+	}
+	updateRequired, err = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, SnapshotOperationCreate, opts)
 	if err != nil {
 		return err
 	}
@@ -963,7 +966,13 @@ func (e *Engine) ReplicaShallowCopy(dstReplicaName, dstReplicaAddress string) (e
 		if err = srcReplicaServiceCli.ReplicaSnapshotShallowCopy(srcReplicaName, currentSnapshotName); err != nil {
 			return err
 		}
-		if err = dstReplicaServiceCli.ReplicaRebuildingDstSnapshotCreate(dstReplicaName, currentSnapshotName, &api.SnapshotOptions{UserCreated: rpcSrcReplica.Snapshots[currentSnapshotName].UserCreated}); err != nil {
+
+		snapshotOptions := &api.SnapshotOptions{
+			UserCreated: rpcSrcReplica.Snapshots[currentSnapshotName].UserCreated,
+			Timestamp:   rpcSrcReplica.Snapshots[currentSnapshotName].SnapshotTimestamp,
+		}
+
+		if err = dstReplicaServiceCli.ReplicaRebuildingDstSnapshotCreate(dstReplicaName, currentSnapshotName, snapshotOptions); err != nil {
 			return err
 		}
 		prevSnapshotName = currentSnapshotName
@@ -1064,11 +1073,12 @@ const (
 func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName string) (snapshotName string, err error) {
 	e.log.Infof("Creating snapshot %s", inputSnapshotName)
 
-	opts := api.SnapshotOptions{
+	opts := &api.SnapshotOptions{
 		UserCreated: true,
+		Timestamp:   time.Now().String(),
 	}
 
-	return e.snapshotOperation(spdkClient, inputSnapshotName, SnapshotOperationCreate, &opts)
+	return e.snapshotOperation(spdkClient, inputSnapshotName, SnapshotOperationCreate, opts)
 }
 
 func (e *Engine) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) (err error) {
