@@ -215,13 +215,19 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica2.Name: types.ModeRW,
 			}
 			endpoint := helperutil.GetLonghornDevicePath(volumeName)
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
-			c.Assert(engine.Port, Not(Equals), int32(0))
 			c.Assert(engine.Endpoint, Equals, endpoint)
+			// initiator and target are on the same node
+			c.Assert(engine.IP, Not(Equals), "")
+			c.Assert(engine.TargetIP, Not(Equals), "")
+			c.Assert(engine.IP, Equals, engine.TargetIP)
+			c.Assert(engine.Port, Not(Equals), int32(0))
+			c.Assert(engine.TargetPort, Not(Equals), int32(0))
+			c.Assert(engine.Port, Equals, engine.TargetPort)
 
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), "seek=0", "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
@@ -292,7 +298,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
 				replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
 			}
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1)
+			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -317,7 +323,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			// Restart the engine with empty frontend
 			err = spdkCli.EngineDelete(engineName)
 			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1)
+			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendEmpty)
@@ -479,7 +485,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 				replica2.Name: types.ModeRW,
 			}
 			endpoint := helperutil.GetLonghornDevicePath(volumeName)
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -1012,6 +1018,10 @@ func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, 
 }
 
 func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, engineName string, replicaAddressMap map[string]string) {
+	ip, err := commonNet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	os.Setenv(commonNet.EnvPodIP, ip)
+
 	engine, err := spdkCli.EngineGet(engineName)
 	c.Assert(err, IsNil)
 
@@ -1025,7 +1035,7 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 		// Restart the engine without the frontend
 		err = spdkCli.EngineDelete(engineName)
 		c.Assert(err, IsNil)
-		engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1)
+		engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -1040,11 +1050,159 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 		// Restart the engine with the previous frontend
 		err = spdkCli.EngineDelete(engineName)
 		c.Assert(err, IsNil)
-		engine, err = spdkCli.EngineCreate(engineName, volumeName, prevFrontend, defaultTestLvolSize, replicaAddressMap, 1)
+		engine, err = spdkCli.EngineCreate(engineName, volumeName, prevFrontend, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 		c.Assert(engine.Port, Not(Equals), int32(0))
 		c.Assert(engine.Endpoint, Equals, prevEndpoint)
 	}
+}
+
+func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
+	fmt.Println("Testing SPDK basic operations with engine only with target")
+
+	diskDriverName := "aio"
+
+	ip, err := commonNet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	os.Setenv(commonNet.EnvPodIP, ip)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	// c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	volumeName := "test-vol"
+	engineName := fmt.Sprintf("%s-engine", volumeName)
+	replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
+	replicaName2 := fmt.Sprintf("%s-replica-2", volumeName)
+
+	replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
+	c.Assert(err, IsNil)
+	replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
+	c.Assert(err, IsNil)
+
+	replicaAddressMap := map[string]string{
+		replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
+		replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
+	}
+
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, "127.0.0.1", ip, false)
+	c.Assert(err, IsNil)
+
+	c.Assert(engine.Endpoint, Equals, "")
+	// Initiator is not created, so the IP and Port should be empty
+	c.Assert(engine.IP, Equals, "")
+	c.Assert(engine.Port, Equals, int32(0))
+	// Target is created and exposed
+	c.Assert(engine.TargetIP, Equals, ip)
+	c.Assert(engine.TargetPort, Not(Equals), int32(0))
+
+	// Detach and re-attach the volume
+	// EngineDeleteTarget will delete engine instance if engine doesn't have an initiator
+	err = spdkCli.EngineDeleteTarget(engineName)
+	c.Assert(err, IsNil)
+
+	_, err = spdkCli.EngineGet(engineName)
+	c.Assert(strings.Contains(err.Error(), "cannot find engine"), Equals, true)
+
+	err = spdkCli.ReplicaDelete(replicaName1, false)
+	c.Assert(err, IsNil)
+	err = spdkCli.ReplicaDelete(replicaName2, false)
+	c.Assert(err, IsNil)
+}
+
+func (s *TestSuite) TestSPDKEngineCreateWithUpgradeRequired(c *C) {
+	fmt.Println("Testing SPDK Engine Creation with Upgrade Required")
+
+	diskDriverName := "aio"
+
+	ip, err := commonNet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	os.Setenv(commonNet.EnvPodIP, ip)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	// c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	volumeName := "test-vol"
+	engineName := fmt.Sprintf("%s-engine", volumeName)
+	replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
+	replicaName2 := fmt.Sprintf("%s-replica-2", volumeName)
+
+	replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
+	c.Assert(err, IsNil)
+	replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, true, defaultTestReplicaPortCount)
+	c.Assert(err, IsNil)
+
+	replicaAddressMap := map[string]string{
+		replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
+		replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
+	}
+
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, "127.0.0.1", ip, false)
+	c.Assert(err, IsNil)
+
+	targetAddress := fmt.Sprintf("%s:%d", engine.TargetIP, engine.TargetPort)
+	engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, targetAddress, true)
+	c.Assert(err, IsNil)
+	c.Assert(engine.Endpoint, Not(Equals), "")
+	// Initiator is not created, so the IP and Port should be empty
+	c.Assert(engine.IP, Equals, ip)
+	c.Assert(engine.Port, Not(Equals), int32(0))
+	// Target is created and exposed
+	c.Assert(engine.TargetIP, Equals, ip)
+	c.Assert(engine.TargetPort, Not(Equals), int32(0))
+	c.Assert(engine.Port, Equals, engine.TargetPort)
+
+	// Tear down engine and replicas
+	err = spdkCli.EngineDelete(engineName)
+	c.Assert(err, IsNil)
+
+	err = spdkCli.ReplicaDelete(replicaName1, false)
+	c.Assert(err, IsNil)
+	err = spdkCli.ReplicaDelete(replicaName2, false)
+	c.Assert(err, IsNil)
 }
