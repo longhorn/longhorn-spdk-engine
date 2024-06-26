@@ -5,7 +5,7 @@ set -e
 
 function start_spdk_tgt() {
     echo "Starting spdk_tgt"
-    sh -c 'spdk_tgt --logflag all 2>&1 | tee /var/log/spdk_tgt.log' &
+    sh -c 'spdk_tgt --logflag all > /var/log/spdk_tgt.log 2>&1 &' 
 
     timeout=120  # Timeout in seconds
     interval=1  # Interval in seconds
