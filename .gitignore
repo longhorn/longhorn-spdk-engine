@@ -23,6 +23,8 @@ _testmain.go
 *.test
 *.prof
 
+coverage.out
+
 # Rancher
 .dapper
 trash.lock
