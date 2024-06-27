@@ -9,9 +9,9 @@ require (
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/google/uuid v1.6.0
 	github.com/longhorn/backupstore v0.0.0-20240616091913-84428641a11d
-	github.com/longhorn/go-common-libs v0.0.0-20240623073303-1d8b9c5efb84
-	github.com/longhorn/go-spdk-helper v0.0.0-20240623162942-93384f6d91bf
-	github.com/longhorn/types v0.0.0-20240623073456-7887c6b6b247
+	github.com/longhorn/go-common-libs v0.0.0-20240627075631-d78642cff5e1
+	github.com/longhorn/go-spdk-helper v0.0.0-20240627071357-3765b24418d9
+	github.com/longhorn/types v0.0.0-20240624083620-f11ba48bf396
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
