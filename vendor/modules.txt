@@ -39,7 +39,7 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20240616091913-84428641a11d
+# github.com/longhorn/backupstore v0.0.0-20240624084713-e98e31ebcebb
 ## explicit; go 1.21
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
@@ -47,6 +47,7 @@ github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
 # github.com/longhorn/go-common-libs v0.0.0-20240627075631-d78642cff5e1
 ## explicit; go 1.22.0
+github.com/longhorn/go-common-libs/backup
 github.com/longhorn/go-common-libs/exec
 github.com/longhorn/go-common-libs/io
 github.com/longhorn/go-common-libs/net
