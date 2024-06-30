@@ -55,3 +55,7 @@ require (
 	k8s.io/mount-utils v0.30.2 // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect
 )
+
+replace github.com/longhorn/types v0.0.0-20240624083620-f11ba48bf396 => github.com/derekbit/longhorn-types v0.0.0-20240625055741-c65ab9b3d304
+
+replace github.com/longhorn/go-spdk-helper v0.0.0-20240627071357-3765b24418d9 => github.com/derekbit/go-spdk-helper v0.0.0-20240627073500-adcba0272891
