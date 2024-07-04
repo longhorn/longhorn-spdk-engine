@@ -69,7 +69,7 @@ github.com/longhorn/go-spdk-helper/pkg/util
 # github.com/longhorn/nsfilelock v0.0.0-20200723175406-fa7c83ad0003
 ## explicit
 github.com/longhorn/nsfilelock
-# github.com/longhorn/types v0.0.0-20240624083620-f11ba48bf396
+# github.com/longhorn/types v0.0.0-20240704070509-4b97f699508e
 ## explicit; go 1.21
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0

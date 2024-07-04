@@ -45,8 +45,8 @@ github.com/longhorn/go-spdk-helper v0.0.0-20240702033003-35e00d17218f h1:CVv/UA0
 github.com/longhorn/go-spdk-helper v0.0.0-20240702033003-35e00d17218f/go.mod h1:5dAfJz0UmWUqHgUtmAd/lFNA4yVbpLDgaMfin8UBv3w=
 github.com/longhorn/nsfilelock v0.0.0-20200723175406-fa7c83ad0003 h1:Jw9uANsGcHTxp6HcC++/vN17LfeuDmozHI2j6DoZf5E=
 github.com/longhorn/nsfilelock v0.0.0-20200723175406-fa7c83ad0003/go.mod h1:0CLeXlf59Lg6C0kjLSDf47ft73Dh37CwymYRKWwAn04=
-github.com/longhorn/types v0.0.0-20240624083620-f11ba48bf396 h1:dvrppUjQ5i9wPOuU1qnanksHe82cSaNckGaWzn3f8QY=
-github.com/longhorn/types v0.0.0-20240624083620-f11ba48bf396/go.mod h1:fonrC6SwGpvt+YVlfJ3xMmg0MlOH94T1Qx2+ZEy8n3U=
+github.com/longhorn/types v0.0.0-20240704070509-4b97f699508e h1:aEjlgQceu7gunl+492QdZOS2hP0gu5AoOyvnKnO8PbE=
+github.com/longhorn/types v0.0.0-20240704070509-4b97f699508e/go.mod h1:fonrC6SwGpvt+YVlfJ3xMmg0MlOH94T1Qx2+ZEy8n3U=
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
 github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 h1:jWpvCLoY8Z/e3VKvlsiIGKtc+UG6U5vzxaoagmhXfyg=
 github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0/go.mod h1:QUyp042oQthUoa9bqDv0ER0wrtXnBruoNd7aNjkbP+k=
