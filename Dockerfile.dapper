@@ -12,6 +12,12 @@ ENV DAPPER_OUTPUT bin coverage.out
 ENV DAPPER_RUN_ARGS --privileged --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.venv:exec --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.tox:exec -v /dev:/host/dev -v /proc:/host/proc -v /sys:/host/sys -v /tmp:/tmp
 ENV DAPPER_SOURCE /go/src/github.com/longhorn/longhorn-spdk-engine
 
+ENV SPDK_COMMIT_ID a6478cde7e0cff2fb09992868308a7387aa5202a
+ENV LIBJSONC_COMMIT_ID b4c371fa0cbc4dcbaccc359ce9e957a22988fb34
+# nvme-cli 2.9.1
+ENV NVME_CLI_COMMIT_ID b340fd7dcf1aef76f8d46ab28bef3c170d310887 
+ENV GO_SPDK_HELPER_COMMIT_ID 35e00d17218ff7ae5d4c842ffbe90274027a0d8b
+
 WORKDIR ${DAPPER_SOURCE}
 
 ENTRYPOINT ["./scripts/entry"]
@@ -24,27 +30,30 @@ RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/syste
     zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:backports/SLE_15/devel:languages:python:backports.repo && \
     zypper --gpg-auto-import-keys ref
 
-RUN zypper -n install cmake curl wget gcc unzip tar xsltproc docbook-xsl-stylesheets python3 meson ninja python3-pip \
-    e2fsprogs xfsprogs util-linux-systemd python3-pyelftools libcmocka-devel device-mapper procps
+RUN zypper -n install cmake curl wget gcc unzip tar xsltproc docbook-xsl-stylesheets python311 python311-pip fuse3 libfuse3-3 \
+              e2fsprogs xfsprogs util-linux-systemd python3-pyelftools libcmocka-devel device-mapper procps
 
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /go/bin v1.55.2
 
-# Build SPDK
-ENV HUGEMEM=1024
-RUN echo "vm.nr_hugepages=$((HUGEMEM/2))" >> /etc/sysctl.conf
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 & \
+    ln -sf /usr/bin/pip3.11 /usr/bin/pip3
+
+# Build spdk
 ENV SPDK_DIR /usr/src/spdk
-ENV SPDK_COMMIT_ID a6478cde7e0cff2fb09992868308a7387aa5202a
 RUN git clone https://github.com/longhorn/spdk.git ${SPDK_DIR} --recursive && \
     cd ${SPDK_DIR} && \
     git checkout ${SPDK_COMMIT_ID} && \
     git submodule update --init && \
+    sed -i '/python3-pyelftools/d' ./scripts/pkgdep/sles.sh && \
+    sed -i 's/python3-/python311-/g' ./scripts/pkgdep/sles.sh && \
     ./scripts/pkgdep.sh && \
+    pip3 install -r ./scripts/pkgdep/requirements.txt && \
     if [ ${ARCH} = "amd64" ]; then \
-        ./configure --target-arch=nehalem --disable-tests --disable-unit-tests --disable-examples && \
+        ./configure --target-arch=nehalem --disable-tests --disable-unit-tests --disable-examples --without-nvme-cuse && \
         make -j$(nproc) && \
         make install; \
     elif [ ${ARCH} = "arm64" ]; then \
-        ./configure --target-arch=native --disable-tests --disable-unit-tests --disable-examples && \
+        ./configure --target-arch=native --disable-tests --disable-unit-tests --disable-examples --without-nvme-cuse && \
         DPDKBUILD_FLAGS="-Dplatform=generic" make -j$(nproc) && \
         make install; \
     else \
@@ -53,7 +62,6 @@ RUN git clone https://github.com/longhorn/spdk.git ${SPDK_DIR} --recursive && \
     fi
 
 # Build libjson-c-devel
-ENV LIBJSONC_COMMIT_ID b4c371fa0cbc4dcbaccc359ce9e957a22988fb34
 RUN cd /usr/src && \
     git clone https://github.com/json-c/json-c.git && \
     cd json-c && \
@@ -64,9 +72,8 @@ RUN cd /usr/src && \
     make && \
     make install
 
-# Build nvme-cli 2.9.1
+# Build nvme-cli
 ENV NVME_CLI_DIR /usr/src/nvme-cli
-ENV NVME_CLI_COMMIT_ID b340fd7dcf1aef76f8d46ab28bef3c170d310887
 RUN git clone https://github.com/linux-nvme/nvme-cli.git ${NVME_CLI_DIR} && \
     cd ${NVME_CLI_DIR} && \
     git checkout ${NVME_CLI_COMMIT_ID} && \
@@ -78,6 +85,7 @@ RUN git clone https://github.com/linux-nvme/nvme-cli.git ${NVME_CLI_DIR} && \
 ENV GO_SPDK_HELPER_DIR /usr/src/go-spdk-helper
 RUN git clone https://github.com/longhorn/go-spdk-helper.git ${GO_SPDK_HELPER_DIR} && \
     cd ${GO_SPDK_HELPER_DIR} && \
+    git checkout ${GO_SPDK_HELPER_COMMIT_ID} && \
     go build && \
     install -m 755 go-spdk-helper /usr/local/bin/go-spdk-helper && \
     rm -rf ${GO_SPDK_HELPER_DIR}
