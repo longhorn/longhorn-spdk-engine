@@ -39,8 +39,8 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20240624084713-e98e31ebcebb
-## explicit; go 1.21
+# github.com/longhorn/backupstore v0.0.0-20240706152841-78e2c8892f4e
+## explicit; go 1.22.0
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
@@ -57,7 +57,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.0.0-20240708005755-b35eb48fcb04
+# github.com/longhorn/go-spdk-helper v0.0.0-20240708060539-de887e9cc6db
 ## explicit; go 1.22.0
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
 github.com/longhorn/go-spdk-helper/pkg/nvme
