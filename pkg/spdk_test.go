@@ -46,6 +46,9 @@ var (
 	defaultTestReplicaPortCount = int32(5)
 
 	defaultTestExecuteTimeout = 10 * time.Second
+
+	defaultTestRebuildingWaitInterval = 3 * time.Second
+	defaultTestRebuildingWaitCount    = 60
 )
 
 func Test(t *testing.T) { TestingT(t) }
@@ -169,7 +172,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 		engineName := fmt.Sprintf("%s-engine", volumeName)
 		replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
 		replicaName2 := fmt.Sprintf("%s-replica-2", volumeName)
-		//replicaName3 := fmt.Sprintf("%s-replica-3", volumeName)
+		replicaName3 := fmt.Sprintf("%s-replica-3", volumeName)
 
 		go func() {
 			defer func() {
@@ -320,15 +323,6 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(err, IsNil)
 			c.Assert(cksumAfterSnap2, Equals, cksumBefore2)
 
-			// Restart the engine with empty frontend
-			err = spdkCli.EngineDelete(engineName)
-			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
-			c.Assert(err, IsNil)
-			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.Frontend, Equals, types.FrontendEmpty)
-			c.Assert(engine.Endpoint, Equals, "")
-
 			// Before testing online rebuilding
 			// Crash replica2 and remove it from the engine
 			delete(replicaAddressMap, replicaName2)
@@ -344,41 +338,43 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW})
 
-			//// Start testing online rebuilding
-			//// Launch a new replica then ask the engine to rebuild it
-			//replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount)
-			//c.Assert(err, IsNil)
-			//c.Assert(replica3.LvsName, Equals, defaultTestDiskName)
-			//c.Assert(replica3.LvsUUID, Equals, disk.Uuid)
-			//c.Assert(replica3.State, Equals, types.InstanceStateRunning)
-			//c.Assert(replica3.PortStart, Not(Equals), int32(0))
-			//c.Assert(replica3.Head, NotNil)
-			//c.Assert(replica3.Head.CreationTime, Not(Equals), "")
-			//c.Assert(replica3.Head.Parent, Equals, "")
-			//
-			//err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))))
-			//c.Assert(err, IsNil)
-			//
-			//// Verify the rebuilding result
-			//replicaAddressMap = map[string]string{
-			//	replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
-			//	replica3.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))),
-			//}
-			//engine, err = spdkCli.EngineGet(engineName)
-			//c.Assert(err, IsNil)
-			//c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			//c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			//c.Assert(engine.Endpoint, Equals, endpoint)
-			//c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
-			//c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW, replicaName3: types.ModeRW})
-			//
-			//// The newly rebuilt replica should contain correct data
-			//cksumAfterRebuilding1, err := util.GetFileChunkChecksum(endpoint, 0, 100*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfterRebuilding1, Equals, cksumBefore1)
-			//cksumAfterRebuilding2, err := util.GetFileChunkChecksum(endpoint, 200*helpertypes.MiB, 100*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfterRebuilding2, Equals, cksumBefore2)
+			// Start testing online rebuilding
+			// Launch a new replica then ask the engine to rebuild it
+			replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount)
+			c.Assert(err, IsNil)
+			c.Assert(replica3.LvsName, Equals, defaultTestDiskName)
+			c.Assert(replica3.LvsUUID, Equals, disk.Uuid)
+			c.Assert(replica3.State, Equals, types.InstanceStateRunning)
+			c.Assert(replica3.PortStart, Not(Equals), int32(0))
+			c.Assert(replica3.Head, NotNil)
+			c.Assert(replica3.Head.CreationTime, Not(Equals), "")
+			c.Assert(replica3.Head.Parent, Equals, "")
+
+			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))))
+			c.Assert(err, IsNil)
+
+			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
+
+			// Verify the rebuilding result
+			replicaAddressMap = map[string]string{
+				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
+				replica3.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))),
+			}
+			engine, err = spdkCli.EngineGet(engineName)
+			c.Assert(err, IsNil)
+			c.Assert(engine.State, Equals, types.InstanceStateRunning)
+			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
+			c.Assert(engine.Endpoint, Equals, endpoint)
+			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
+			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW, replicaName3: types.ModeRW})
+
+			// The newly rebuilt replica should contain correct data
+			cksumAfterRebuilding1, err := util.GetFileChunkChecksum(endpoint, 0, 100*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfterRebuilding1, Equals, cksumBefore1)
+			cksumAfterRebuilding2, err := util.GetFileChunkChecksum(endpoint, 200*helpertypes.MiB, 100*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfterRebuilding2, Equals, cksumBefore2)
 		}()
 	}
 
@@ -440,7 +436,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 		engineName := fmt.Sprintf("%s-engine", volumeName)
 		replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
 		replicaName2 := fmt.Sprintf("%s-replica-2", volumeName)
-		//replicaName3 := fmt.Sprintf("%s-replica-3", volumeName)
+		replicaName3 := fmt.Sprintf("%s-replica-3", volumeName)
 
 		go func() {
 			defer func() {
@@ -545,8 +541,8 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			offsetInMB = 5 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
-			//cksumBefore16, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
+			cksumBefore16, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
@@ -808,145 +804,147 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshot(c *C) {
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW})
 
-			//// Start testing online rebuilding
-			//// Launch a new replica then ask the engine to rebuild it
-			//replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount)
-			//c.Assert(err, IsNil)
-			//c.Assert(replica3.LvsName, Equals, defaultTestDiskName)
-			//c.Assert(replica3.LvsUUID, Equals, disk.Uuid)
-			//c.Assert(replica3.State, Equals, types.InstanceStateRunning)
-			//c.Assert(replica3.PortStart, Not(Equals), int32(0))
-			//
-			//err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))))
-			//c.Assert(err, IsNil)
-			//
-			//// Verify the rebuilding result
-			//replicaAddressMap = map[string]string{
-			//	replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
-			//	replica3.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))),
-			//}
-			//engine, err = spdkCli.EngineGet(engineName)
-			//c.Assert(err, IsNil)
-			//c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			//c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			//c.Assert(engine.Endpoint, Equals, endpoint)
-			//c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
-			//c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW, replicaName3: types.ModeRW})
-			//
-			//// The newly rebuilt replica should contain correct/unchanged data
-			//// Verify chain1
-			//revertSnapshot(c, spdkCli, snapshotName15, volumeName, engineName, replicaAddressMap)
-			//offsetInMB = 0
-			//cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter11, Equals, cksumBefore11)
-			//offsetInMB = dataCountInMB
-			//cksumAfter12, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter12, Equals, cksumBefore12)
-			//offsetInMB = 2 * dataCountInMB
-			//cksumAfter13, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter13, Equals, cksumBefore13)
-			//offsetInMB = 3 * dataCountInMB
-			//cksumAfter14, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter14, Equals, cksumBefore14)
-			//offsetInMB = 4 * dataCountInMB
-			//cksumAfter15, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter15, Equals, cksumBefore15)
-			//// Notice that the head before the first revert is discarded
-			//offsetInMB = 5 * dataCountInMB
-			//cksumAfter16, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter16, Not(Equals), cksumBefore16)
-			//// Verify chain2
-			//revertSnapshot(c, spdkCli, snapshotName23, volumeName, engineName, replicaAddressMap)
-			//offsetInMB = 0
-			//cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter11, Equals, cksumBefore11)
-			//offsetInMB = dataCountInMB
-			//cksumAfter12, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter12, Equals, cksumBefore12)
-			//offsetInMB = 2 * dataCountInMB
-			//cksumAfter13, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter13, Equals, cksumBefore13)
-			//offsetInMB = 3 * dataCountInMB
-			//cksumAfter21, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter21, Equals, cksumBefore21)
-			//offsetInMB = 4 * dataCountInMB
-			//cksumAfter22, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter22, Equals, cksumBefore22)
-			//offsetInMB = 5 * dataCountInMB
-			//cksumAfter23, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter23, Equals, cksumBefore23)
-			//// Verify chain3
-			//revertSnapshot(c, spdkCli, snapshotName32, volumeName, engineName, replicaAddressMap)
-			//offsetInMB = 0
-			//cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter11, Equals, cksumBefore11)
-			//offsetInMB = dataCountInMB
-			//cksumAfter31, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter31, Equals, cksumBefore31)
-			//offsetInMB = 2 * dataCountInMB
-			//cksumAfter32, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter32, Equals, cksumBefore32)
-			//// Verify chain4
-			//revertSnapshot(c, spdkCli, snapshotName42, volumeName, engineName, replicaAddressMap)
-			//offsetInMB = 0
-			//cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter11, Equals, cksumBefore11)
-			//offsetInMB = dataCountInMB
-			//cksumAfter41, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter41, Equals, cksumBefore41)
-			//offsetInMB = 2 * dataCountInMB
-			//cksumAfter42, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
-			//c.Assert(err, IsNil)
-			//c.Assert(cksumAfter42, Equals, cksumBefore42)
-			//
-			//// Rebuilding would lead to a snapshot creation (with random name)
-			//// Current snapshot tree (with backing image):
-			//// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50] -> rebuilding-snap1[50,50] -> head[50,50]
-			//// 	                                    |\                \
-			//// 	                                    | \                -> snap23[30,60]
-			//// 	                                    |  \
-			//// 	                                    \   -> snap32[10,30]
-			//// 	                                     \
-			//// 	                                      -> snap41[10,20] -> snap42[20,30]
-			//snapshotMap := map[string][]string{
-			//	snapshotName11: {snapshotName13, snapshotName32, snapshotName41},
-			//	snapshotName13: {snapshotName15, snapshotName23},
-			//	snapshotName15: {},
-			//	snapshotName23: {},
-			//	snapshotName32: {},
-			//	snapshotName41: {snapshotName42},
-			//}
-			//for replicaName := range replicaAddressMap {
-			//	replica, err := spdkCli.ReplicaGet(replicaName)
-			//	c.Assert(err, IsNil)
-			//	for snapName, snapLvol := range replica.Snapshots {
-			//		if strings.HasPrefix(snapName, fmt.Sprintf("%s-%s-", replicaName, server.RebuildingSnapshotNamePrefix)) {
-			//			c.Assert(snapLvol.Children[types.VolumeHead], Equals, true)
-			//			c.Assert(snapLvol.Parent, Equals, snapshotName15)
-			//			continue
-			//		}
-			//		for _, childSnapName := range snapshotMap[snapName] {
-			//			c.Assert(snapLvol.Children[childSnapName], Equals, true)
-			//		}
-			//	}
-			//}
+			// Start testing online rebuilding
+			// Launch a new replica then ask the engine to rebuild it
+			replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount)
+			c.Assert(err, IsNil)
+			c.Assert(replica3.LvsName, Equals, defaultTestDiskName)
+			c.Assert(replica3.LvsUUID, Equals, disk.Uuid)
+			c.Assert(replica3.State, Equals, types.InstanceStateRunning)
+			c.Assert(replica3.PortStart, Not(Equals), int32(0))
+
+			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))))
+			c.Assert(err, IsNil)
+
+			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
+
+			// Verify the rebuilding result
+			replicaAddressMap = map[string]string{
+				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
+				replica3.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))),
+			}
+			engine, err = spdkCli.EngineGet(engineName)
+			c.Assert(err, IsNil)
+			c.Assert(engine.State, Equals, types.InstanceStateRunning)
+			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
+			c.Assert(engine.Endpoint, Equals, endpoint)
+			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
+			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW, replicaName3: types.ModeRW})
+
+			// The newly rebuilt replica should contain correct/unchanged data
+			// Verify chain1
+			revertSnapshot(c, spdkCli, snapshotName15, volumeName, engineName, replicaAddressMap)
+			offsetInMB = 0
+			cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter11, Equals, cksumBefore11)
+			offsetInMB = dataCountInMB
+			cksumAfter12, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter12, Equals, cksumBefore12)
+			offsetInMB = 2 * dataCountInMB
+			cksumAfter13, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter13, Equals, cksumBefore13)
+			offsetInMB = 3 * dataCountInMB
+			cksumAfter14, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter14, Equals, cksumBefore14)
+			offsetInMB = 4 * dataCountInMB
+			cksumAfter15, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter15, Equals, cksumBefore15)
+			// Notice that the head before the first revert is discarded
+			offsetInMB = 5 * dataCountInMB
+			cksumAfter16, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter16, Not(Equals), cksumBefore16)
+			// Verify chain2
+			revertSnapshot(c, spdkCli, snapshotName23, volumeName, engineName, replicaAddressMap)
+			offsetInMB = 0
+			cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter11, Equals, cksumBefore11)
+			offsetInMB = dataCountInMB
+			cksumAfter12, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter12, Equals, cksumBefore12)
+			offsetInMB = 2 * dataCountInMB
+			cksumAfter13, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter13, Equals, cksumBefore13)
+			offsetInMB = 3 * dataCountInMB
+			cksumAfter21, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter21, Equals, cksumBefore21)
+			offsetInMB = 4 * dataCountInMB
+			cksumAfter22, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter22, Equals, cksumBefore22)
+			offsetInMB = 5 * dataCountInMB
+			cksumAfter23, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter23, Equals, cksumBefore23)
+			// Verify chain3
+			revertSnapshot(c, spdkCli, snapshotName32, volumeName, engineName, replicaAddressMap)
+			offsetInMB = 0
+			cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter11, Equals, cksumBefore11)
+			offsetInMB = dataCountInMB
+			cksumAfter31, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter31, Equals, cksumBefore31)
+			offsetInMB = 2 * dataCountInMB
+			cksumAfter32, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter32, Equals, cksumBefore32)
+			// Verify chain4
+			revertSnapshot(c, spdkCli, snapshotName42, volumeName, engineName, replicaAddressMap)
+			offsetInMB = 0
+			cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter11, Equals, cksumBefore11)
+			offsetInMB = dataCountInMB
+			cksumAfter41, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter41, Equals, cksumBefore41)
+			offsetInMB = 2 * dataCountInMB
+			cksumAfter42, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
+			c.Assert(err, IsNil)
+			c.Assert(cksumAfter42, Equals, cksumBefore42)
+
+			// Rebuilding would lead to a snapshot creation (with random name)
+			// Current snapshot tree (with backing image):
+			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50] -> rebuilding-snap1[50,50] -> head[50,50]
+			// 	                                    |\                \
+			// 	                                    | \                -> snap23[30,60]
+			// 	                                    |  \
+			// 	                                    \   -> snap32[10,30]
+			// 	                                     \
+			// 	                                      -> snap41[10,20] -> snap42[20,30]
+			snapshotMap := map[string][]string{
+				snapshotName11: {snapshotName13, snapshotName32, snapshotName41},
+				snapshotName13: {snapshotName15, snapshotName23},
+				snapshotName15: {},
+				snapshotName23: {},
+				snapshotName32: {},
+				snapshotName41: {snapshotName42},
+			}
+			for replicaName := range replicaAddressMap {
+				replica, err := spdkCli.ReplicaGet(replicaName)
+				c.Assert(err, IsNil)
+				for snapName, snapLvol := range replica.Snapshots {
+					if strings.HasPrefix(snapName, fmt.Sprintf("%s-%s-", replicaName, server.RebuildingSnapshotNamePrefix)) {
+						c.Assert(snapLvol.Children[types.VolumeHead], Equals, true)
+						c.Assert(snapLvol.Parent, Equals, snapshotName15)
+						continue
+					}
+					for _, childSnapName := range snapshotMap[snapName] {
+						c.Assert(snapLvol.Children[childSnapName], Equals, true)
+					}
+				}
+			}
 		}()
 	}
 
@@ -1039,6 +1037,49 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 		c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 		c.Assert(engine.Port, Not(Equals), int32(0))
 		c.Assert(engine.Endpoint, Equals, prevEndpoint)
+	}
+}
+
+func WaitForReplicaRebuildingComplete(c *C, spdkCli *client.SPDKClient, engineName, replicaName string) {
+	for cnt := 0; cnt < defaultTestRebuildingWaitCount; cnt++ {
+		rebuildingStatus, err := spdkCli.ReplicaRebuildingDstShallowCopyCheck(replicaName)
+		c.Assert(err, IsNil)
+		c.Assert(rebuildingStatus.Error, Equals, "")
+		switch rebuildingStatus.State {
+		case "":
+			c.Assert(rebuildingStatus.SnapshotName, Equals, "")
+			c.Assert(rebuildingStatus.TotalState, Equals, "")
+			c.Assert(rebuildingStatus.Progress, Equals, uint32(0))
+			c.Assert(rebuildingStatus.TotalProgress, Equals, uint32(0))
+			c.Assert(rebuildingStatus.TotalState, Equals, "")
+		case types.ProgressStateStarting:
+			c.Assert(rebuildingStatus.SnapshotName, Equals, "")
+			c.Assert(rebuildingStatus.TotalState, Equals, "")
+			c.Assert(rebuildingStatus.Progress, Equals, uint32(0))
+			c.Assert(rebuildingStatus.TotalProgress, Equals, uint32(0))
+			c.Assert(rebuildingStatus.TotalState, Equals, types.ProgressStateInProgress)
+		case types.ProgressStateInProgress:
+			c.Assert(rebuildingStatus.SnapshotName, Not(Equals), "")
+			c.Assert(rebuildingStatus.TotalState, Equals, types.ProgressStateInProgress)
+			c.Assert(rebuildingStatus.Progress <= 100, Equals, true)
+			c.Assert(rebuildingStatus.TotalProgress < 100, Equals, true)
+		case types.ProgressStateComplete:
+			c.Assert(rebuildingStatus.Progress, Equals, uint32(100))
+			if rebuildingStatus.TotalState == types.ProgressStateInProgress {
+				c.Assert(rebuildingStatus.TotalProgress <= 100, Equals, true)
+			} else {
+				c.Assert(rebuildingStatus.TotalState, Equals, types.ProgressStateComplete)
+				c.Assert(rebuildingStatus.TotalProgress, Equals, uint32(100))
+			}
+		default:
+			c.Fatalf("Unexpected rebuilding state %v", rebuildingStatus.State)
+		}
+
+		if rebuildingStatus.TotalState == types.ProgressStateComplete {
+			break
+		}
+
+		time.Sleep(defaultTestRebuildingWaitInterval)
 	}
 }
 
