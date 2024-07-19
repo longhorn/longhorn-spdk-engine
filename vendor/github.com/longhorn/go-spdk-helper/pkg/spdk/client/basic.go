@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/pkg/errors"
+
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 )
 
@@ -363,24 +365,52 @@ func (c *Client) BdevLvolResize(name string, size uint64) (resized bool, err err
 	return resized, json.Unmarshal(cmdOutput, &resized)
 }
 
-// BdevLvolShallowCopy make a shallow copy of lvol over a given bdev.
+// BdevLvolStartShallowCopy start a shallow copy of lvol over a given bdev.
 // Only clusters allocated to the lvol will be written on the bdev.
+// Returns the operation ID needed to check the shallow copy status with BdevLvolCheckShallowCopy.
 //
 //	"srcLvolName": Required. UUID or alias of lvol to create a copy from.
 //
 //	"dstBdevName": Required. Name of the bdev that acts as destination for the copy.
-func (c *Client) BdevLvolShallowCopy(srcLvolName, dstBdevName string) (copied bool, err error) {
+func (c *Client) BdevLvolStartShallowCopy(srcLvolName, dstBdevName string) (operationId uint32, err error) {
 	req := spdktypes.BdevLvolShallowCopyRequest{
 		SrcLvolName: srcLvolName,
 		DstBdevName: dstBdevName,
 	}
 
-	cmdOutput, err := c.jsonCli.SendCommandWithLongTimeout("bdev_lvol_shallow_copy", req)
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_lvol_start_shallow_copy", req)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 
-	return copied, json.Unmarshal(cmdOutput, &copied)
+	shallowCopy := spdktypes.ShallowCopy{}
+	err = json.Unmarshal(cmdOutput, &shallowCopy)
+	if err != nil {
+		return 0, err
+	}
+
+	return shallowCopy.OperationId, nil
+}
+
+// BdevLvolCheckShallowCopy check the status of a shallow copy previously started.
+//
+//	"operationId": Required. Operation ID of the shallow copy to check.
+func (c *Client) BdevLvolCheckShallowCopy(operationId uint32) (*spdktypes.ShallowCopyStatus, error) {
+	shallowCopy := spdktypes.ShallowCopy{
+		OperationId: operationId,
+	}
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_lvol_check_shallow_copy", shallowCopy)
+	if err != nil {
+		return nil, err
+	}
+
+	var shallowCopyStatus spdktypes.ShallowCopyStatus
+	err = json.Unmarshal(cmdOutput, &shallowCopyStatus)
+	if err != nil {
+		return nil, err
+	}
+
+	return &shallowCopyStatus, nil
 }
 
 // BdevLvolGetFragmap gets fragmap of the specific segment of the logical volume.
@@ -574,7 +604,10 @@ func (c *Client) BdevRaidRemoveBaseBdev(name string) (removed bool, err error) {
 // "reconnectDelaySec": Controller reconnect delay in seconds
 //
 // "fastIOFailTimeoutSec": Fast I/O failure timeout in seconds
-func (c *Client) BdevNvmeAttachController(name, subnqn, traddr, trsvcid string, trtype spdktypes.NvmeTransportType, adrfam spdktypes.NvmeAddressFamily, ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec int32) (bdevNameList []string, err error) {
+//
+// "multipath": Multipathing behavior: disable, failover, multipath. Default is failover
+func (c *Client) BdevNvmeAttachController(name, subnqn, traddr, trsvcid string, trtype spdktypes.NvmeTransportType, adrfam spdktypes.NvmeAddressFamily,
+	ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec int32, multipath string) (bdevNameList []string, err error) {
 	req := spdktypes.BdevNvmeAttachControllerRequest{
 		Name: name,
 		NvmeTransportID: spdktypes.NvmeTransportID{
@@ -587,6 +620,7 @@ func (c *Client) BdevNvmeAttachController(name, subnqn, traddr, trsvcid string, 
 		CtrlrLossTimeoutSec:  ctrlrLossTimeoutSec,
 		ReconnectDelaySec:    reconnectDelaySec,
 		FastIOFailTimeoutSec: fastIOFailTimeoutSec,
+		Multipath:            multipath,
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("bdev_nvme_attach_controller", req)
@@ -792,10 +826,15 @@ func (c *Client) NvmfGetSubsystems(nqn, tgtName string) (subsystemList []spdktyp
 //	"nqn": Required. Subsystem NQN.
 //
 //	"bdevName": Required. Name of bdev to expose as a namespace.
-func (c *Client) NvmfSubsystemAddNs(nqn, bdevName string) (nsid uint32, err error) {
+//
+//	"nguid": Optional. Namespace globally unique identifier.
+func (c *Client) NvmfSubsystemAddNs(nqn, bdevName, nguid string) (nsid uint32, err error) {
 	req := spdktypes.NvmfSubsystemAddNsRequest{
-		Nqn:       nqn,
-		Namespace: spdktypes.NvmfSubsystemNamespace{BdevName: bdevName},
+		Nqn: nqn,
+		Namespace: spdktypes.NvmfSubsystemNamespace{
+			BdevName: bdevName,
+			Nguid:    nguid,
+		},
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("nvmf_subsystem_add_ns", req)
@@ -1044,4 +1083,51 @@ func (c *Client) LogGetPrintLevel() (string, error) {
 	}
 
 	return strings.Trim(string(level), "\"\n"), nil
+}
+
+// BdevVirtioAttachController creates new initiator Virtio SCSI or Virtio Block and expose all found bdevs.
+//
+// "name": Required. Use this name as base for new created bdevs.
+//
+// "trtype": Required. Transport type, "user" or "pci".
+//
+// "traddr": Required. Transport type specific target address: e.g. UNIX domain socket path or BDF.
+//
+// "devType": Required. Device type, "scsi" or "blk".
+func (c *Client) BdevVirtioAttachController(name, trtype, traddr, devType string) ([]string, error) {
+	req := spdktypes.BdevVirtioAttachControllerRequest{
+		Name:    name,
+		Trtype:  trtype,
+		Traddr:  traddr,
+		DevType: devType,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_virtio_attach_controller", req)
+	if err != nil {
+		return nil, err
+	}
+
+	var disks []string
+	err = json.Unmarshal([]byte(cmdOutput), &disks)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to unmarshal disks: %s", cmdOutput)
+	}
+
+	return disks, nil
+}
+
+// BdevVirtioDetachController removes a Virtio device.
+//
+// "name": Required. Use this name as base for new created bdevs.
+func (c *Client) BdevVirtioDetachController(name string) (deleted bool, err error) {
+	req := spdktypes.BdevVirtioDetachControllerRequest{
+		Name: name,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_virtio_detach_controller", req)
+	if err != nil {
+		return false, err
+	}
+
+	return deleted, json.Unmarshal(cmdOutput, &deleted)
 }
