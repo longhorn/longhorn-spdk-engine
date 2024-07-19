@@ -18,6 +18,10 @@ const (
 	FrontendSPDKTCPNvmf     = "spdk-tcp-nvmf"
 	FrontendSPDKTCPBlockdev = "spdk-tcp-blockdev"
 
+	ShallowCopyStateInProgress = "in progress"
+	ShallowCopyStateComplete   = "complete"
+	ShallowCopyStateError      = "error"
+
 	DefaultCtrlrLossTimeoutSec = 30
 	// DefaultReconnectDelaySec can't be more than DefaultFastIoFailTimeoutSec, same for non-default values.
 	DefaultReconnectDelaySec    = 5
@@ -30,10 +34,21 @@ const (
 	DefaultTransportAckTimeout = 14
 
 	DefaultKeepAliveTimeoutMs = 10000
+	DefaultMultipath          = "disable"
 
 	ExecuteTimeout = 60 * time.Second
 )
 
 func GetNQN(name string) string {
 	return fmt.Sprintf("%s:%s", NQNPrefix, name)
+}
+
+type DiskStatus struct {
+	Bdf          string
+	Type         string
+	Driver       string
+	Vendor       string
+	Numa         string
+	Device       string
+	BlockDevices string
 }
