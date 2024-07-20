@@ -9,8 +9,8 @@ require (
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/google/uuid v1.6.0
 	github.com/longhorn/backupstore v0.0.0-20240709004445-1cadf9073de3
-	github.com/longhorn/go-common-libs v0.0.0-20240718091042-aff867b55212
-	github.com/longhorn/go-spdk-helper v0.0.0-20240719062424-66ae69ad1b6e
+	github.com/longhorn/go-common-libs v0.0.0-20240720044518-32fc527fe868
+	github.com/longhorn/go-spdk-helper v0.0.0-20240720064915-d2ce0846d2a7
 	github.com/longhorn/types v0.0.0-20240706151541-33cb010c3544
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
@@ -52,6 +52,6 @@ require (
 	golang.org/x/text v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240528184218-531527333157 // indirect
 	k8s.io/klog/v2 v2.120.1 // indirect
-	k8s.io/mount-utils v0.30.2 // indirect
+	k8s.io/mount-utils v0.30.3 // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect
 )
