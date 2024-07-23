@@ -1026,25 +1026,7 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s with address %s add", req.EngineName, req.ReplicaName, req.ReplicaAddress)
 	}
 
-	srcReplicaName, rebuildingSnapshotList, err := e.ReplicaAddStart(spdkClient, req.ReplicaName, req.ReplicaAddress)
-	if err != nil {
-		return nil, err
-	}
-
-	go func() {
-		// Cannot add a lock for this call
-		// TODO: Improve the error handling
-		if err := e.ReplicaShallowCopy(srcReplicaName, req.ReplicaName, req.ReplicaAddress, rebuildingSnapshotList); err != nil {
-			log.WithError(err).Errorf("Failed to shallow copy replica %s(%s) with rebuilding snapshot list %+v", req.ReplicaName, req.ReplicaAddress, rebuildingSnapshotList)
-			return
-		}
-		if err := e.ReplicaAddFinish(spdkClient, srcReplicaName, req.ReplicaName, req.ReplicaAddress); err != nil {
-			log.WithError(err).Errorf("Failed to finish replica %s(%s) add", req.ReplicaName, req.ReplicaAddress)
-			return
-		}
-	}()
-
-	return &emptypb.Empty{}, nil
+	return &emptypb.Empty{}, e.ReplicaAdd(spdkClient, req.ReplicaName, req.ReplicaAddress)
 }
 
 func (s *Server) EngineReplicaList(ctx context.Context, req *spdkrpc.EngineReplicaListRequest) (ret *spdkrpc.EngineReplicaListResponse, err error) {
