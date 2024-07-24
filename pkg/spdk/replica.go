@@ -1163,24 +1163,27 @@ func (r *Replica) RebuildingSrcFinish(spdkClient *spdkclient.Client, dstReplicaN
 func (r *Replica) doCleanupForRebuildingSrc(spdkClient *spdkclient.Client) (err error) {
 	if r.rebuildingSrcCache.dstRebuildingBdevName != "" && r.rebuildingSrcCache.dstRebuildingBdevType == spdktypes.BdevTypeNvme {
 		if err := disconnectNVMfBdev(spdkClient, r.rebuildingSrcCache.dstRebuildingBdevName); err != nil {
-			return err
+			r.log.WithError(err).Errorf("Failed to disconnect the rebuilding dst bdev %s for rebuilding src cleanup, will continue", r.rebuildingSrcCache.dstRebuildingBdevName)
+		} else {
+			r.rebuildingSrcCache.dstRebuildingBdevName = ""
+			r.rebuildingSrcCache.dstRebuildingBdevType = ""
 		}
-		r.rebuildingSrcCache.dstRebuildingBdevName = ""
 	}
 
 	if r.rebuildingSrcCache.exposedSnapshotPort != 0 {
 		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(spdktypes.GetLvolNameFromAlias(r.rebuildingSrcCache.exposedSnapshotAlias))); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-			return err
+			r.log.WithError(err).Errorf("Failed to stop exposing the snapshot %s for rebuilding src cleanup, will continue", r.rebuildingSrcCache.exposedSnapshotAlias)
+		} else {
+			if err := r.portAllocator.ReleaseRange(r.rebuildingSrcCache.exposedSnapshotPort, r.rebuildingSrcCache.exposedSnapshotPort); err != nil {
+				r.log.WithError(err).Errorf("Failed to release exposed snapshot port %d for rebuilding src cleanup, will continue", r.rebuildingSrcCache.exposedSnapshotPort)
+			} else {
+				r.rebuildingSrcCache.exposedSnapshotPort = 0
+				r.rebuildingSrcCache.exposedSnapshotAlias = ""
+			}
 		}
-		if err := r.portAllocator.ReleaseRange(r.rebuildingSrcCache.exposedSnapshotPort, r.rebuildingSrcCache.exposedSnapshotPort); err != nil {
-			return err
-		}
-		r.rebuildingSrcCache.exposedSnapshotPort = 0
 	}
 
 	r.rebuildingSrcCache.dstReplicaName = ""
-	r.rebuildingSrcCache.dstRebuildingBdevType = ""
-	r.rebuildingSrcCache.exposedSnapshotAlias = ""
 
 	return nil
 }
@@ -1489,10 +1492,11 @@ func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client, clean
 		isSrcDstOnSameHost := r.IP == strings.Split(r.rebuildingDstCache.srcReplicaAddress, ":")[0]
 		if !isSrcDstOnSameHost {
 			if err := disconnectNVMfBdev(spdkClient, r.rebuildingDstCache.externalSnapshotBdevName); err != nil {
-				return err
+				r.log.WithError(err).Errorf("Failed to disconnect the external src snapshot bdev %s for rebuilding dst cleanup, will continue", r.rebuildingDstCache.externalSnapshotBdevName)
+			} else {
+				r.rebuildingDstCache.srcReplicaAddress = ""
 			}
 		}
-		r.rebuildingDstCache.srcReplicaAddress = ""
 	}
 
 	// Blindly clean up the rebuilding lvol and the exposed port
@@ -1503,47 +1507,51 @@ func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client, clean
 	}
 	if r.rebuildingDstCache.rebuildingPort != 0 {
 		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(rebuildingLvolName)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-			return err
-		}
-		if err := r.portAllocator.ReleaseRange(r.rebuildingDstCache.rebuildingPort, r.rebuildingDstCache.rebuildingPort); err != nil {
-			return err
+			r.log.WithError(err).Errorf("Failed to stop exposing the rebuilding lvol %s for rebuilding dst cleanup, will continue", rebuildingLvolName)
+		} else {
+			if err := r.portAllocator.ReleaseRange(r.rebuildingDstCache.rebuildingPort, r.rebuildingDstCache.rebuildingPort); err != nil {
+				r.log.WithError(err).Errorf("Failed to release the rebuilding port %d for rebuilding dst cleanup, will continue", r.rebuildingDstCache.rebuildingPort)
+			} else {
+				r.rebuildingDstCache.rebuildingPort = 0
+			}
 		}
 	}
-	r.rebuildingDstCache.rebuildingPort = 0
 
 	// Mainly for rebuilding failed case
 	if cleanupRebuildingLvolTree && r.rebuildingDstCache.rebuildingLvol != nil {
 		bdevLvolMap, err := GetBdevLvolMap(spdkClient)
 		if err != nil {
-			return err
-		}
-		tmpRootLvol := bdevLvolMap[rebuildingLvolName]
-		for tmpRootLvol != nil {
-			if tmpRootLvol.DriverSpecific.Lvol == nil {
-				break
+			r.log.WithError(err).Errorf("Failed to get bdev lvol map for rebuilding dst cleanup, will continue")
+		} else {
+			tmpRootLvol := bdevLvolMap[rebuildingLvolName]
+			for tmpRootLvol != nil {
+				if tmpRootLvol.DriverSpecific.Lvol == nil {
+					break
+				}
+				if tmpRootLvol.DriverSpecific.Lvol.BaseSnapshot == "" {
+					break
+				}
+				if !IsReplicaSnapshotLvol(r.Name, tmpRootLvol.DriverSpecific.Lvol.BaseSnapshot) {
+					break
+				}
+				if bdevLvolMap[tmpRootLvol.DriverSpecific.Lvol.BaseSnapshot] == nil {
+					break
+				}
+				tmpRootLvol = bdevLvolMap[tmpRootLvol.DriverSpecific.Lvol.BaseSnapshot]
 			}
-			if tmpRootLvol.DriverSpecific.Lvol.BaseSnapshot == "" {
-				break
-			}
-			if !IsReplicaSnapshotLvol(r.Name, tmpRootLvol.DriverSpecific.Lvol.BaseSnapshot) {
-				break
-			}
-			if bdevLvolMap[tmpRootLvol.DriverSpecific.Lvol.BaseSnapshot] == nil {
-				break
-			}
-			tmpRootLvol = bdevLvolMap[tmpRootLvol.DriverSpecific.Lvol.BaseSnapshot]
-		}
-		if tmpRootLvol != nil {
-			if err := CleanupLvolTree(spdkClient, spdktypes.GetLvolNameFromAlias(tmpRootLvol.Aliases[0]), bdevLvolMap); err != nil {
-				return err
+			if tmpRootLvol != nil {
+				if err := CleanupLvolTree(spdkClient, spdktypes.GetLvolNameFromAlias(tmpRootLvol.Aliases[0]), bdevLvolMap); err != nil {
+					r.log.WithError(err).Error("Failed to clean up the rebuilding lvol tree for rebuilding dst cleanup, will continue")
+				}
 			}
 		}
 	}
 
 	if _, err := spdkClient.BdevLvolDelete(spdktypes.GetLvolAlias(r.LvsName, rebuildingLvolName)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return err
+		r.log.WithError(err).Errorf("Failed to delete the rebuilding lvol %s for rebuilding dst cleanup, will continue", rebuildingLvolName)
+	} else {
+		r.rebuildingDstCache.rebuildingLvol = nil
 	}
-	r.rebuildingDstCache.rebuildingLvol = nil
 
 	r.rebuildingDstCache.rebuildingSnapshotMap = map[string]*api.Lvol{}
 
