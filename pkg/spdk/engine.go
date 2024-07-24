@@ -1094,6 +1094,8 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 	}()
 
 	// Blindly ask the source replica to detach the rebuilding lvol
+	// If this detachment fails, there may be leftover rebuilding nvme controller in spdk_tgt of the src replica. We should continue since it's not a fatal error and shall not block the flow
+	// Similarly, the below src/dst replica finish should not block the flow either.
 	if srcReplicaErr := srcReplicaServiceCli.ReplicaRebuildingSrcDetach(srcReplicaName, dstReplicaName); srcReplicaErr != nil {
 		e.log.WithError(srcReplicaErr).Errorf("Engine failed to detach the rebuilding lvol for rebuilding src replica %s, will ignore this error and continue", srcReplicaName)
 	}
