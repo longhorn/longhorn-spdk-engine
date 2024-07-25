@@ -937,7 +937,7 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 
 	snapshotName := GenerateRebuildingSnapshotName()
 	opts := &api.SnapshotOptions{
-		Timestamp: time.Now().String(),
+		Timestamp: util.Now(),
 	}
 	updateRequired, err = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, SnapshotOperationCreate, opts)
 	if err != nil {
