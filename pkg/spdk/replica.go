@@ -1303,7 +1303,14 @@ func (r *Replica) RebuildingSrcShallowCopyStart(spdkClient *spdkclient.Client, s
 
 // RebuildingSrcShallowCopyCheck asks the src replica to check the shallow copy progress and status via the shallow copy op ID returned by RebuildingSrcShallowCopyStart.
 func (r *Replica) RebuildingSrcShallowCopyCheck(spdkClient *spdkclient.Client, shallowCopyOpID uint32) (status *spdktypes.ShallowCopyStatus, err error) {
-	return spdkClient.BdevLvolCheckShallowCopy(shallowCopyOpID)
+	status, err = spdkClient.BdevLvolCheckShallowCopy(shallowCopyOpID)
+	if err != nil {
+		return nil, err
+	}
+	if status.State == types.SPDKShallowCopyStateInProgress {
+		status.State = types.ProgressStateInProgress
+	}
+	return status, nil
 }
 
 // RebuildingDstStart asks the dst replica to create a new head lvol based on the external snapshot of the src replica and blindly expose it as a NVMf bdev.
