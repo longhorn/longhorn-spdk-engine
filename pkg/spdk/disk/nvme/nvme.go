@@ -1,10 +1,12 @@
 package nvme
 
 import (
+	"strings"
+
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 
 	commonTypes "github.com/longhorn/go-common-libs/types"
-	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdksetup "github.com/longhorn/go-spdk-helper/pkg/spdk/setup"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
@@ -52,16 +54,27 @@ func (d *DiskDriverNvme) DiskDelete(spdkClient *spdkclient.Client, diskName, dis
 		return false, errors.Wrapf(err, "failed to get the executor for NVMe disk %v deletion", diskName)
 	}
 
-	_, err = spdkClient.BdevNvmeDetachController(diskName)
+	controllers, err := spdkClient.BdevNvmeGetControllers("")
 	if err != nil {
-		if !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-			return false, errors.Wrapf(err, "failed to detach NVMe disk %v", diskName)
+		return false, errors.Wrap(err, "failed to get NVMe controllers")
+	}
+
+	for _, controller := range controllers {
+		for _, ctrl := range controller.Ctrlrs {
+			if ctrl.Trid.Traddr == diskPath && strings.ToLower(string(ctrl.Trid.Trtype)) == "pcie" {
+				logrus.Infof("Detaching NVMe controller %v", controller.Name)
+				_, err = spdkClient.BdevNvmeDetachController(controller.Name)
+				if err != nil {
+					logrus.WithError(err).Warnf("Failed to detach NVMe controller %v", controller.Name)
+				}
+				break
+			}
 		}
 	}
 
 	_, err = spdksetup.Unbind(diskPath, executor)
 	if err != nil {
-		return false, errors.Wrapf(err, "failed to unbind NVMe disk %v", diskPath)
+		logrus.WithError(err).Warnf("Failed to unbind NVMe disk %v", diskPath)
 	}
 	return true, nil
 }
