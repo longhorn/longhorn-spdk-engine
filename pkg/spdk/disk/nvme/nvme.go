@@ -2,7 +2,6 @@ package nvme
 
 import (
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 
 	commonTypes "github.com/longhorn/go-common-libs/types"
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
@@ -30,9 +29,9 @@ func (d *DiskDriverNvme) DiskCreate(spdkClient *spdkclient.Client, diskName, dis
 		return "", errors.Wrapf(err, "failed to get the executor for NVMe disk create %v", diskPath)
 	}
 
-	_, err = spdksetup.Bind(diskPath, string(commonTypes.DiskDriverUioPciGeneric), executor)
+	_, err = spdksetup.Bind(diskPath, "", executor)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to bind NVMe disk %v with %v", diskPath, string(commonTypes.DiskDriverUioPciGeneric))
+		return "", errors.Wrapf(err, "failed to bind NVMe disk %v", diskPath)
 	}
 
 	bdevs, err := spdkClient.BdevNvmeAttachController(diskName, "", diskPath, "", "PCIe", "",
@@ -83,7 +82,6 @@ func (d *DiskDriverNvme) DiskGet(spdkClient *spdkclient.Client, diskName, diskPa
 		nvmes := *bdev.DriverSpecific.Nvme
 		for _, nvme := range nvmes {
 			if nvme.PciAddress == diskPath {
-				logrus.Infof("Found bdev %v for NVMe disk %v", bdev, diskName)
 				foundBdevs = append(foundBdevs, bdev)
 			}
 		}
