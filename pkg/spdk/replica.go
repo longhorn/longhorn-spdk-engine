@@ -1930,14 +1930,18 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 			return grpcstatus.Errorf(grpccodes.Internal, err.Error())
 		}
 	} else {
+		r.log.Info("Resetting the restore for backup %v", backupUrl)
+
 		var lvolName string
 		var snapshotNameToBeRestored string
 
 		validLastRestoredBackup := r.canDoIncrementalRestore(restore, backupUrl, backupName)
 		if validLastRestoredBackup {
+			r.log.Infof("Starting an incremental restore for backup %v", backupUrl)
 			lvolName = GetReplicaSnapshotLvolName(r.Name, restore.LastRestored)
 			snapshotNameToBeRestored = restore.LastRestored
 		} else {
+			r.log.Infof("Starting a full restore for backup %v", backupUrl)
 			lvolName = GetReplicaSnapshotLvolName(r.Name, snapshotName)
 			snapshotNameToBeRestored = snapshotName
 		}
@@ -1960,7 +1964,11 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 		}
 		r.log.Infof("Successfully initiated full restore for %v to %v", backupUrl, newRestore.LvolName)
 	} else {
-		return fmt.Errorf("incremental restore is not supported yet")
+		r.log.Infof("Starting an incremental restore for backup %v", backupUrl)
+		if err := r.backupRestoreIncrementally(backupUrl, newRestore.LastRestored, newRestore.LvolName, concurrentLimit); err != nil {
+			return errors.Wrapf(err, "failed to start incremental backup restore")
+		}
+		r.log.Infof("Successfully initiated incremental restore for %v to %v", backupUrl, newRestore.LvolName)
 	}
 
 	go func() {
@@ -1971,6 +1979,25 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 
 	return nil
 
+}
+
+func (r *Replica) backupRestoreIncrementally(backupURL, lastRestored, snapshotLvolName string, concurrentLimit int32) error {
+	backupURL = butil.UnescapeURL(backupURL)
+
+	logrus.WithFields(logrus.Fields{
+		"backupURL":        backupURL,
+		"lastRestored":     lastRestored,
+		"snapshotLvolName": snapshotLvolName,
+		"concurrentLimit":  concurrentLimit,
+	}).Info("Start restoring backup incrementally")
+
+	return backupstore.RestoreDeltaBlockBackupIncrementally(r.ctx, &backupstore.DeltaRestoreConfig{
+		BackupURL:       backupURL,
+		DeltaOps:        r.restore,
+		LastBackupName:  lastRestored,
+		Filename:        snapshotLvolName,
+		ConcurrentLimit: int32(concurrentLimit),
+	})
 }
 
 func (r *Replica) backupRestore(backupURL, snapshotLvolName string, concurrentLimit int32) error {
