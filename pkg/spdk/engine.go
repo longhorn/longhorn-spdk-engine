@@ -1754,7 +1754,10 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineN
 			e.log.Infof("Generating a snapshot name %s for the full restore", snapshotName)
 		}
 	} else {
-		return nil, errors.Errorf("incremental restore is not supported yet")
+		if snapshotName == "" {
+			snapshotName = util.UUID()
+			e.log.Infof("Generating a snapshot name %s for the incremental restore", snapshotName)
+		}
 	}
 
 	resp := &spdkrpc.EngineBackupRestoreResponse{
