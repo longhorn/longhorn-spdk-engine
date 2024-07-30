@@ -202,7 +202,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		e.ReplicaAddressMap = replicaAddressMap
 		e.log = e.log.WithField("replicaAddressMap", replicaAddressMap)
 
-		e.CheckAndUpdateInfoFromReplica()
+		e.checkAndUpdateInfoFromReplicaNoLock()
 
 		e.log.Info("Launching raid during engine creation")
 		if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
@@ -624,12 +624,12 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		// TODO: should we delete the engine automatically here?
 	}
 
-	e.CheckAndUpdateInfoFromReplica()
+	e.checkAndUpdateInfoFromReplicaNoLock()
 
 	return nil
 }
 
-func (e *Engine) CheckAndUpdateInfoFromReplica() {
+func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 	replicaMap := map[string]*api.Replica{}
 	replicaAncestorMap := map[string]*api.Lvol{}
 	// hasBackingImage := false
@@ -943,6 +943,7 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	if err != nil {
 		return err
 	}
+	e.checkAndUpdateInfoFromReplicaNoLock()
 
 	rebuildingSnapshotList, err = getRebuildingSnapshotList(srcReplicaServiceCli, srcReplicaName)
 	if err != nil {
@@ -1124,6 +1125,7 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 		}
 		updateRequired = true
 	}
+	e.checkAndUpdateInfoFromReplicaNoLock()
 
 	// The source replica blindly stops exposing the snapshot and wipe the rebuilding info.
 	if srcReplicaErr := srcReplicaServiceCli.ReplicaRebuildingSrcFinish(srcReplicaName, dstReplicaName); srcReplicaErr != nil {
@@ -1335,7 +1337,7 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 		return "", err
 	}
 
-	e.CheckAndUpdateInfoFromReplica()
+	e.checkAndUpdateInfoFromReplicaNoLock()
 
 	e.log.Infof("Engine finished snapshot operation %s %s", snapshotOp, snapshotName)
 
@@ -1372,7 +1374,7 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 			if e.ReplicaModeMap[replicaName] == types.ModeWO {
 				return "", fmt.Errorf("engine %s contains WO replica %s during snapshot %s delete", e.Name, replicaName, snapshotName)
 			}
-			e.CheckAndUpdateInfoFromReplica()
+			e.checkAndUpdateInfoFromReplicaNoLock()
 			if len(e.SnapshotMap[snapshotName].Children) > 1 {
 				return "", fmt.Errorf("engine %s cannot delete snapshot %s since it contains multiple children %+v", e.Name, snapshotName, e.SnapshotMap[snapshotName].Children)
 			}
