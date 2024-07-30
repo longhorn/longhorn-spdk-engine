@@ -922,7 +922,7 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	}()
 
 	// Pause the IO and flush cache by suspending the NVMe initiator
-	if e.Frontend == types.FrontendSPDKTCPBlockdev {
+	if e.Frontend == types.FrontendSPDKTCPBlockdev && e.Endpoint != "" {
 		// The system-created snapshot during a rebuilding does not need to guarantee the integrity of the filesystem.
 		if err = e.initiator.Suspend(true, true); err != nil {
 			engineErr = err
@@ -1102,7 +1102,7 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 
 	// Pause the IO again by suspending the NVMe initiator
 	// If something goes wrong, the engine will be marked as error, then we don't need to do anything for replicas. The deletion logic will take over the responsibility of cleanup.
-	if e.Frontend == types.FrontendSPDKTCPBlockdev {
+	if e.Frontend == types.FrontendSPDKTCPBlockdev && e.Endpoint != "" {
 		if err = e.initiator.Suspend(true, true); err != nil {
 			return errors.Wrapf(err, "failed to suspend NVMe initiator")
 		}
