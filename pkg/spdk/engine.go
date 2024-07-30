@@ -1337,7 +1337,7 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 
 	e.CheckAndUpdateInfoFromReplica()
 
-	e.log.Infof("Engine finished snapshot %s for %v", snapshotOp, snapshotName)
+	e.log.Infof("Engine finished snapshot operation %s %s", snapshotOp, snapshotName)
 
 	return snapshotName, nil
 }
@@ -1401,9 +1401,9 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 			}
 		case SnapshotOperationPurge:
 			if e.ReplicaModeMap[replicaName] == types.ModeWO {
-				return "", fmt.Errorf("engine %s contains WO replica %s during snapshot %s purge", e.Name, replicaName, snapshotName)
+				return "", fmt.Errorf("engine %s contains WO replica %s during snapshot purge", e.Name, replicaName)
 			}
-			// TODO: Do we need to verify that all replicas hold the same system snapshot list
+			// TODO: Do we need to verify that all replicas hold the same system snapshot list?
 		default:
 			return "", fmt.Errorf("unknown replica snapshot operation %s", snapshotOp)
 		}
