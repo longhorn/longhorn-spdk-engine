@@ -98,11 +98,13 @@ type RebuildingDstCache struct {
 	rebuildingError       string
 	rebuildingState       string
 
+	processedSnapshotList  []string
+	processedSnapshotsSize uint64
+
 	processingSnapshotName string
 	processingOpID         uint32
 	processingState        string
 	processingSize         uint64
-	processedSnapshotsSize uint64
 }
 
 type RebuildingSrcCache struct {
@@ -175,6 +177,7 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 
 		rebuildingDstCache: RebuildingDstCache{
 			rebuildingSnapshotMap: map[string]*api.Lvol{},
+			processedSnapshotList: []string{},
 		},
 		rebuildingSrcCache: RebuildingSrcCache{},
 
@@ -1459,6 +1462,7 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	r.rebuildingDstCache.processingOpID = 0
 	r.rebuildingDstCache.processingState = types.ProgressStateStarting
 	r.rebuildingDstCache.processingSize = 0
+	r.rebuildingDstCache.processedSnapshotList = make([]string, 0, len(rebuildingSnapshotList))
 	r.rebuildingDstCache.processedSnapshotsSize = 0
 
 	r.isRebuilding = true
@@ -1831,14 +1835,15 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 	// Do not update r.ActiveChain for the rebuilding snapshots here.
 	// The replica will directly reconstruct r.ActiveChain as well as r.SnapshotLvolMap during the rebuilding dst finish.
 	r.rebuildingDstCache.rebuildingLvol.Parent = snapSvcLvol.Name
+
+	r.rebuildingDstCache.processedSnapshotList = append(r.rebuildingDstCache.processedSnapshotList, snapshotName)
 	r.rebuildingDstCache.processedSnapshotsSize += snapSvcLvol.ActualSize
+
+	r.rebuildingDstCache.processingState = types.ProgressStateStarting
 	r.rebuildingDstCache.processingSnapshotName = ""
 	r.rebuildingDstCache.processingOpID = 0
-	r.rebuildingDstCache.processingState = types.ProgressStateStarting
 	r.rebuildingDstCache.processingSize = 0
 	updateRequired = true
-
-	// TODO: Need to retain the processing info if the snapshot is the last one.
 
 	return nil
 }
