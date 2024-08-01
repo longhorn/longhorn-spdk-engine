@@ -867,6 +867,12 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 		return fmt.Errorf("replica %s already exists", dstReplicaName)
 	}
 
+	for replicaName, replicaMode := range e.ReplicaModeMap {
+		if replicaMode == types.ModeWO {
+			return fmt.Errorf("cannot add a new replica %s since there is already a rebuilding replica %s", dstReplicaName, replicaName)
+		}
+	}
+
 	// engineErr will be set when the engine failed to do any non-recoverable operations, then there is no way to make the engine continue working. Typically, it's related to the frontend suspend or resume failures.
 	// While err means replica-related operation errors. It will fail the current replica add flow.
 	var engineErr error
