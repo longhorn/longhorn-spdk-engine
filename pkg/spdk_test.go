@@ -1200,6 +1200,8 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 }
 
 func WaitForReplicaRebuildingComplete(c *C, spdkCli *client.SPDKClient, engineName, replicaName string) {
+	complete := false
+
 	for cnt := 0; cnt < defaultTestRebuildingWaitCount; cnt++ {
 		rebuildingStatus, err := spdkCli.ReplicaRebuildingDstShallowCopyCheck(replicaName)
 		c.Assert(err, IsNil)
@@ -1235,11 +1237,19 @@ func WaitForReplicaRebuildingComplete(c *C, spdkCli *client.SPDKClient, engineNa
 		}
 
 		if rebuildingStatus.TotalState == types.ProgressStateComplete {
-			break
+			engine, err := spdkCli.EngineGet(engineName)
+			c.Assert(err, IsNil)
+			c.Assert(engine.State, Equals, types.InstanceStateRunning)
+			if engine.ReplicaModeMap[replicaName] == types.ModeRW {
+				complete = true
+				break
+			}
 		}
 
 		time.Sleep(defaultTestRebuildingWaitInterval)
 	}
+
+	c.Assert(complete, Equals, true)
 }
 
 func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
