@@ -1185,7 +1185,7 @@ func (r *Replica) RebuildingSrcStart(spdkClient *spdkclient.Client, dstReplicaNa
 	r.rebuildingSrcCache.exposedSnapshotAlias = snapLvol.Alias
 	updateRequired = true
 
-	r.log.Infof("Replica exposed snapshot %s(%s) for replica %s rebuilding start", exposedSnapshotName, exposedSnapshotLvolAddress, dstReplicaName)
+	r.log.Infof("Replica exposed snapshot %s(%s)(%s) for replica %s rebuilding start", exposedSnapshotName, snapLvol.UUID, exposedSnapshotLvolAddress, dstReplicaName)
 
 	return exposedSnapshotLvolAddress, nil
 }
@@ -1802,6 +1802,8 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 	if r.rebuildingDstCache.rebuildingSnapshotMap[snapshotName].ActualSize != snapSvcLvol.ActualSize {
 		return fmt.Errorf("rebuilding dst newly rebuilt snapshot %s(%s) actual size %d does not match the corresponding rebuilding src snapshot (%s) actual size %d", snapSvcLvol.Name, snapSvcLvol.UUID, snapSvcLvol.ActualSize, r.rebuildingDstCache.rebuildingSnapshotMap[snapshotName].UUID, r.rebuildingDstCache.rebuildingSnapshotMap[snapshotName].ActualSize)
 	}
+
+	r.log.Infof("Created a new snapshot %s(%s) for rebuilding dst", snapSvcLvol.Alias, snapSvcLvol.UUID)
 
 	// Do not update r.ActiveChain for the rebuilding snapshots here.
 	// The replica will directly reconstruct r.ActiveChain as well as r.SnapshotLvolMap during the rebuilding dst finish.
