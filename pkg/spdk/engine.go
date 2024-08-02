@@ -1041,7 +1041,7 @@ func (e *Engine) replicaShallowCopy(srcReplicaServiceCli, dstReplicaServiceCli *
 		}
 
 		if err := dstReplicaServiceCli.ReplicaRebuildingDstShallowCopyStart(dstReplicaName, currentSnapshotName); err != nil {
-			return err
+			return errors.Wrapf(err, "failed to start shallow copy snapshot %s", currentSnapshotName)
 		}
 		for {
 			shallowCopyStatus, err := dstReplicaServiceCli.ReplicaRebuildingDstShallowCopyCheck(dstReplicaName)
@@ -1055,6 +1055,7 @@ func (e *Engine) replicaShallowCopy(srcReplicaServiceCli, dstReplicaServiceCli *
 				if shallowCopyStatus.Progress != 100 {
 					e.log.Warnf("Shallow copy snapshot %s is %s but somehow the progress is not 100%%", shallowCopyStatus.SnapshotName, helpertypes.ShallowCopyStateComplete)
 				}
+				e.log.Infof("Shallow copied snapshot %s", shallowCopyStatus.SnapshotName)
 				break
 			}
 		}
