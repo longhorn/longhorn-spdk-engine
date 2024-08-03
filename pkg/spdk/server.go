@@ -233,6 +233,11 @@ func (s *Server) verify() (err error) {
 		if replicaMap[lvolName] != nil {
 			continue
 		}
+		if IsRebuildingLvol(lvolName) {
+			if replicaMap[GetReplicaNameFromRebuildingLvolName(lvolName)] != nil {
+				continue
+			}
+		}
 		lvsUUID := bdev.DriverSpecific.Lvol.LvolStoreUUID
 		specSize := bdev.NumBlocks * uint64(bdev.BlockSize)
 		actualSize := bdev.DriverSpecific.Lvol.NumAllocatedClusters * uint64(defaultClusterSize)
