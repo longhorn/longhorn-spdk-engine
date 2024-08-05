@@ -1760,6 +1760,14 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineN
 		}
 	}
 
+	defer func() {
+		go func() {
+			if err := e.completeBackupRestore(spdkClient); err != nil {
+				logrus.WithError(err).Warn("Failed to complete backup restore")
+			}
+		}()
+	}()
+
 	resp := &spdkrpc.EngineBackupRestoreResponse{
 		Errors: map[string]string{},
 	}
@@ -1795,6 +1803,66 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineN
 	}
 
 	return resp, nil
+}
+
+func (e *Engine) completeBackupRestore(spdkClient *spdkclient.Client) error {
+	if err := e.waitForRestoreComplete(); err != nil {
+		return errors.Wrapf(err, "failed to wait for restore complete")
+	}
+
+	return e.BackupRestoreFinish(spdkClient)
+}
+
+func (e *Engine) waitForRestoreComplete() error {
+	periodicChecker := time.NewTicker(time.Duration(restorePeriodicRefreshInterval.Seconds()) * time.Second)
+	defer periodicChecker.Stop()
+
+	var err error
+	for range periodicChecker.C {
+		isReplicaRestoreCompleted := true
+		for replicaName, replicaAddress := range e.ReplicaAddressMap {
+			if e.ReplicaModeMap[replicaName] != types.ModeRW {
+				continue
+			}
+
+			isReplicaRestoreCompleted, err = e.isReplicaRestoreCompleted(replicaName, replicaAddress)
+			if err != nil {
+				return errors.Wrapf(err, "failed to check replica %s restore status", replicaName)
+			}
+
+			if !isReplicaRestoreCompleted {
+				break
+			}
+		}
+
+		if isReplicaRestoreCompleted {
+			e.log.Info("Backup restoration completed successfully")
+			return nil
+		}
+	}
+
+	return errors.Errorf("failed to wait for engine %s restore complete", e.Name)
+}
+
+func (e *Engine) isReplicaRestoreCompleted(replicaName, replicaAddress string) (bool, error) {
+	log := e.log.WithFields(logrus.Fields{
+		"replica": replicaName,
+		"address": replicaAddress,
+	})
+	log.Trace("Checking replica restore status")
+
+	replicaServiceCli, err := GetServiceClient(replicaAddress)
+	if err != nil {
+		return false, errors.Wrapf(err, "failed to get replica %v service client %s", replicaName, replicaAddress)
+	}
+	defer replicaServiceCli.Close()
+
+	status, err := replicaServiceCli.ReplicaRestoreStatus(replicaName)
+	if err != nil {
+		return false, errors.Wrapf(err, "failed to check replica %s restore status", replicaName)
+	}
+
+	return !status.IsRestoring, nil
 }
 
 func (e *Engine) BackupRestoreFinish(spdkClient *spdkclient.Client) error {
