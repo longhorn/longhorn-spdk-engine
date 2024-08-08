@@ -599,16 +599,20 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 
 	containValidReplica := false
 	for replicaName, bdevName := range e.ReplicaBdevNameMap {
-		if e.ReplicaModeMap[replicaName] == types.ModeERR || e.ReplicaModeMap[replicaName] == types.ModeWO {
+		if e.ReplicaModeMap[replicaName] == types.ModeERR {
 			continue
 		}
-		mode, err := e.validateAndUpdateReplicaMode(replicaName, bdevMap[bdevName])
+		if e.ReplicaModeMap[replicaName] != types.ModeWO && e.ReplicaModeMap[replicaName] != types.ModeRW {
+			e.log.Errorf("Engine found replica %s invalid mode %v during ValidateAndUpdate", replicaName, e.ReplicaModeMap[replicaName])
+			e.ReplicaModeMap[replicaName] = types.ModeERR
+			updateRequired = true
+			continue
+		}
+		mode, err := e.validateAndUpdateReplicaNvme(replicaName, bdevMap[bdevName])
 		if err != nil {
-			if e.ReplicaModeMap[replicaName] != types.ModeERR {
-				e.log.WithError(err).Errorf("Replica %v is invalid, will update the mode from %s to ERR during ValidateAndUpdate", replicaName, e.ReplicaModeMap[replicaName])
-				e.ReplicaModeMap[replicaName] = types.ModeERR
-				updateRequired = true
-			}
+			e.log.WithError(err).Errorf("Engine found valid nvme for replica %v, will update the mode from %s to ERR during ValidateAndUpdate", replicaName, e.ReplicaModeMap[replicaName])
+			e.ReplicaModeMap[replicaName] = types.ModeERR
+			updateRequired = true
 			continue
 		}
 		if e.ReplicaModeMap[replicaName] != mode {
@@ -650,6 +654,19 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 		if err != nil {
 			e.log.WithError(err).Warnf("Failed to get replica %s with address %s, mark the mode from %v to ERR", replicaName, address, e.ReplicaModeMap[replicaName])
 			e.ReplicaModeMap[replicaName] = types.ModeERR
+			continue
+		}
+		if e.ReplicaModeMap[replicaName] == types.ModeWO {
+			shallowCopyStatus, err := replicaServiceCli.ReplicaRebuildingDstShallowCopyCheck(replicaName)
+			if err != nil {
+				e.log.WithError(err).Warnf("failed to get rebuilding replica %s shallow copy info, will skip this replica and continue info update from replica", replicaName)
+				continue
+			}
+			if shallowCopyStatus.TotalState == helpertypes.ShallowCopyStateError || shallowCopyStatus.Error != "" {
+				e.log.Errorf("Engine found rebuilding replica %s error %v during info update from replica, will mark the mode from WO to ERR and continue info update from replica", replicaName, shallowCopyStatus.Error)
+				e.ReplicaModeMap[replicaName] = types.ModeERR
+			}
+			// No need to do anything if `shallowCopyStatus.TotalState == helpertypes.ShallowCopyStateComplete`, engine should leave the rebuilding logic to update its mode
 			continue
 		}
 
@@ -811,7 +828,7 @@ func (e *Engine) validateAndUpdateFrontend(subsystemMap map[string]*spdktypes.Nv
 	return nil
 }
 
-func (e *Engine) validateAndUpdateReplicaMode(replicaName string, bdev *spdktypes.BdevInfo) (mode types.Mode, err error) {
+func (e *Engine) validateAndUpdateReplicaNvme(replicaName string, bdev *spdktypes.BdevInfo) (mode types.Mode, err error) {
 	if bdev == nil {
 		return types.ModeERR, fmt.Errorf("cannot find a bdev for replica %s", replicaName)
 	}
@@ -837,9 +854,8 @@ func (e *Engine) validateAndUpdateReplicaMode(replicaName string, bdev *spdktype
 		return types.ModeERR, fmt.Errorf("found mismatching between replica bdev %s address %s and the nvme bdev actual address %s during replica %s mode validation", bdev.Name, e.ReplicaAddressMap[replicaName], bdevAddr, replicaName)
 	}
 	// TODO: Validate NVMe controller state
-	// TODO: Verify Mode WO
 
-	return types.ModeRW, nil
+	return e.ReplicaModeMap[replicaName], nil
 }
 
 func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string) (err error) {
