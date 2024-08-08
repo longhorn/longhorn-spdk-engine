@@ -648,7 +648,8 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 		}
 		replica, err := replicaServiceCli.ReplicaGet(replicaName)
 		if err != nil {
-			e.log.WithError(err).Warnf("failed to get replica %s with address %s, will skip this replica and continue info update from replica", replicaName, address)
+			e.log.WithError(err).Warnf("Failed to get replica %s with address %s, mark the mode from %v to ERR", replicaName, address, e.ReplicaModeMap[replicaName])
+			e.ReplicaModeMap[replicaName] = types.ModeERR
 			continue
 		}
 
