@@ -1477,6 +1477,8 @@ func (e *Engine) replicaSnapshotOperation(spdkClient *spdkclient.Client, replica
 		if err := disconnectNVMfBdev(spdkClient, e.ReplicaBdevNameMap[replicaName]); err != nil {
 			return err
 		}
+		delete(e.ReplicaBdevNameMap, replicaName)
+		// If the below step failed, the replica will be marked as ERR during ValidateAndUpdate.
 		if err := replicaClient.ReplicaSnapshotRevert(replicaName, snapshotName); err != nil {
 			return err
 		}
