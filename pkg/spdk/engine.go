@@ -815,37 +815,29 @@ func (e *Engine) validateAndUpdateReplicaMode(replicaName string, bdev *spdktype
 	if bdev == nil {
 		return types.ModeERR, fmt.Errorf("cannot find a bdev for replica %s", replicaName)
 	}
+
 	bdevSpecSize := bdev.NumBlocks * uint64(bdev.BlockSize)
 	if e.SpecSize != bdevSpecSize {
-		return types.ModeERR, fmt.Errorf("found mismatching between replica %s bdev spec size %d and the engine spec size %d for engine %s", replicaName, bdevSpecSize, e.SpecSize, e.Name)
+		return types.ModeERR, fmt.Errorf("found mismatching between replica bdev %s spec size %d and the engine %s spec size %d during replica %s mode validation", bdev.Name, bdevSpecSize, e.Name, e.SpecSize, replicaName)
 	}
-	switch spdktypes.GetBdevType(bdev) {
-	case spdktypes.BdevTypeLvol:
-		replicaIP, _, err := net.SplitHostPort(e.ReplicaAddressMap[replicaName])
-		if err != nil {
-			return types.ModeERR, err
-		}
-		if e.IP != replicaIP {
-			return types.ModeERR, fmt.Errorf("found mismatching between replica %s IP %s and the engine IP %s for engine %s", replicaName, replicaIP, e.IP, e.Name)
-		}
-	case spdktypes.BdevTypeNvme:
-		if len(*bdev.DriverSpecific.Nvme) != 1 {
-			return types.ModeERR, fmt.Errorf("found zero or multiple nvme info in a remote nvme base bdev %v for replica %s", bdev.Name, replicaName)
-		}
-		nvmeInfo := (*bdev.DriverSpecific.Nvme)[0]
-		if !strings.EqualFold(string(nvmeInfo.Trid.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
-			!strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
-			return types.ModeERR, fmt.Errorf("found invalid address family %s and transport type %s in a remote nvme base bdev %s for replica %s", nvmeInfo.Trid.Adrfam, nvmeInfo.Trid.Trtype, bdev.Name, replicaName)
-		}
-		bdevAddr := net.JoinHostPort(nvmeInfo.Trid.Traddr, nvmeInfo.Trid.Trsvcid)
-		if e.ReplicaAddressMap[replicaName] != bdevAddr {
-			return types.ModeERR, fmt.Errorf("found mismatching between replica %s bdev address %s and the nvme bdev actual address %s", replicaName, e.ReplicaAddressMap[replicaName], bdevAddr)
-		}
-		// TODO: Validate NVMe controller state
-		// TODO: Verify Mode WO
-	default:
-		return types.ModeERR, fmt.Errorf("found invalid bdev type %v for replica %s ", spdktypes.GetBdevType(bdev), replicaName)
+
+	if spdktypes.GetBdevType(bdev) != spdktypes.BdevTypeNvme {
+		return types.ModeERR, fmt.Errorf("found bdev type %v rather than %v during replica %s mode validation", spdktypes.GetBdevType(bdev), spdktypes.BdevTypeNvme, replicaName)
 	}
+	if len(*bdev.DriverSpecific.Nvme) != 1 {
+		return types.ModeERR, fmt.Errorf("found zero or multiple nvme info in a nvme base bdev %v during replica %s mode validation", bdev.Name, replicaName)
+	}
+	nvmeInfo := (*bdev.DriverSpecific.Nvme)[0]
+	if !strings.EqualFold(string(nvmeInfo.Trid.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
+		!strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
+		return types.ModeERR, fmt.Errorf("found invalid address family %s and transport type %s in a remote nvme base bdev %s during replica %s mode validation", nvmeInfo.Trid.Adrfam, nvmeInfo.Trid.Trtype, bdev.Name, replicaName)
+	}
+	bdevAddr := net.JoinHostPort(nvmeInfo.Trid.Traddr, nvmeInfo.Trid.Trsvcid)
+	if e.ReplicaAddressMap[replicaName] != bdevAddr {
+		return types.ModeERR, fmt.Errorf("found mismatching between replica bdev %s address %s and the nvme bdev actual address %s during replica %s mode validation", bdev.Name, e.ReplicaAddressMap[replicaName], bdevAddr, replicaName)
+	}
+	// TODO: Validate NVMe controller state
+	// TODO: Verify Mode WO
 
 	return types.ModeRW, nil
 }
