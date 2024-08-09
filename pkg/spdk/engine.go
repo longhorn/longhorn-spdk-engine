@@ -856,7 +856,10 @@ func (e *Engine) validateAndUpdateReplicaNvme(replicaName string, bdev *spdktype
 	if e.ReplicaAddressMap[replicaName] != bdevAddr {
 		return types.ModeERR, fmt.Errorf("found mismatching between replica bdev %s address %s and the nvme bdev actual address %s during replica %s mode validation", bdev.Name, e.ReplicaAddressMap[replicaName], bdevAddr, replicaName)
 	}
-	// TODO: Validate NVMe controller state
+	controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(e.ReplicaBdevNameMap[replicaName])
+	if controllerName != replicaName {
+		return types.ModeERR, fmt.Errorf("found unexpected the nvme bdev controller name %s (bdev name %s) during replica %s mode validation", controllerName, bdev.Name, replicaName)
+	}
 
 	return e.ReplicaModeMap[replicaName], nil
 }
