@@ -4,6 +4,8 @@ go 1.22.0
 
 toolchain go1.22.5
 
+replace github.com/longhorn/backupstore => github.com/c3y1huang/backupstore v0.0.0-20240809014845-7e34647347fa
+
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/RoaringBitmap/roaring v1.9.4
