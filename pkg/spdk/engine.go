@@ -189,7 +189,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		for replicaName, replicaAddr := range replicaAddressMap {
 			bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaAddr)
 			if err != nil {
-				e.log.WithError(err).Errorf("Failed to get bdev from replica %s with address %s during creation, will skip it and continue", replicaName, replicaAddr)
+				e.log.WithError(err).Warnf("Failed to get bdev from replica %s with address %s during creation, will mark the mode from %v to ERR and skip it and continue", replicaName, replicaAddr, e.ReplicaModeMap[replicaName])
 				e.ReplicaModeMap[replicaName] = types.ModeERR
 				e.ReplicaBdevNameMap[replicaName] = ""
 				continue
@@ -233,7 +233,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		for replicaName, replicaAddr := range replicaAddressMap {
 			_, ok := engineWithTarget.ReplicaAddressMap[replicaName]
 			if !ok {
-				e.log.WithError(err).Errorf("Failed to get bdev from replica %s with address %s, will skip it and continue", replicaName, replicaAddr)
+				e.log.WithError(err).Warnf("Failed to get bdev from replica %s with address %s, will mark the mode from %v to ERR and skip it and continue", replicaName, replicaAddr, e.ReplicaModeMap[replicaName])
 				e.ReplicaModeMap[replicaName] = types.ModeERR
 				e.ReplicaBdevNameMap[replicaName] = ""
 				continue
