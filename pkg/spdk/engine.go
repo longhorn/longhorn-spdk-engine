@@ -1259,7 +1259,7 @@ func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, repli
 	}
 
 	// Detaching the corresponding NVMf controller to remote replica
-	controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(replicaName)
+	controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(e.ReplicaBdevNameMap[replicaName])
 	e.log.Infof("Detaching the corresponding NVMf controller %v during remote replica %s delete", controllerName, replicaName)
 	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return errors.Wrapf(err, "failed to detach controller %s for deleting replica %s", controllerName, replicaName)
