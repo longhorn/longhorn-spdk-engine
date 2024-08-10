@@ -188,6 +188,16 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 	}
 }
 
+func (r *Replica) GetVolumeHead() *Lvol {
+	r.RLock()
+	defer r.RUnlock()
+
+	if r.ChainLength < 2 {
+		return nil
+	}
+	return r.ActiveChain[r.ChainLength-1]
+}
+
 func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
 	r.Lock()
 	defer r.Unlock()
