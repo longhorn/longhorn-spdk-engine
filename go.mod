@@ -2,15 +2,15 @@ module github.com/longhorn/longhorn-spdk-engine
 
 go 1.22.0
 
-toolchain go1.22.5
+toolchain go1.22.6
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/google/uuid v1.6.0
-	github.com/longhorn/backupstore v0.0.0-20240720163059-56c90cd23634
-	github.com/longhorn/go-common-libs v0.0.0-20240729132251-9e1e0e6045c6
-	github.com/longhorn/go-spdk-helper v0.0.0-20240809041416-d679e629f379
+	github.com/longhorn/backupstore v0.0.0-20240806234049-13b6333c9ddd
+	github.com/longhorn/go-common-libs v0.0.0-20240811024046-b6ddc3efb72e
+	github.com/longhorn/go-spdk-helper v0.0.0-20240810030817-541cd738003e
 	github.com/longhorn/types v0.0.0-20240725040629-473d671316c4
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
@@ -48,7 +48,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/sys v0.23.0 // indirect
+	golang.org/x/sys v0.24.0 // indirect
 	golang.org/x/text v0.17.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240528184218-531527333157 // indirect
 	k8s.io/klog/v2 v2.120.1 // indirect
