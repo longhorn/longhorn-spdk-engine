@@ -19,13 +19,16 @@ import (
 
 	commonNet "github.com/longhorn/go-common-libs/net"
 	commonTypes "github.com/longhorn/go-common-libs/types"
+	helperclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
+
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
+
+	server "github.com/longhorn/longhorn-spdk-engine/pkg/spdk"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
-	server "github.com/longhorn/longhorn-spdk-engine/pkg/spdk"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 
@@ -65,13 +68,62 @@ func GetSPDKDir() string {
 	return filepath.Join(os.Getenv("GOPATH"), "src/github.com/longhorn/spdk")
 }
 
-func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string) {
+func startTarget(spdkDir string, args []string, execute func(envs []string, binary string, args []string, timeout time.Duration) (string, error)) (err error) {
+	if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
+		if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
+			logrus.Info("Detected running spdk_tgt, skipped the target starting")
+			return nil
+		}
+	}
+
+	argsInStr := ""
+	for _, arg := range args {
+		argsInStr = fmt.Sprintf("%s %s", argsInStr, arg)
+	}
+	tgtOpts := []string{
+		"-c",
+		fmt.Sprintf("%s %s", filepath.Join(spdkDir, "build/bin/spdk_tgt"), argsInStr),
+	}
+
+	_, err = execute(nil, "sh", tgtOpts, 1*time.Minute)
+	return err
+}
+
+func LaunchTestSPDKTarget(c *C, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error)) {
+	targetReady := false
+	if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
+		if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
+			targetReady = true
+		}
+	}
+
+	if !targetReady {
+		go func() {
+			err := startTarget(GetSPDKDir(), []string{"--logflag all", "2>&1 | tee /tmp/spdk_tgt.log"}, execute)
+			c.Assert(err, IsNil)
+		}()
+
+		for cnt := 0; cnt < 30; cnt++ {
+			if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
+				if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
+					targetReady = true
+					break
+				}
+			}
+			time.Sleep(time.Second)
+		}
+	}
+
+	c.Assert(targetReady, Equals, true)
+}
+
+func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error)) {
+	LaunchTestSPDKTarget(c, execute)
 	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort)
 	c.Assert(err, IsNil)
 
 	spdkGRPCListener, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
-
 	spdkGRPCServer := grpc.NewServer(grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 		MinTime:             10 * time.Second,
 		PermitWithoutStream: true,
@@ -80,10 +132,8 @@ func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string) {
 		<-ctx.Done()
 		spdkGRPCServer.Stop()
 	}()
-
 	spdkrpc.RegisterSPDKServiceServer(spdkGRPCServer, srv)
 	reflection.Register(spdkGRPCServer)
-
 	go func() {
 		if err := spdkGRPCServer.Serve(spdkGRPCListener); err != nil {
 			logrus.WithError(err).Error("Stopping SPDK gRPC server")
@@ -143,7 +193,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
@@ -407,7 +457,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 
 	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
@@ -1264,9 +1314,9 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
-	// c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip)
+	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
@@ -1338,9 +1388,9 @@ func (s *TestSuite) TestSPDKEngineCreateWithUpgradeRequired(c *C) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
-	// c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip)
+	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
