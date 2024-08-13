@@ -643,12 +643,17 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 	// hasBackingImage := false
 	hasSnapshot := false
 	for replicaName, address := range e.ReplicaAddressMap {
-		if e.ReplicaModeMap[replicaName] != types.ModeRW {
+		if e.ReplicaModeMap[replicaName] != types.ModeRW && e.ReplicaModeMap[replicaName] != types.ModeWO {
+			if e.ReplicaModeMap[replicaName] != types.ModeERR {
+				e.log.Warnf("Engine found unexpected mode for replica %s with address %s during info update from replica, mark the mode from %v to ERR and continue info update for other replicas", replicaName, address, e.ReplicaModeMap[replicaName])
+				e.ReplicaModeMap[replicaName] = types.ModeERR
+			}
 			continue
 		}
+
 		replicaServiceCli, err := GetServiceClient(address)
 		if err != nil {
-			e.log.WithError(err).Warnf("failed to get service client for replica %s with address %s, will skip this replica and continue info update from replica", replicaName, address)
+			e.log.WithError(err).Warnf("failed to get service client for replica %s with address %s, will skip this replica and continue info update for other replicas", replicaName, address)
 			continue
 		}
 		defer replicaServiceCli.Close()
@@ -662,11 +667,11 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 		if e.ReplicaModeMap[replicaName] == types.ModeWO {
 			shallowCopyStatus, err := replicaServiceCli.ReplicaRebuildingDstShallowCopyCheck(replicaName)
 			if err != nil {
-				e.log.WithError(err).Warnf("failed to get rebuilding replica %s shallow copy info, will skip this replica and continue info update from replica", replicaName)
+				e.log.WithError(err).Warnf("failed to get rebuilding replica %s shallow copy info, will skip this replica and continue info update for other replicas", replicaName)
 				continue
 			}
 			if shallowCopyStatus.TotalState == helpertypes.ShallowCopyStateError || shallowCopyStatus.Error != "" {
-				e.log.Errorf("Engine found rebuilding replica %s error %v during info update from replica, will mark the mode from WO to ERR and continue info update from replica", replicaName, shallowCopyStatus.Error)
+				e.log.Errorf("Engine found rebuilding replica %s error %v during info update from replica, will mark the mode from WO to ERR and continue info update for other replicas", replicaName, shallowCopyStatus.Error)
 				e.ReplicaModeMap[replicaName] = types.ModeERR
 			}
 			// No need to do anything if `shallowCopyStatus.TotalState == helpertypes.ShallowCopyStateComplete`, engine should leave the rebuilding logic to update its mode
@@ -682,7 +687,7 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 		// } else
 		if len(replica.Snapshots) != 0 {
 			// if hasBackingImage {
-			//	e.log.Warnf("Found replica %s does not have a backing image while other replicas have during info update from replica", replicaName)
+			//	e.log.Warnf("Found replica %s does not have a backing image while other replicas have during info update for other replicas", replicaName)
 			// } else {}
 			hasSnapshot = true
 			for snapshotName, snapApiLvol := range replica.Snapshots {
@@ -693,13 +698,13 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 			}
 		} else {
 			if hasSnapshot {
-				e.log.Warnf("Found replica %s does not have a snapshot while other replicas have during info update from replica", replicaName)
+				e.log.Warnf("Found replica %s does not have a snapshot while other replicas have during info update for other replicas", replicaName)
 			} else {
 				replicaAncestorMap[replicaName] = replica.Head
 			}
 		}
 		if replicaAncestorMap[replicaName] == nil {
-			e.log.Warnf("Cannot find replica %s ancestor, will skip this replica and continue info update from replica", replicaName)
+			e.log.Warnf("Cannot find replica %s ancestor, will skip this replica and continue info update for other replicas", replicaName)
 			continue
 		}
 		replicaMap[replicaName] = replica
@@ -729,7 +734,7 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 
 		creationTime, err := time.Parse(time.RFC3339, ancestorApiLvol.CreationTime)
 		if err != nil {
-			e.log.WithError(err).Warnf("Failed to parse replica %s ancestor creation time, will skip this replica and continue info update from replica: %+v", replicaName, ancestorApiLvol)
+			e.log.WithError(err).Warnf("Failed to parse replica %s ancestor creation time, will skip this replica and continue info update for other replicas: %+v", replicaName, ancestorApiLvol)
 			continue
 		}
 		if earliestCreationTime.After(creationTime) {
