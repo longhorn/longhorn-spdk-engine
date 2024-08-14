@@ -896,6 +896,8 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 		}
 	}()
 
+	e.log.Infof("Engine is starting replica %s add", dstReplicaName)
+
 	// Syncing with the SPDK TGT server only when the engine is running.
 	if e.State != types.InstanceStateRunning {
 		return fmt.Errorf("invalid state %v for engine %s replica %s add start", e.State, e.Name, dstReplicaName)
@@ -980,11 +982,13 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	if e.Frontend == types.FrontendSPDKTCPBlockdev && e.Endpoint != "" {
 		// The system-created snapshot during a rebuilding does not need to guarantee the integrity of the filesystem.
 		if err = e.initiator.Suspend(true, true); err != nil {
+			err = errors.Wrapf(err, "failed to suspend NVMe initiator during engine %s replica %s add start", e.Name, dstReplicaName)
 			engineErr = err
-			return errors.Wrapf(err, "failed to suspend NVMe initiator")
+			return err
 		}
 		defer func() {
 			if err = e.initiator.Resume(); err != nil {
+				err = errors.Wrapf(err, "failed to resume NVMe initiator during engine %s replica %s add start", e.Name, dstReplicaName)
 				engineErr = err
 			}
 		}()
