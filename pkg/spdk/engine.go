@@ -191,7 +191,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 			if err != nil {
 				e.log.WithError(err).Warnf("Failed to get bdev from replica %s with address %s during creation, will mark the mode from %v to ERR and skip it and continue", replicaName, replicaAddr, e.ReplicaModeMap[replicaName])
 				e.ReplicaModeMap[replicaName] = types.ModeERR
-				e.ReplicaBdevNameMap[replicaName] = ""
+				e.ReplicaBdevNameMap[replicaName] = bdevName
 				continue
 			}
 			// TODO: Check if a replica is really a RW replica rather than a rebuilding failed replica
@@ -241,7 +241,6 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 			if !ok {
 				e.log.WithError(err).Warnf("Failed to get bdev from replica %s with address %s, will mark the mode from %v to ERR and skip it and continue", replicaName, replicaAddr, e.ReplicaModeMap[replicaName])
 				e.ReplicaModeMap[replicaName] = types.ModeERR
-				e.ReplicaBdevNameMap[replicaName] = ""
 				continue
 			}
 
@@ -570,7 +569,6 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 	// Verify engine map consistency
 	for replicaName := range e.ReplicaAddressMap {
 		if _, exists := e.ReplicaBdevNameMap[replicaName]; !exists {
-			e.ReplicaBdevNameMap[replicaName] = ""
 			e.ReplicaModeMap[replicaName] = types.ModeERR
 			e.log.Errorf("Engine marked replica %s mode from %v to ERR since it is not found in engine %s bdev name map during ValidateAndUpdate", replicaName, e.ReplicaModeMap[replicaName], e.Name)
 		}
@@ -1530,7 +1528,6 @@ func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, rep
 		if err := e.replicaSnapshotOperation(spdkClient, replicaClients[replicaName], replicaName, snapshotName, snapshotOp, opts); err != nil && e.ReplicaModeMap[replicaName] != types.ModeERR {
 			e.log.WithError(err).Errorf("Engine failed to issue operation %s for replica %s snapshot %s, will mark the replica mode from %v to ERR", snapshotOp, replicaName, snapshotName, e.ReplicaModeMap[replicaName])
 			e.ReplicaModeMap[replicaName] = types.ModeERR
-			e.ReplicaBdevNameMap[replicaName] = ""
 			updated = true
 		}
 	}
