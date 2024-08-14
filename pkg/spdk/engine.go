@@ -1151,6 +1151,7 @@ func (e *Engine) replicaShallowCopy(srcReplicaServiceCli, dstReplicaServiceCli *
 // replicaAddFinish tries its best to finish the replica add no matter if the dst replica is rebuilt successfully or not.
 // It returns fatal errors that lead to engine unavailable only. As for the errors during replica rebuilding wrap-up, it will be logged and ignored.
 func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string) (err error) {
+
 	updateRequired := false
 
 	e.Lock()
@@ -1298,8 +1299,13 @@ func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, repli
 		return errors.Wrapf(err, "failed to remove base bdev %s for deleting replica %s", e.ReplicaBdevNameMap[replicaName], replicaName)
 	}
 
-	// Detaching the corresponding NVMf controller to remote replica
 	controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(e.ReplicaBdevNameMap[replicaName])
+	// Fallback to use replica name. Make sure there won't be a leftover controller even if somehow `e.ReplicaBdevNameMap[replicaName]` has no record
+	if controllerName == "" {
+		e.log.Infof("No NVMf controller found for replica %s, so fallback to use replica name %s", replicaName, replicaName)
+		controllerName = replicaName
+	}
+	// Detaching the corresponding NVMf controller to remote replica
 	e.log.Infof("Detaching the corresponding NVMf controller %v during remote replica %s delete", controllerName, replicaName)
 	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return errors.Wrapf(err, "failed to detach controller %s for deleting replica %s", controllerName, replicaName)
