@@ -4,6 +4,8 @@ go 1.22.0
 
 toolchain go1.23.1
 
+replace github.com/longhorn/go-spdk-helper => github.com/shuo-wu/go-spdk-helper v0.0.0-20240927003316-38f51a815d5e
+
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
