@@ -61,7 +61,8 @@ type Engine struct {
 	Head        *api.Lvol
 	SnapshotMap map[string]*api.Lvol
 
-	IsRestoring bool
+	IsRestoring           bool
+	RestoringSnapshotName string
 
 	// UpdateCh should not be protected by the engine lock
 	UpdateCh chan interface{}
@@ -1747,17 +1748,18 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineN
 
 	e.IsRestoring = true
 
-	// TODO: support DR volume
-	if len(e.SnapshotMap) == 0 {
-		if snapshotName == "" {
-			snapshotName = util.UUID()
-			e.log.Infof("Generating a snapshot name %s for the full restore", snapshotName)
-		}
-	} else {
-		if snapshotName == "" {
-			snapshotName = util.UUID()
-			e.log.Infof("Generating a snapshot name %s for the incremental restore", snapshotName)
-		}
+	switch {
+	case snapshotName != "":
+		e.RestoringSnapshotName = snapshotName
+		e.log.Infof("Using input snapshot name %s for the restore", e.RestoringSnapshotName)
+	case len(e.SnapshotMap) == 0:
+		e.RestoringSnapshotName = util.UUID()
+		e.log.Infof("Using new generated snapshot name %s for the full restore", e.RestoringSnapshotName)
+	case e.RestoringSnapshotName != "":
+		e.log.Infof("Using existing snapshot name %s for the incremental restore", e.RestoringSnapshotName)
+	default:
+		e.RestoringSnapshotName = util.UUID()
+		e.log.Infof("Using new generated snapshot name %s for the incremental restore because e.FinalSnapshotName is empty", e.RestoringSnapshotName)
 	}
 
 	defer func() {
@@ -1791,7 +1793,7 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, engineN
 			err = replicaServiceCli.ReplicaBackupRestore(&client.BackupRestoreRequest{
 				BackupUrl:       backupUrl,
 				ReplicaName:     replicaName,
-				SnapshotName:    snapshotName,
+				SnapshotName:    e.RestoringSnapshotName,
 				Credential:      credential,
 				ConcurrentLimit: concurrentLimit,
 			})
