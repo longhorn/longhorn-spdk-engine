@@ -908,10 +908,6 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 		}
 	}()
 
-	e.ReplicaStatusMap[dstReplicaName] = &EngineReplicaStatus{
-		Address: dstReplicaAddress,
-	}
-
 	replicaClients, err := e.getReplicaClients()
 	if err != nil {
 		return err
@@ -1004,12 +1000,17 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	if _, err := spdkClient.BdevRaidGrowBaseBdev(e.Name, dstHeadLvolBdevName); err != nil {
 		return errors.Wrapf(err, "failed to adding the rebuilding replica %s head bdev %s to the base bdev list for engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
 	}
-	e.ReplicaStatusMap[dstReplicaName].BdevName = dstHeadLvolBdevName
+
+	e.ReplicaStatusMap[dstReplicaName] = &EngineReplicaStatus{
+		Address:  dstReplicaAddress,
+		Mode:     types.ModeWO,
+		BdevName: dstHeadLvolBdevName,
+	}
+	updateRequired = true
 
 	// TODO: Mark the destination replica as WO mode here does not prevent the RAID bdev from using this. May need to have a SPDK API to control the corresponding base bdev mode.
 	// Reading data from this dst replica is not a good choice as the flow will be more zigzag than reading directly from the src replica:
 	// application -> RAID1 -> this base bdev (dest replica) -> the exposed snapshot (src replica).
-	e.ReplicaStatusMap[dstReplicaName].Mode = types.ModeWO
 	e.log = e.log.WithField("replicaStatusMap", e.ReplicaStatusMap)
 
 	e.log.Infof("Engine started to rebuild replica %s from healthy replica %s", dstReplicaName, srcReplicaName)
