@@ -4,6 +4,8 @@ go 1.22.0
 
 toolchain go1.22.6
 
+replace github.com/longhorn/backupstore => github.com/c3y1huang/backupstore v0.0.0-20240828035323-5cc2e815df20
+
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
