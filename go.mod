@@ -7,10 +7,10 @@ toolchain go1.22.6
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
-	github.com/longhorn/backupstore v0.0.0-20240827054225-fe89e488b75f
+	github.com/longhorn/backupstore v0.0.0-20240905092550-326b9844e10b
 	github.com/longhorn/go-common-libs v0.0.0-20240821134112-907f57efd48f
 	github.com/longhorn/go-spdk-helper v0.0.0-20240902084253-ba8761258885
-	github.com/longhorn/types v0.0.0-20240827042720-af8f10eb57cd
+	github.com/longhorn/types v0.0.0-20240902072916-1bf23d310acb
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
