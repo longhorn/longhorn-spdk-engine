@@ -14,7 +14,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
-	golang.org/x/net v0.28.0
+	golang.org/x/net v0.29.0
 	google.golang.org/grpc v1.66.0
 	google.golang.org/protobuf v1.34.2
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
@@ -52,7 +52,7 @@ require (
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/sys v0.25.0 // indirect
-	golang.org/x/text v0.17.0 // indirect
+	golang.org/x/text v0.18.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240604185151-ef581f913117 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/mount-utils v0.31.0 // indirect
