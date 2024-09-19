@@ -307,3 +307,4 @@ k8s.io/utils/internal/third_party/forked/golang/net
 k8s.io/utils/io
 k8s.io/utils/keymutex
 k8s.io/utils/net
+# github.com/longhorn/types => github.com/c3y1huang/types v0.0.0-20241027234820-01e88dd78e41
