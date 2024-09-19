@@ -4,11 +4,13 @@ go 1.22.0
 
 toolchain go1.23.2
 
+replace github.com/longhorn/types => github.com/c3y1huang/types v0.0.0-20241018031609-6c849ffa7789
+
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
 	github.com/longhorn/backupstore v0.0.0-20241013024428-b52180a5191f
-	github.com/longhorn/go-common-libs v0.0.0-20241012153249-4c71f1cbdd9e
+	github.com/longhorn/go-common-libs v0.0.0-20241024003634-9e7505c868e3
 	github.com/longhorn/go-spdk-helper v0.0.0-20241017032159-f0613870a0b5
 	github.com/longhorn/types v0.0.0-20241007141758-3640f2357238
 	github.com/pkg/errors v0.9.1
@@ -51,6 +53,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
 	golang.org/x/sys v0.26.0 // indirect
 	golang.org/x/text v0.19.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240814211410-ddb44dafa142 // indirect

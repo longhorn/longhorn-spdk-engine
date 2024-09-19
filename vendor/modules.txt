@@ -51,7 +51,7 @@ github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20241012153249-4c71f1cbdd9e
+# github.com/longhorn/go-common-libs v0.0.0-20241024003634-9e7505c868e3
 ## explicit; go 1.22.0
 github.com/longhorn/go-common-libs/backup
 github.com/longhorn/go-common-libs/bitmap
@@ -73,7 +73,7 @@ github.com/longhorn/go-spdk-helper/pkg/spdk/setup
 github.com/longhorn/go-spdk-helper/pkg/spdk/types
 github.com/longhorn/go-spdk-helper/pkg/types
 github.com/longhorn/go-spdk-helper/pkg/util
-# github.com/longhorn/types v0.0.0-20241007141758-3640f2357238
+# github.com/longhorn/types v0.0.0-20241007141758-3640f2357238 => github.com/c3y1huang/types v0.0.0-20241018031609-6c849ffa7789
 ## explicit; go 1.21
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0
@@ -150,6 +150,9 @@ github.com/yusufpapurcu/wmi
 # go.uber.org/multierr v1.11.0
 ## explicit; go 1.19
 go.uber.org/multierr
+# golang.org/x/exp v0.0.0-20231006140011-7918f672742d
+## explicit; go 1.20
+golang.org/x/exp/constraints
 # golang.org/x/net v0.30.0
 ## explicit; go 1.18
 golang.org/x/net/context
@@ -304,3 +307,4 @@ k8s.io/utils/internal/third_party/forked/golang/net
 k8s.io/utils/io
 k8s.io/utils/keymutex
 k8s.io/utils/net
+# github.com/longhorn/types => github.com/c3y1huang/types v0.0.0-20241018031609-6c849ffa7789
