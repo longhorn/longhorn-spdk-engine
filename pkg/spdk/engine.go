@@ -15,7 +15,7 @@ import (
 
 	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
 	commonnet "github.com/longhorn/go-common-libs/net"
-	ccommontypes "github.com/longhorn/go-common-libs/types"
+	commontypes "github.com/longhorn/go-common-libs/types"
 	commonutils "github.com/longhorn/go-common-libs/utils"
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	"github.com/longhorn/go-spdk-helper/pkg/nvme"
@@ -1379,7 +1379,7 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 		}
 		e.RUnlock()
 		if devicePath != "" {
-			ne, err := helperutil.NewExecutor(ccommontypes.HostProcDirectory)
+			ne, err := helperutil.NewExecutor(commontypes.HostProcDirectory)
 			if err != nil {
 				e.log.WithError(err).Errorf("WARNING: failed to get the executor for snapshot op %v with snapshot %s, will skip the sync and continue", snapshotOp, inputSnapshotName)
 			} else {
