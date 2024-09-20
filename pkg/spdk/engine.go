@@ -104,13 +104,14 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 	}
 }
 
-func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[string]string, portCount int32, superiorPortAllocator *commonbitmap.Bitmap, initiatorAddress, targetAddress string, upgradeRequired bool) (ret *spdkrpc.Engine, err error) {
+func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[string]string, portCount int32, superiorPortAllocator *commonbitmap.Bitmap, initiatorAddress, targetAddress string, upgradeRequired, salvageRequested bool) (ret *spdkrpc.Engine, err error) {
 	logrus.WithFields(logrus.Fields{
 		"portCount":         portCount,
 		"upgradeRequired":   upgradeRequired,
 		"replicaAddressMap": replicaAddressMap,
 		"initiatorAddress":  initiatorAddress,
 		"targetAddress":     targetAddress,
+		"salvageRequested":  salvageRequested,
 	}).Info("Creating engine")
 
 	requireUpdate := true
@@ -192,10 +193,20 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 			initiatorCreationRequired = false
 		}
 
+		if salvageRequested {
+			e.log.Info("Requesting salvage for engine replicas")
+
+			replicaAddressMap, err = e.filterSalvageCandidates(replicaAddressMap)
+			if err != nil {
+				return nil, errors.Wrapf(err, "failed to update replica mode to filter salvage candidates")
+			}
+		}
+
 		for replicaName, replicaAddr := range replicaAddressMap {
 			e.ReplicaStatusMap[replicaName] = &EngineReplicaStatus{
 				Address: replicaAddr,
 			}
+
 			bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaAddr)
 			if err != nil {
 				e.log.WithError(err).Warnf("Failed to get bdev from replica %s with address %s during creation, will mark the mode to ERR and continue", replicaName, replicaAddr)
@@ -270,6 +281,80 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 	e.log.Info("Created engine")
 
 	return e.getWithoutLock(), nil
+}
+
+// filterSalvageCandidates updates the replicaAddressMap by retaining only replicas
+// eligible for salvage based on the largest volume head size.
+//
+// It iterates through all replicas and:
+//   - Retrieves the volume head size for each replica.
+//   - Identifies replicas with the largest volume head size as salvage candidates.
+//   - Remove the replicas that are not eligible as salvage candidates.
+func (e *Engine) filterSalvageCandidates(replicaAddressMap map[string]string) (map[string]string, error) {
+	// Initialize filteredCandidates to hold a copy of replicaAddressMap.
+	filteredCandidates := map[string]string{}
+	for key, value := range replicaAddressMap {
+		filteredCandidates[key] = value
+	}
+
+	volumeHeadSizeToReplicaNames := map[uint64][]string{}
+
+	// Collect volume head size for each replica.
+	for replicaName, replicaAddress := range replicaAddressMap {
+		func() {
+			// Get service client for the current replica.
+			replicaServiceCli, err := GetServiceClient(replicaAddress)
+			if err != nil {
+				e.log.WithError(err).Warnf("Skipping salvage for replica %s with address %s due to failed to get replica service client", replicaName, replicaAddress)
+				return
+			}
+
+			defer func() {
+				if errClose := replicaServiceCli.Close(); errClose != nil {
+					e.log.WithError(errClose).Errorf("Failed to close replica %s client with address %s during salvage candidate filtering", replicaName, replicaAddress)
+				}
+			}()
+
+			// Retrieve replica information.
+			replica, err := replicaServiceCli.ReplicaGet(replicaName)
+			if err != nil {
+				e.log.WithError(err).Warnf("Skipping salvage for replica %s with address %s due to failed to get replica info", replicaName, replicaAddress)
+				delete(filteredCandidates, replicaName)
+				return
+			}
+
+			// Map volume head size to replica names.
+			volumeHeadSizeToReplicaNames[replica.Head.ActualSize] = append(volumeHeadSizeToReplicaNames[replica.Head.ActualSize], replicaName)
+		}()
+	}
+
+	// Sort the volume head sizes to find the largest.
+	volumeHeadSizeSorted, err := commonutils.SortKeys(volumeHeadSizeToReplicaNames)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to sort keys of salvage candidate by volume head size")
+	}
+
+	if len(volumeHeadSizeSorted) == 0 {
+		return nil, errors.New("failed to find any salvage candidate with volume head size")
+	}
+
+	// Determine salvage candidates with the largest volume head size.
+	largestVolumeHeadSize := volumeHeadSizeSorted[len(volumeHeadSizeSorted)-1]
+	e.log.Infof("Selecting salvage candidates with the largest volume head size %v from %+v", largestVolumeHeadSize, volumeHeadSizeToReplicaNames)
+
+	// Filter out replicas that do not match the largest volume head size.
+	salvageCandidates := volumeHeadSizeToReplicaNames[largestVolumeHeadSize]
+	for replicaName := range replicaAddressMap {
+		if !commonutils.Contains(salvageCandidates, replicaName) {
+			e.log.Infof("Skipping salvage for replica %s with address %s due to not having the largest volume head size (%v)", replicaName, replicaAddressMap[replicaName])
+			delete(filteredCandidates, replicaName)
+			continue
+		}
+
+		e.log.Infof("Including replica %s as a salvage candidate", replicaName)
+	}
+
+	return filteredCandidates, nil
 }
 
 func (e *Engine) handleFrontend(spdkClient *spdkclient.Client, portCount int32, superiorPortAllocator *commonbitmap.Bitmap, initiatorCreationRequired, upgradeRequired bool, initiatorAddress, targetAddress string) (err error) {
