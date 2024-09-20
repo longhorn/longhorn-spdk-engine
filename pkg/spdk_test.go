@@ -17,8 +17,8 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
-	commonNet "github.com/longhorn/go-common-libs/net"
-	commonTypes "github.com/longhorn/go-common-libs/types"
+	commonnet "github.com/longhorn/go-common-libs/net"
+	commontypes "github.com/longhorn/go-common-libs/types"
 	helperclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
@@ -153,7 +153,7 @@ func PrepareDiskFile(c *C) string {
 	err = os.Truncate(defaultTestDiskPath, int64(defaultTestDiskSize))
 	c.Assert(err, IsNil)
 
-	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
 	output, err := ne.Execute(nil, "losetup", []string{"-f"}, defaultTestExecuteTimeout)
 	c.Assert(err, IsNil)
@@ -173,7 +173,7 @@ func CleanupDiskFile(c *C, loopDevicePath string) {
 		c.Assert(err, IsNil)
 	}()
 
-	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
 	_, err = ne.Execute(nil, "losetup", []string{"-d", loopDevicePath}, time.Second)
 	c.Assert(err, IsNil)
@@ -184,14 +184,14 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 	diskDriverName := "aio"
 
-	ip, err := commonNet.GetAnyExternalIP()
+	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonNet.EnvPodIP, ip)
+	os.Setenv(commonnet.EnvPodIP, ip)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
 	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
@@ -448,14 +448,14 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	fmt.Println("Testing SPDK snapshot operations with multiple threads")
 	diskDriverName := "aio"
 
-	ip, err := commonNet.GetAnyExternalIP()
+	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonNet.EnvPodIP, ip)
+	os.Setenv(commonnet.EnvPodIP, ip)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
 	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
@@ -1208,9 +1208,9 @@ func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, 
 }
 
 func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, engineName string, replicaAddressMap map[string]string) {
-	ip, err := commonNet.GetAnyExternalIP()
+	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonNet.EnvPodIP, ip)
+	os.Setenv(commonnet.EnvPodIP, ip)
 
 	engine, err := spdkCli.EngineGet(engineName)
 	c.Assert(err, IsNil)
@@ -1307,14 +1307,14 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 
 	diskDriverName := "aio"
 
-	ip, err := commonNet.GetAnyExternalIP()
+	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonNet.EnvPodIP, ip)
+	os.Setenv(commonnet.EnvPodIP, ip)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
 	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
@@ -1381,14 +1381,14 @@ func (s *TestSuite) TestSPDKEngineCreateWithUpgradeRequired(c *C) {
 
 	diskDriverName := "aio"
 
-	ip, err := commonNet.GetAnyExternalIP()
+	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonNet.EnvPodIP, ip)
+	os.Setenv(commonnet.EnvPodIP, ip)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ne, err := helperutil.NewExecutor(commonTypes.ProcDirectory)
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
 	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
 
