@@ -31,7 +31,7 @@ RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/syste
     zypper --gpg-auto-import-keys ref
 
 RUN zypper -n install cmake curl wget gcc unzip tar xsltproc docbook-xsl-stylesheets python311 python311-pip fuse3 libfuse3-3 \
-              e2fsprogs xfsprogs util-linux-systemd python3-pyelftools libcmocka-devel device-mapper procps
+              e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps
 
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /go/bin v1.55.2
 
