@@ -11,6 +11,7 @@ ENV DAPPER_ENV TAG REPO DRONE_REPO DRONE_PULL_REQUEST DRONE_COMMIT_REF
 ENV DAPPER_OUTPUT bin coverage.out
 ENV DAPPER_RUN_ARGS --privileged --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.venv:exec --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.tox:exec -v /dev:/host/dev -v /proc:/host/proc -v /sys:/host/sys -v /tmp:/tmp
 ENV DAPPER_SOURCE /go/src/github.com/longhorn/longhorn-spdk-engine
+ENV GOLANGCI_LINT_VERSION="v1.60.3"
 
 ENV SPDK_COMMIT_ID a6478cde7e0cff2fb09992868308a7387aa5202a
 ENV LIBJSONC_COMMIT_ID b4c371fa0cbc4dcbaccc359ce9e957a22988fb34
@@ -33,7 +34,7 @@ RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/syste
 RUN zypper -n install cmake curl wget gcc unzip tar xsltproc docbook-xsl-stylesheets python311 python311-pip fuse3 libfuse3-3 \
               e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps
 
-RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /go/bin v1.55.2
+RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin ${GOLANGCI_LINT_VERSION}
 
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 & \
     ln -sf /usr/bin/pip3.11 /usr/bin/pip3
