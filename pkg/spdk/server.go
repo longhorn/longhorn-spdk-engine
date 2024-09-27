@@ -1050,7 +1050,7 @@ func (s *Server) EngineGet(ctx context.Context, req *spdkrpc.EngineGetRequest) (
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v", req.Name)
 	}
 
-	e.checkAndUpdateInfoFromReplicaNoLock()
+	e.checkAndUpdateInfoFromReplicaNoLock(req.RuntimeRequested)
 
 	return e.Get(), nil
 }

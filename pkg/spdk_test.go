@@ -380,7 +380,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName2, net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))))
 			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -410,7 +410,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
 				replica3.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))),
 			}
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -859,7 +859,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))))
 			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -904,7 +904,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(snapshotNameRebuild1, Not(Equals), "")
 
 			// Verify the 1st rebuilding result
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -953,7 +953,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName2, net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))))
 			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -1002,7 +1002,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(snapshotNameRebuild2, Not(Equals), "")
 
 			// Verify the 2nd rebuilding result
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -1174,7 +1174,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 }
 
 func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, replicaList []string, snapshotMap map[string][]string, snapshotOpts map[string]api.SnapshotOptions) {
-	engine, err := spdkCli.EngineGet(engineName)
+	engine, err := spdkCli.EngineGet(engineName, false)
 	c.Assert(err, IsNil)
 
 	for _, replicaName := range replicaList {
@@ -1212,7 +1212,7 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 	c.Assert(err, IsNil)
 	os.Setenv(commonnet.EnvPodIP, ip)
 
-	engine, err := spdkCli.EngineGet(engineName)
+	engine, err := spdkCli.EngineGet(engineName, false)
 	c.Assert(err, IsNil)
 
 	if engine.State != types.InstanceStateRunning {
@@ -1287,7 +1287,7 @@ func WaitForReplicaRebuildingComplete(c *C, spdkCli *client.SPDKClient, engineNa
 		}
 
 		if rebuildingStatus.TotalState == types.ProgressStateComplete {
-			engine, err := spdkCli.EngineGet(engineName)
+			engine, err := spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			if engine.ReplicaModeMap[replicaName] == types.ModeRW {
@@ -1367,7 +1367,7 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 	err = spdkCli.EngineDeleteTarget(engineName)
 	c.Assert(err, IsNil)
 
-	_, err = spdkCli.EngineGet(engineName)
+	_, err = spdkCli.EngineGet(engineName, false)
 	c.Assert(strings.Contains(err.Error(), "cannot find engine"), Equals, true)
 
 	err = spdkCli.ReplicaDelete(replicaName1, false)

@@ -515,7 +515,7 @@ func (c *SPDKClient) EngineDelete(name string) error {
 	return errors.Wrapf(err, "failed to delete SPDK engine %v", name)
 }
 
-func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
+func (c *SPDKClient) EngineGet(name string, runtimeRequested bool) (*api.Engine, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to get SPDK engine: missing required parameter")
 	}
@@ -525,7 +525,8 @@ func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
 	defer cancel()
 
 	resp, err := client.EngineGet(ctx, &spdkrpc.EngineGetRequest{
-		Name: name,
+		Name:             name,
+		RuntimeRequested: runtimeRequested,
 	})
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get SPDK engine %v", name)
