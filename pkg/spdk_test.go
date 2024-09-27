@@ -324,7 +324,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			err = spdkCli.ReplicaDelete(replicaName2, false)
 			c.Assert(err, IsNil)
 
-			replica1, err = spdkCli.ReplicaGet(replicaName1)
+			replica1, err = spdkCli.ReplicaGet(replicaName1, false)
 			c.Assert(err, IsNil)
 			c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
@@ -332,7 +332,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica1.PortStart, Equals, int32(0))
 			c.Assert(replica1.PortEnd, Equals, int32(0))
 
-			replica2, err = spdkCli.ReplicaGet(replicaName1)
+			replica2, err = spdkCli.ReplicaGet(replicaName1, false)
 			c.Assert(err, IsNil)
 			c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
@@ -886,7 +886,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			replicaAddressMap[replica3.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart)))
 			snapshotNameRebuild1 := ""
 			for replicaName := range replicaAddressMap {
-				replica, err := spdkCli.ReplicaGet(replicaName)
+				replica, err := spdkCli.ReplicaGet(replicaName, false)
 				c.Assert(err, IsNil)
 				for snapName, snapLvol := range replica.Snapshots {
 					if strings.HasPrefix(snapName, server.RebuildingSnapshotNamePrefix) {
@@ -984,7 +984,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			replicaAddressMap[replica4.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica4.PortStart)))
 			snapshotNameRebuild2 := ""
 			for replicaName := range replicaAddressMap {
-				replica, err := spdkCli.ReplicaGet(replicaName)
+				replica, err := spdkCli.ReplicaGet(replicaName, false)
 				c.Assert(err, IsNil)
 				for snapName, snapLvol := range replica.Snapshots {
 					if snapName != snapshotNameRebuild1 && strings.HasPrefix(snapName, server.RebuildingSnapshotNamePrefix) {
@@ -1058,7 +1058,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			delete(snapshotOpts, snapshotNameRebuild1)
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts)
 			for _, replicaName := range []string{replicaName3, replicaName4} {
-				replica, err := spdkCli.ReplicaGet(replicaName)
+				replica, err := spdkCli.ReplicaGet(replicaName, false)
 				c.Assert(err, IsNil)
 				c.Assert(replica.Head.Parent, Equals, snapshotNameRebuild2)
 				c.Assert(replica.Head.ActualSize, Equals, uint64(0))
@@ -1178,7 +1178,7 @@ func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, 
 	c.Assert(err, IsNil)
 
 	for _, replicaName := range replicaList {
-		replica, err := spdkCli.ReplicaGet(replicaName)
+		replica, err := spdkCli.ReplicaGet(replicaName, false)
 		c.Assert(err, IsNil)
 		c.Assert(len(replica.Snapshots), Equals, len(snapshotMap))
 
