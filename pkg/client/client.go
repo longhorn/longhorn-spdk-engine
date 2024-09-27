@@ -92,7 +92,7 @@ func (c *SPDKClient) ReplicaDelete(name string, cleanupRequired bool) error {
 	return errors.Wrapf(err, "failed to delete SPDK replica %v", name)
 }
 
-func (c *SPDKClient) ReplicaGet(name string) (*api.Replica, error) {
+func (c *SPDKClient) ReplicaGet(name string, runtimeRequested bool) (*api.Replica, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to get SPDK replica: missing required parameter")
 	}
@@ -102,7 +102,8 @@ func (c *SPDKClient) ReplicaGet(name string) (*api.Replica, error) {
 	defer cancel()
 
 	resp, err := client.ReplicaGet(ctx, &spdkrpc.ReplicaGetRequest{
-		Name: name,
+		Name:             name,
+		RuntimeRequested: runtimeRequested,
 	})
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get SPDK replica %v", name)

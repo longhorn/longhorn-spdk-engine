@@ -309,7 +309,7 @@ func (e *Engine) updateInfoToFilterReplicaSalvageCandidates() error {
 				}
 			}()
 
-			replica, err := replicaServiceCli.ReplicaGet(replicaName)
+			replica, err := replicaServiceCli.ReplicaGet(replicaName, true)
 			if err != nil {
 				e.log.WithError(err).Warnf("Marking replica %s from %v to ERR during salvage candidate filtering since failed to get replica info", replicaName, e.ReplicaModeMap[replicaName])
 				e.ReplicaModeMap[replicaName] = types.ModeERR
@@ -754,7 +754,7 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 				}
 			}()
 
-			replica, err := replicaServiceCli.ReplicaGet(replicaName)
+			replica, err := replicaServiceCli.ReplicaGet(replicaName, true)
 			if err != nil {
 				e.log.WithError(err).Warnf("Failed to get replica %s with address %s, mark the mode from %v to ERR", replicaName, address, e.ReplicaModeMap[replicaName])
 				e.ReplicaModeMap[replicaName] = types.ModeERR
@@ -1325,7 +1325,7 @@ func (e *Engine) getReplicaAddSrcReplica() (srcReplicaName, srcReplicaAddress st
 }
 
 func getRebuildingSnapshotList(srcReplicaServiceCli *client.SPDKClient, srcReplicaName string) ([]*api.Lvol, error) {
-	rpcSrcReplica, err := srcReplicaServiceCli.ReplicaGet(srcReplicaName)
+	rpcSrcReplica, err := srcReplicaServiceCli.ReplicaGet(srcReplicaName, false)
 	if err != nil {
 		return []*api.Lvol{}, err
 	}
@@ -1581,7 +1581,7 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 			if e.ReplicaModeMap[replicaName] == types.ModeWO {
 				return "", fmt.Errorf("engine %s contains WO replica %s during snapshot %s revert", e.Name, replicaName, snapshotName)
 			}
-			r, err := replicaClients[replicaName].ReplicaGet(replicaName)
+			r, err := replicaClients[replicaName].ReplicaGet(replicaName, false)
 			if err != nil {
 				return "", err
 			}
@@ -1689,7 +1689,7 @@ func (e *Engine) ReplicaList(spdkClient *spdkclient.Client) (ret map[string]*api
 				}
 			}()
 
-			replica, err := replicaServiceCli.ReplicaGet(name)
+			replica, err := replicaServiceCli.ReplicaGet(name, false)
 			if err != nil {
 				e.log.WithError(err).Errorf("Failed to get replica %s with address %s", name, address)
 				return
