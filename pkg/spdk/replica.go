@@ -629,17 +629,39 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 			return nil, fmt.Errorf("found mismatching between the actual lvstore name %s with UUID %s and the recorded lvstore name %s with UUID %s during replica %s creation", lvsList[0].Name, lvsList[0].UUID, r.LvsName, r.LvsUUID, r.Name)
 		}
 
-		r.log.Info("Creating a lvol bdev for the new replica")
-		if _, err := spdkClient.BdevLvolCreate("", r.LvsUUID, r.Name, util.BytesToMiB(r.SpecSize), "", true); err != nil {
-			return nil, err
-		}
 		bdevLvolList, err := spdkClient.BdevLvolGet(r.Alias, 0)
-		if err != nil {
-			return nil, err
+		if err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return nil, errors.Wrapf(err, "failed to check existence of lvol bdev for the new replica %v", r.Name)
 		}
+
+		if len(bdevLvolList) == 0 {
+			r.log.Info("Creating a lvol bdev for the new replica")
+			if _, err := spdkClient.BdevLvolCreate("", r.LvsUUID, r.Name, util.BytesToMiB(r.SpecSize), "", true); err != nil {
+				return nil, err
+			}
+			bdevLvolList, err = spdkClient.BdevLvolGet(r.Alias, 0)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			r.log.Info("Skipping to create a lvol bdev for the new replica because it already exists")
+
+			bdevLvolMap, err := GetBdevLvolMap(spdkClient)
+			if err != nil {
+				return nil, err
+			}
+
+			r.log.Infof("Constructing replica %v with existing lvol during creation", r.Name)
+			err = r.construct(bdevLvolMap)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		if len(bdevLvolList) < 1 {
 			return nil, fmt.Errorf("cannot find lvol %v after creation", r.Alias)
 		}
+
 		headSvcLvol.UUID = bdevLvolList[0].UUID
 		headSvcLvol.CreationTime = bdevLvolList[0].CreationTime
 		headSvcLvol.ActualSize = bdevLvolList[0].DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize

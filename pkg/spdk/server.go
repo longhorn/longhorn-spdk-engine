@@ -406,6 +406,49 @@ func (s *Server) ReplicaGet(ctx context.Context, req *spdkrpc.ReplicaGetRequest)
 	r := s.replicaMap[req.Name]
 	s.RUnlock()
 
+	rRuntime := &Replica{}
+	spdkClient := s.spdkClient
+	if req.RuntimeRequested {
+		bdevLvolMap, err := GetBdevLvolMap(spdkClient)
+		if err != nil {
+			return nil, err
+		}
+
+		for lvolName, bdevLvol := range bdevLvolMap {
+			if lvolName != req.Name {
+				continue
+			}
+
+			lvsUUID := bdevLvol.DriverSpecific.Lvol.LvolStoreUUID
+
+			lvsList, err := spdkClient.BdevLvolGetLvstore("", lvsUUID)
+			if err != nil {
+				return nil, err
+			}
+
+			if len(lvsList) == 0 {
+				return nil, fmt.Errorf("failed to find lvs with UUID %v", lvsUUID)
+			}
+
+			if len(lvsList) > 1 {
+				return nil, fmt.Errorf("found more than one lvs with UUID %v", lvsUUID)
+			}
+
+			specSize := bdevLvol.NumBlocks * uint64(bdevLvol.BlockSize)
+			actualSize := bdevLvol.DriverSpecific.Lvol.NumAllocatedClusters * uint64(defaultClusterSize)
+			rRuntime = NewReplica(s.ctx, lvolName, lvsList[0].Name, lvsUUID, specSize, actualSize, s.updateChs[types.InstanceTypeReplica])
+
+			err = rRuntime.Sync(spdkClient)
+			if err != nil && jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
+				return nil, errors.Wrapf(err, "failed to sync replica %v", req.Name)
+			}
+
+			break
+		}
+
+		r = rRuntime
+	}
+
 	if r == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %v", req.Name)
 	}
@@ -865,7 +908,7 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	spdkClient := s.spdkClient
 	s.Unlock()
 
-	return e.Create(spdkClient, req.ReplicaAddressMap, req.PortCount, s.portAllocator, req.InitiatorAddress, req.TargetAddress, req.UpgradeRequired)
+	return e.Create(spdkClient, req.ReplicaAddressMap, req.PortCount, s.portAllocator, req.InitiatorAddress, req.TargetAddress, req.UpgradeRequired, req.SalvageRequested)
 }
 
 func localTargetExists(e *Engine) bool {
@@ -999,6 +1042,8 @@ func (s *Server) EngineGet(ctx context.Context, req *spdkrpc.EngineGetRequest) (
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v", req.Name)
 	}
+
+	e.checkAndUpdateInfoFromReplicaNoLock(req.RuntimeRequested)
 
 	return e.Get(), nil
 }

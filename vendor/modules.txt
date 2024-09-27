@@ -51,7 +51,7 @@ github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20240921050101-797b589b669d
+# github.com/longhorn/go-common-libs v0.0.0-20240921050101-797b589b669d => github.com/c3y1huang/go-common-libs v0.0.0-20240927004544-ee33d7bb917c
 ## explicit; go 1.22.0
 github.com/longhorn/go-common-libs/backup
 github.com/longhorn/go-common-libs/bitmap
@@ -73,7 +73,7 @@ github.com/longhorn/go-spdk-helper/pkg/spdk/setup
 github.com/longhorn/go-spdk-helper/pkg/spdk/types
 github.com/longhorn/go-spdk-helper/pkg/types
 github.com/longhorn/go-spdk-helper/pkg/util
-# github.com/longhorn/types v0.0.0-20240902072916-1bf23d310acb
+# github.com/longhorn/types v0.0.0-20240902072916-1bf23d310acb => github.com/c3y1huang/types v0.0.0-20240927050527-1fc6fe5fa4f9
 ## explicit; go 1.21
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0
@@ -304,3 +304,5 @@ k8s.io/utils/internal/third_party/forked/golang/net
 k8s.io/utils/io
 k8s.io/utils/keymutex
 k8s.io/utils/net
+# github.com/longhorn/types => github.com/c3y1huang/types v0.0.0-20240927050527-1fc6fe5fa4f9
+# github.com/longhorn/go-common-libs => github.com/c3y1huang/go-common-libs v0.0.0-20240927004544-ee33d7bb917c
