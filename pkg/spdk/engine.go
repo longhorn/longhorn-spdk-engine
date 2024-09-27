@@ -215,7 +215,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 			}
 		}
 
-		e.checkAndUpdateInfoFromReplicaNoLock()
+		e.checkAndUpdateInfoFromReplicaNoLock(false)
 
 		e.log.Infof("Connected all available replicas %+v, then launching raid during engine creation", e.ReplicaModeMap)
 		if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
@@ -241,7 +241,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 
 		var engineWithTarget *api.Engine
 		if initiatorIP != targetIP {
-			engineWithTarget, err = targetSPDKClient.EngineGet(e.Name)
+			engineWithTarget, err = targetSPDKClient.EngineGet(e.Name, false)
 			if err != nil {
 				return nil, errors.Wrapf(err, "failed to get engine %v from %v", e.Name, targetAddress)
 			}
@@ -720,12 +720,12 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		// TODO: should we delete the engine automatically here?
 	}
 
-	e.checkAndUpdateInfoFromReplicaNoLock()
+	e.checkAndUpdateInfoFromReplicaNoLock(false)
 
 	return nil
 }
 
-func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
+func (e *Engine) checkAndUpdateInfoFromReplicaNoLock(runtimeRequested bool) {
 	replicaMap := map[string]*api.Replica{}
 	replicaAncestorMap := map[string]*api.Lvol{}
 	// hasBackingImage := false
@@ -754,7 +754,7 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 				}
 			}()
 
-			replica, err := replicaServiceCli.ReplicaGet(replicaName, true)
+			replica, err := replicaServiceCli.ReplicaGet(replicaName, runtimeRequested)
 			if err != nil {
 				e.log.WithError(err).Warnf("Failed to get replica %s with address %s, mark the mode from %v to ERR", replicaName, address, e.ReplicaModeMap[replicaName])
 				e.ReplicaModeMap[replicaName] = types.ModeERR
@@ -1085,7 +1085,7 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	if err != nil {
 		return err
 	}
-	e.checkAndUpdateInfoFromReplicaNoLock()
+	e.checkAndUpdateInfoFromReplicaNoLock(false)
 
 	rebuildingSnapshotList, err = getRebuildingSnapshotList(srcReplicaServiceCli, srcReplicaName)
 	if err != nil {
@@ -1296,7 +1296,7 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 		}
 		updateRequired = true
 	}
-	e.checkAndUpdateInfoFromReplicaNoLock()
+	e.checkAndUpdateInfoFromReplicaNoLock(false)
 
 	// The source replica blindly stops exposing the snapshot and wipe the rebuilding info.
 	if srcReplicaErr := srcReplicaServiceCli.ReplicaRebuildingSrcFinish(srcReplicaName, dstReplicaName); srcReplicaErr != nil {
@@ -1514,7 +1514,7 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 		return "", err
 	}
 
-	e.checkAndUpdateInfoFromReplicaNoLock()
+	e.checkAndUpdateInfoFromReplicaNoLock(false)
 
 	e.log.Infof("Engine finished snapshot operation %s %s", snapshotOp, snapshotName)
 
@@ -1561,7 +1561,7 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 			if e.ReplicaModeMap[replicaName] == types.ModeWO {
 				return "", fmt.Errorf("engine %s contains WO replica %s during snapshot %s delete", e.Name, replicaName, snapshotName)
 			}
-			e.checkAndUpdateInfoFromReplicaNoLock()
+			e.checkAndUpdateInfoFromReplicaNoLock(false)
 			if len(e.SnapshotMap[snapshotName].Children) > 1 {
 				return "", fmt.Errorf("engine %s cannot delete snapshot %s since it contains multiple children %+v", e.Name, snapshotName, e.SnapshotMap[snapshotName].Children)
 			}
