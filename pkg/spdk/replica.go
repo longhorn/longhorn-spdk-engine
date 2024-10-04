@@ -612,6 +612,11 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 	}
 	headSvcLvol := r.ActiveChain[r.ChainLength-1]
 
+	if headSvcLvol.UUID == "" && r.State == types.InstanceStateStopped {
+		r.log.Debugf("Updating replica %s state from %v to %v because headSvcLvol.UUID is empty", r.Name, r.State, types.InstanceStatePending)
+		r.State = types.InstanceStatePending
+	}
+
 	// Create bdev lvol if the replica is the new one
 	if r.State == types.InstanceStatePending {
 		var lvsList []spdktypes.LvstoreInfo
