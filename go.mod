@@ -4,8 +4,6 @@ go 1.22.0
 
 toolchain go1.23.2
 
-replace github.com/longhorn/types => github.com/c3y1huang/types v0.0.0-20241027234820-01e88dd78e41
-
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
