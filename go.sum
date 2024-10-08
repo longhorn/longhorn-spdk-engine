@@ -46,8 +46,6 @@ github.com/longhorn/backupstore v0.0.0-20240922062439-e33cb1230db9 h1:ua4PCfArX2
 github.com/longhorn/backupstore v0.0.0-20240922062439-e33cb1230db9/go.mod h1:UTONYTgRryrw0RgDZbxwU+r1s4PeKQ+v0Z8Pb6jUWn4=
 github.com/longhorn/go-common-libs v0.0.0-20240921050101-797b589b669d h1:MXJlzyXLptspJEc1UC7ee2eBIYksTl0RT2bXUAXU+8Q=
 github.com/longhorn/go-common-libs v0.0.0-20240921050101-797b589b669d/go.mod h1:L8QlyY7cqL84FcxnJ8HK6DaQ1Ej9JiZtZ94OW5W+Yyw=
-github.com/longhorn/go-spdk-helper v0.0.0-20240922062342-22115a91cbe9 h1:DVYw6dzssMcCOAQSqXLVJIQQiKdZD7lAKfnU2ZTf4Mo=
-github.com/longhorn/go-spdk-helper v0.0.0-20240922062342-22115a91cbe9/go.mod h1:pKbJjuJN69T+qDaJIkR1NcpGqCzj/vGv1NTTDiaE5s0=
 github.com/longhorn/types v0.0.0-20240902072916-1bf23d310acb h1:8CoW5YYn+SC43o5zFR+wscOd3SgF6rQZjrkXOkJfZPM=
 github.com/longhorn/types v0.0.0-20240902072916-1bf23d310acb/go.mod h1:KlJuZB8NfHchWshYxYgV9pPIxBKC04Vq05G2TfgMf7w=
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
@@ -90,6 +88,8 @@ github.com/rogpeppe/go-internal v1.12.0 h1:exVL4IDcn6na9z1rAb56Vxr+CgyK3nn3O+epU
 github.com/rogpeppe/go-internal v1.12.0/go.mod h1:E+RYuTGaKKdloAfM02xzb0FW3Paa99yedzYV+kq4uf4=
 github.com/shirou/gopsutil/v3 v3.24.5 h1:i0t8kL+kQTvpAYToeuiVk3TgDeKOFioZO3Ztz/iZ9pI=
 github.com/shirou/gopsutil/v3 v3.24.5/go.mod h1:bsoOS1aStSs9ErQ1WWfxllSeS1K5D+U30r2NfcubMVk=
+github.com/shuo-wu/go-spdk-helper v0.0.0-20240927003316-38f51a815d5e h1:VC65DWcZ1sEXpVDd1hqQbPm6RAOSgPjr1z4+k67P1ZU=
+github.com/shuo-wu/go-spdk-helper v0.0.0-20240927003316-38f51a815d5e/go.mod h1:pKbJjuJN69T+qDaJIkR1NcpGqCzj/vGv1NTTDiaE5s0=
 github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=
 github.com/sirupsen/logrus v1.9.3/go.mod h1:naHLuLoDiP4jHNo9R0sCBMtWGeIprob74mVsIT4qYEQ=
 github.com/slok/goresilience v0.2.0 h1:dagdIiWlhTm7BK/r/LRKz+zvw0SCNk+nHf7obdsbzxQ=
