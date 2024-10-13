@@ -7,7 +7,7 @@ toolchain go1.23.2
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
-	github.com/longhorn/backupstore v0.0.0-20241006011054-d46756322f43
+	github.com/longhorn/backupstore v0.0.0-20241013024428-b52180a5191f
 	github.com/longhorn/go-common-libs v0.0.0-20241012153249-4c71f1cbdd9e
 	github.com/longhorn/go-spdk-helper v0.0.0-20240922062342-22115a91cbe9
 	github.com/longhorn/types v0.0.0-20241007141758-3640f2357238
