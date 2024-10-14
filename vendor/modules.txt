@@ -8,7 +8,7 @@ github.com/RoaringBitmap/roaring/internal
 # github.com/beorn7/perks v1.0.1
 ## explicit; go 1.11
 github.com/beorn7/perks/quantile
-# github.com/bits-and-blooms/bitset v1.12.0
+# github.com/bits-and-blooms/bitset v1.16.0
 ## explicit; go 1.16
 github.com/bits-and-blooms/bitset
 # github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8
@@ -20,8 +20,8 @@ github.com/cespare/xxhash/v2
 # github.com/coreos/go-systemd/v22 v22.5.0
 ## explicit; go 1.12
 github.com/coreos/go-systemd/v22/dbus
-# github.com/gammazero/deque v0.2.0
-## explicit; go 1.18
+# github.com/gammazero/deque v1.0.0
+## explicit; go 1.22
 github.com/gammazero/deque
 # github.com/gammazero/workerpool v1.1.3
 ## explicit; go 1.18
@@ -76,9 +76,6 @@ github.com/longhorn/go-spdk-helper/pkg/util
 # github.com/longhorn/types v0.0.0-20241214151852-cf9e27d3d0a9
 ## explicit; go 1.22.7
 github.com/longhorn/types/pkg/generated/spdkrpc
-# github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0
-## explicit; go 1.19
-github.com/matttproud/golang_protobuf_extensions/v2/pbutil
 # github.com/mitchellh/go-ps v1.0.0
 ## explicit; go 1.13
 github.com/mitchellh/go-ps
@@ -88,6 +85,9 @@ github.com/moby/sys/mountinfo
 # github.com/mschoch/smat v0.2.0
 ## explicit; go 1.13
 github.com/mschoch/smat
+# github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
+## explicit
+github.com/munnerz/goautoneg
 # github.com/opencontainers/runc v1.1.14
 ## explicit; go 1.18
 github.com/opencontainers/runc/libcontainer/configs
@@ -110,25 +110,24 @@ github.com/pkg/errors
 # github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55
 ## explicit; go 1.14
 github.com/power-devops/perfstat
-# github.com/prometheus/client_golang v1.18.0
-## explicit; go 1.19
+# github.com/prometheus/client_golang v1.20.5
+## explicit; go 1.20
 github.com/prometheus/client_golang/prometheus
 github.com/prometheus/client_golang/prometheus/internal
-# github.com/prometheus/client_model v0.5.0
+# github.com/prometheus/client_model v0.6.1
 ## explicit; go 1.19
 github.com/prometheus/client_model/go
-# github.com/prometheus/common v0.45.0
-## explicit; go 1.20
+# github.com/prometheus/common v0.60.1
+## explicit; go 1.21
 github.com/prometheus/common/expfmt
-github.com/prometheus/common/internal/bitbucket.org/ww/goautoneg
 github.com/prometheus/common/model
-# github.com/prometheus/procfs v0.12.0
-## explicit; go 1.19
+# github.com/prometheus/procfs v0.15.1
+## explicit; go 1.20
 github.com/prometheus/procfs
 github.com/prometheus/procfs/internal/fs
 github.com/prometheus/procfs/internal/util
-# github.com/rogpeppe/go-internal v1.12.0
-## explicit; go 1.20
+# github.com/rogpeppe/go-internal v1.13.1
+## explicit; go 1.22
 github.com/rogpeppe/go-internal/fmtsort
 # github.com/shirou/gopsutil/v3 v3.24.5
 ## explicit; go 1.18
@@ -241,6 +240,7 @@ google.golang.org/grpc/status
 google.golang.org/grpc/tap
 # google.golang.org/protobuf v1.35.2
 ## explicit; go 1.21
+google.golang.org/protobuf/encoding/protodelim
 google.golang.org/protobuf/encoding/protojson
 google.golang.org/protobuf/encoding/prototext
 google.golang.org/protobuf/encoding/protowire
@@ -301,7 +301,7 @@ k8s.io/klog/v2/internal/sloghandler
 # k8s.io/mount-utils v0.31.3
 ## explicit; go 1.22.0
 k8s.io/mount-utils
-# k8s.io/utils v0.0.0-20241104100929-3ea5e8cea738
+# k8s.io/utils v0.0.0-20241104163129-6fe5fd82f078
 ## explicit; go 1.18
 k8s.io/utils/clock
 k8s.io/utils/exec
