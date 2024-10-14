@@ -54,3 +54,69 @@ func (s *TestSuite) TestSplitHostPort(c *C) {
 		c.Assert(port, Equals, testCase.expectedPort)
 	}
 }
+
+func (s *TestSuite) TestExtractBackingImageAndDiskUUID(c *C) {
+	type testCase struct {
+		lvolName         string
+		expectedBIName   string
+		expectedDiskUUID string
+		expectError      bool
+	}
+	testCases := map[string]testCase{
+		"ExtractBackingImageAndDiskUUID(...): only disk with hyphens": {
+			lvolName:         "bi-MyBackingImage-disk-12345-abcde",
+			expectedBIName:   "MyBackingImage",
+			expectedDiskUUID: "12345-abcde",
+			expectError:      false,
+		},
+		"ExtractBackingImageAndDiskUUID(...): backing image name and disk with hyphens": {
+			lvolName:         "bi-My-Backing-Image-disk-12345-abcde-xyz",
+			expectedBIName:   "My-Backing-Image",
+			expectedDiskUUID: "12345-abcde-xyz",
+			expectError:      false,
+		},
+		"ExtractBackingImageAndDiskUUID(...): backing image name and disk without hyphens": {
+			lvolName:         "bi-MyBackingImage-disk-12345",
+			expectedBIName:   "MyBackingImage",
+			expectedDiskUUID: "12345",
+			expectError:      false,
+		},
+		"ExtractBackingImageAndDiskUUID(...):  doesn't start with bi- and doesn't contain -disk-": {
+			lvolName:         "myWrongPattern",
+			expectedBIName:   "",
+			expectedDiskUUID: "",
+			expectError:      true,
+		},
+		"ExtractBackingImageAndDiskUUID(...): doesn't have disk in the lvol name": {
+			lvolName:         "bi-MyBackingImage-",
+			expectedBIName:   "",
+			expectedDiskUUID: "",
+			expectError:      true,
+		},
+		"ExtractBackingImageAndDiskUUID(...): doesn't have backing image in the lvol name": {
+			lvolName:         "-disk-123456-bi-abcdefg",
+			expectedBIName:   "",
+			expectedDiskUUID: "",
+			expectError:      true,
+		},
+		"ExtractBackingImageAndDiskUUID(...): empty string": {
+			lvolName:         "",
+			expectedBIName:   "",
+			expectedDiskUUID: "",
+			expectError:      true,
+		},
+	}
+	for testName, testCase := range testCases {
+		c.Logf("testing ExtractBackingImageAndDiskUUID.%v", testName)
+		// Call the function being tested
+		biName, diskUUID, err := ExtractBackingImageAndDiskUUID(testCase.lvolName)
+
+		if testCase.expectError {
+			c.Assert(err, NotNil)
+		} else {
+			c.Assert(err, IsNil)
+			c.Assert(testCase.expectedBIName, Equals, biName)
+			c.Assert(testCase.expectedDiskUUID, Equals, diskUUID)
+		}
+	}
+}
