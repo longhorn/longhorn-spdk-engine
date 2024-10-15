@@ -1408,9 +1408,11 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		return "", fmt.Errorf("invalid chain length %d for dst replica %v rebuilding start", r.ChainLength, r.Name)
 	}
 
-	// TODO: Need to do cleanup rather than directly error out if we want to reuse a rebuilding failed replica
+	// Replica.Delete and Replica.Create do not guarantee that the previous rebuilding src replica info is cleaned up
 	if r.rebuildingDstCache.srcReplicaName != "" || r.rebuildingDstCache.srcReplicaAddress != "" || r.rebuildingDstCache.externalSnapshotName != "" || r.rebuildingDstCache.externalSnapshotBdevName != "" {
-		return "", fmt.Errorf("found non-emtpy src replica %s, src replica address %s, external snapshot name %s, or external snapshot bdev name %s for dst replica rebuilding start, maybe the leftover of the previous rebuilding failure", r.rebuildingDstCache.srcReplicaName, r.rebuildingDstCache.srcReplicaAddress, r.rebuildingDstCache.externalSnapshotName, r.rebuildingDstCache.externalSnapshotBdevName)
+		if err := r.doCleanupForRebuildingDst(spdkClient, false); err != nil {
+			return "", fmt.Errorf("failed to clean up the previous src replica info for dst replica rebuilding start, src replica name %s, address %s, external snapshot name %s, or external snapshot bdev name %s", r.rebuildingDstCache.srcReplicaName, r.rebuildingDstCache.srcReplicaAddress, r.rebuildingDstCache.externalSnapshotName, r.rebuildingDstCache.externalSnapshotBdevName)
+		}
 	}
 	r.rebuildingDstCache.srcReplicaName = srcReplicaName
 	r.rebuildingDstCache.srcReplicaAddress = srcReplicaAddress
