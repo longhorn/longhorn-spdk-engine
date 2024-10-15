@@ -781,7 +781,7 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 
 	// Clean up the rebuilding cached info first
 	r.doCleanupForRebuildingSrc(spdkClient)
-	r.doCleanupForRebuildingDst(spdkClient, false)
+	_ = r.doCleanupForRebuildingDst(spdkClient, false)
 	if r.isRebuilding {
 		r.rebuildingDstCache.rebuildingError = "replica is being deleted"
 		r.rebuildingDstCache.rebuildingState = types.ProgressStateError
@@ -826,7 +826,7 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		CleanupLvolTree(spdkClient, r.ActiveChain[1].Name, bdevLvolMap, r.log)
 	}
 	// Clean up the possible rebuilding leftovers
-	r.doCleanupForRebuildingDst(spdkClient, true)
+	_ = r.doCleanupForRebuildingDst(spdkClient, true)
 
 	r.log.Info("Deleted replica")
 
@@ -1551,7 +1551,7 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 		}
 	}
 
-	r.doCleanupForRebuildingDst(spdkClient, r.rebuildingDstCache.rebuildingState == types.ProgressStateError)
+	_ = r.doCleanupForRebuildingDst(spdkClient, r.rebuildingDstCache.rebuildingState == types.ProgressStateError)
 
 	replicaLvolFilter := func(bdev *spdktypes.BdevInfo) bool {
 		var lvolName string
@@ -1574,10 +1574,12 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 	return nil
 }
 
-func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client, cleanupRebuildingLvolTree bool) {
+func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client, cleanupRebuildingLvolTree bool) error {
+	aggregatedErrors := []error{}
 	if r.rebuildingDstCache.srcReplicaAddress != "" {
 		if err := disconnectNVMfBdev(spdkClient, r.rebuildingDstCache.externalSnapshotBdevName); err != nil {
 			r.log.WithError(err).Errorf("Failed to disconnect the external src snapshot bdev %s for rebuilding dst cleanup, will continue", r.rebuildingDstCache.externalSnapshotBdevName)
+			aggregatedErrors = append(aggregatedErrors, err)
 		} else {
 			r.rebuildingDstCache.srcReplicaAddress = ""
 		}
@@ -1586,41 +1588,50 @@ func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client, clean
 	// Blindly clean up the rebuilding lvol and the exposed port
 	rebuildingLvolName := GetReplicaRebuildingLvolName(r.Name)
 	if r.rebuildingDstCache.rebuildingLvol != nil && r.rebuildingDstCache.rebuildingLvol.Name != rebuildingLvolName {
-		r.log.Errorf("BUG: replica %s rebuilding lvol actual name %s does not match the expected name %v, will use the actual name for the cleanup", r.Name, r.rebuildingDstCache.rebuildingLvol.Name, rebuildingLvolName)
+		err := fmt.Errorf("BUG: replica %s rebuilding lvol actual name %s does not match the expected name %v, will use the actual name for the cleanup", r.Name, r.rebuildingDstCache.rebuildingLvol.Name, rebuildingLvolName)
+		r.log.Error(err)
+		aggregatedErrors = append(aggregatedErrors, err)
 		rebuildingLvolName = r.rebuildingDstCache.rebuildingLvol.Name
 	}
 	if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(rebuildingLvolName)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		r.log.WithError(err).Errorf("Failed to stop exposing the rebuilding lvol %s for rebuilding dst cleanup, will continue", rebuildingLvolName)
+		aggregatedErrors = append(aggregatedErrors, err)
 	}
 	if r.rebuildingDstCache.rebuildingPort != 0 {
 		if err := r.portAllocator.ReleaseRange(r.rebuildingDstCache.rebuildingPort, r.rebuildingDstCache.rebuildingPort); err != nil {
 			r.log.WithError(err).Errorf("Failed to release the rebuilding port %d for rebuilding dst cleanup, will continue", r.rebuildingDstCache.rebuildingPort)
+			aggregatedErrors = append(aggregatedErrors, err)
 		} else {
 			r.rebuildingDstCache.rebuildingPort = 0
 		}
 	}
 	if _, err := spdkClient.BdevLvolDelete(spdktypes.GetLvolAlias(r.LvsName, rebuildingLvolName)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		r.log.WithError(err).Errorf("Failed to delete the rebuilding lvol %s for rebuilding dst cleanup, will continue", rebuildingLvolName)
+		aggregatedErrors = append(aggregatedErrors, err)
 	} else {
 		r.rebuildingDstCache.rebuildingLvol = nil
 	}
 
 	// Mainly for rebuilding failed case
 	if cleanupRebuildingLvolTree && len(r.rebuildingDstCache.processedSnapshotList) > 0 {
-		var err error
+		allLvolsCleaned := true
 		// Do cleanup in a reverse order to avoid trying to delete a snapshot lvol with multiple children
 		for idx := len(r.rebuildingDstCache.processedSnapshotList) - 1; idx >= 0; idx-- {
 			snapLvolAlias := spdktypes.GetLvolAlias(r.LvsName, GetReplicaSnapshotLvolName(r.Name, r.rebuildingDstCache.processedSnapshotList[idx]))
-			if _, err = spdkClient.BdevLvolDelete(snapLvolAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			if _, err := spdkClient.BdevLvolDelete(snapLvolAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+				allLvolsCleaned = false
 				r.log.WithError(err).Errorf("failed to delete rebuilt snapshot lvol %v for rebuilding dst cleanup, will continue", snapLvolAlias)
+				aggregatedErrors = append(aggregatedErrors, err)
 			}
 		}
-		if err == nil {
+		if allLvolsCleaned {
 			r.rebuildingDstCache.processedSnapshotList = make([]string, 0)
 		}
 	}
 
 	r.rebuildingDstCache.rebuildingSnapshotMap = map[string]*api.Lvol{}
+
+	return util.CombineErrors(aggregatedErrors...)
 }
 
 // RebuildingDstShallowCopyStart let the dst replica ask the src replica to start a shallow copy from a snapshot to the rebuilding lvol.
