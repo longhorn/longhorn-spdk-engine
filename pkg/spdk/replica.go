@@ -48,10 +48,6 @@ type Replica struct {
 	// If a replica does not contain a backing image, the first entry will be nil.
 	// The last entry of the chain should the head lvol if it exists.
 	ActiveChain []*Lvol
-	// ChainLength typically has length no less than 2.
-	// Since the first and last entries of ActiveChain are the backing image and the head, respectively.
-	// If the head does not exist, the last entry of ActiveChain will be a snapshot or the backing image.
-	ChainLength int
 	// SnapshotLvolMap map[<snapshot lvol name>]. <snapshot lvol name> consists of `<replica name>-snap-<snapshot name>`
 	SnapshotLvolMap map[string]*Lvol
 
@@ -164,7 +160,6 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 		ActiveChain: []*Lvol{
 			nil,
 		},
-		ChainLength:     2,
 		SnapshotLvolMap: map[string]*Lvol{},
 		Name:            replicaName,
 		Alias:           spdktypes.GetLvolAlias(lvsName, replicaName),
@@ -258,7 +253,6 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 
 	r.Head = newChain[len(newChain)-1]
 	r.ActiveChain = newChain
-	r.ChainLength = len(r.ActiveChain)
 	r.SnapshotLvolMap = newSnapshotLvolMap
 
 	if r.State == types.InstanceStatePending {
@@ -343,7 +337,7 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 		}
 	}
 
-	replicaActualSize := newChain[r.ChainLength-1].ActualSize
+	replicaActualSize := newChain[len(newChain)-1].ActualSize
 	for _, snapLvol := range newSnapshotLvolMap {
 		replicaActualSize += snapLvol.ActualSize
 	}
@@ -599,8 +593,8 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 
 	// Create bdev lvol if the replica is the new one
 	if r.State == types.InstanceStatePending {
-		if r.ChainLength != 1 {
-			return nil, fmt.Errorf("invalid chain length %d for new replica creation", r.ChainLength)
+		if len(r.ActiveChain) != 1 {
+			return nil, fmt.Errorf("invalid chain length %d for new replica creation", len(r.ActiveChain))
 		}
 	}
 
@@ -663,7 +657,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 
 func (r *Replica) prepareHead(spdkClient *spdkclient.Client) (err error) {
 	requireHead := false
-	if r.ChainLength < 2 {
+	if len(r.ActiveChain) < 2 {
 		requireHead = true
 	} else {
 		bdevLvolList, err := spdkClient.BdevLvolGet(r.Alias, 0)
@@ -673,20 +667,19 @@ func (r *Replica) prepareHead(spdkClient *spdkclient.Client) (err error) {
 		if len(bdevLvolList) < 1 {
 			requireHead = true
 			r.Head = nil
-			if r.ActiveChain[r.ChainLength-1] != nil && r.ActiveChain[r.ChainLength-1].Name == r.Name {
-				r.ChainLength--
-				r.ActiveChain = r.ActiveChain[:r.ChainLength]
+			if r.ActiveChain[len(r.ActiveChain)-1] != nil && r.ActiveChain[len(r.ActiveChain)-1].Name == r.Name {
+				r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
 			}
 		}
 	}
 
 	if requireHead {
 		r.log.Info("Creating a lvol bdev as replica Head")
-		if r.ActiveChain[r.ChainLength-1] != nil { // The replica has a backing image or somehow there are already snapshots in the chain
-			if _, err := spdkClient.BdevLvolClone(r.ActiveChain[r.ChainLength-2].UUID, r.Name); err != nil {
+		if r.ActiveChain[len(r.ActiveChain)-1] != nil { // The replica has a backing image or somehow there are already snapshots in the chain
+			if _, err := spdkClient.BdevLvolClone(r.ActiveChain[len(r.ActiveChain)-1].UUID, r.Name); err != nil {
 				return err
 			}
-			if r.ActiveChain[r.ChainLength-1].SpecSize != r.SpecSize {
+			if r.ActiveChain[len(r.ActiveChain)-1].SpecSize != r.SpecSize {
 				if _, err := spdkClient.BdevLvolResize(r.Alias, r.SpecSize); err != nil {
 					return err
 				}
@@ -707,17 +700,16 @@ func (r *Replica) prepareHead(spdkClient *spdkclient.Client) (err error) {
 
 	r.Head = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
 
-	if r.ActiveChain[r.ChainLength-1] != nil && r.ActiveChain[r.ChainLength-1].Name != r.Name {
-		r.ChainLength++
+	if len(r.ActiveChain) == 1 || (r.ActiveChain[len(r.ActiveChain)-1] != nil && r.ActiveChain[len(r.ActiveChain)-1].Name != r.Name) {
 		r.ActiveChain = append(r.ActiveChain, r.Head)
 	} else {
-		r.ActiveChain[r.ChainLength-1] = r.Head
+		r.ActiveChain[len(r.ActiveChain)-1] = r.Head
 	}
-	if r.ActiveChain[r.ChainLength-2] != nil {
-		if r.ActiveChain[r.ChainLength-2].Name != r.Head.Parent {
-			return fmt.Errorf("found the last entry of the active chain %v is not the head parent %v", r.ActiveChain[r.ChainLength-2].Name, r.Head.Parent)
+	if r.ActiveChain[len(r.ActiveChain)-2] != nil {
+		if r.ActiveChain[len(r.ActiveChain)-2].Name != r.Head.Parent {
+			return fmt.Errorf("found the last entry of the active chain %v is not the head parent %v", r.ActiveChain[len(r.ActiveChain)-2].Name, r.Head.Parent)
 		}
-		r.ActiveChain[r.ChainLength-2].Children[r.Head.Name] = r.Head
+		r.ActiveChain[len(r.ActiveChain)-2].Children[r.Head.Name] = r.Head
 	}
 
 	return nil
@@ -922,9 +914,8 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 		delete(prevSvcLvol.Children, r.Head.Name)
 		prevSvcLvol.Children[snapSvcLvol.Name] = snapSvcLvol
 	}
-	r.ActiveChain[r.ChainLength-1] = snapSvcLvol
+	r.ActiveChain[len(r.ActiveChain)-1] = snapSvcLvol
 	r.ActiveChain = append(r.ActiveChain, r.Head)
-	r.ChainLength++
 	r.SnapshotLvolMap[snapLvolName] = snapSvcLvol
 	updateRequired = true
 
@@ -1034,11 +1025,10 @@ func (r *Replica) removeLvolFromActiveChainWithoutLock(snapLvolName string) int 
 
 	// Cannot remove backing image lvol or head lvol
 	prevChain := r.ActiveChain
-	if pos >= 1 && pos < r.ChainLength-1 {
+	if pos >= 1 && pos < len(r.ActiveChain)-1 {
 		r.ActiveChain = append([]*Lvol{}, prevChain[:pos]...)
 		r.ActiveChain = append(r.ActiveChain, prevChain[pos+1:]...)
 	}
-	r.ChainLength = len(r.ActiveChain)
 
 	return pos
 }
@@ -1072,20 +1062,19 @@ func (r *Replica) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName str
 		}
 	}()
 
-	if r.ChainLength < 2 {
-		return nil, fmt.Errorf("invalid chain length %d for replica snapshot revert", r.ChainLength)
+	if len(r.ActiveChain) < 2 {
+		return nil, fmt.Errorf("invalid chain length %d for replica snapshot revert", len(r.ActiveChain))
 	}
 
 	if _, err := spdkClient.BdevLvolDelete(r.Alias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return nil, err
 	}
 	// The parent of the old head lvol is a valid snapshot lvol or backing image lvol
-	if r.ActiveChain[r.ChainLength-2] != nil {
-		delete(r.ActiveChain[r.ChainLength-2].Children, r.Name)
+	if r.ActiveChain[len(r.ActiveChain)-2] != nil {
+		delete(r.ActiveChain[len(r.ActiveChain)-2].Children, r.Name)
 	}
 	r.Head = nil
-	r.ChainLength--
-	r.ActiveChain = r.ActiveChain[:r.ChainLength]
+	r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
 
 	// TODO: If the below steps fail, there will be no head lvol for the replica. Need to guarantee that the replica can be cleaned up correctly in this case
 
@@ -1117,7 +1106,6 @@ func (r *Replica) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName str
 
 	r.Head = newChain[len(newChain)-1]
 	r.ActiveChain = newChain
-	r.ChainLength = len(r.ActiveChain)
 	r.SnapshotLvolMap = newSnapshotLvolMap
 
 	if r.IsExposed {
@@ -1160,8 +1148,8 @@ func (r *Replica) SnapshotPurge(spdkClient *spdkclient.Client) (err error) {
 		}
 	}()
 
-	if r.ChainLength < 2 {
-		return fmt.Errorf("invalid chain length %d for replica snapshot purge", r.ChainLength)
+	if len(r.ActiveChain) < 2 {
+		return fmt.Errorf("invalid chain length %d for replica snapshot purge", len(r.ActiveChain))
 	}
 
 	// delete all non-user-created snapshots
@@ -1407,8 +1395,8 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		updateRequired = true
 	}()
 
-	if r.ChainLength != 2 {
-		return "", fmt.Errorf("invalid chain length %d for dst replica %v rebuilding start", r.ChainLength, r.Name)
+	if len(r.ActiveChain) != 2 {
+		return "", fmt.Errorf("invalid chain length %d for dst replica %v rebuilding start", len(r.ActiveChain), r.Name)
 	}
 
 	// Replica.Delete and Replica.Create do not guarantee that the previous rebuilding src replica info is cleaned up
@@ -1534,8 +1522,8 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 		updateRequired = true
 	}()
 
-	if r.ChainLength < 2 {
-		return fmt.Errorf("invalid chain length %d for dst replica %v rebuilding finish", r.ChainLength, r.Name)
+	if len(r.ActiveChain) < 2 {
+		return fmt.Errorf("invalid chain length %d for dst replica %v rebuilding finish", len(r.ActiveChain), r.Name)
 	}
 
 	// Switch from the external snapshot to use rebuilt snapshots
