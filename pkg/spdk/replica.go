@@ -41,12 +41,16 @@ type Replica struct {
 
 	ctx context.Context
 
+	// Head should be the only writable lvol in the regular Replica lvol chain/map.
+	// And it is the last entry of ActiveChain if it is not nil.
+	Head *Lvol
 	// ActiveChain stores the backing image info in index 0.
 	// If a replica does not contain a backing image, the first entry will be nil.
-	// The last entry of the chain is always the head lvol.
+	// The last entry of the chain should be the head lvol if it exists.
 	ActiveChain []*Lvol
 	// ChainLength typically has length no less than 2.
 	// Since the first and last entries of ActiveChain are the backing image and the head, respectively.
+	// If the head does not exist, the last entry of ActiveChain will be a snapshot or the backing image.
 	ChainLength int
 	// SnapshotLvolMap map[<snapshot lvol name>]. <snapshot lvol name> consists of `<replica name>-snap-<snapshot name>`
 	SnapshotLvolMap map[string]*Lvol
@@ -131,7 +135,7 @@ func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 		ErrorMsg:  r.ErrorMsg,
 	}
 
-	res.Head = ServiceLvolToProtoLvol(r.Name, r.ActiveChain[r.ChainLength-1])
+	res.Head = ServiceLvolToProtoLvol(r.Name, r.Head)
 	// spdkrpc.Replica.Snapshots is map[<snapshot name>] rather than map[<snapshot lvol name>]
 	for lvolName, lvol := range r.SnapshotLvolMap {
 		res.Snapshots[GetSnapshotNameFromReplicaSnapshotLvolName(r.Name, lvolName)] = ServiceLvolToProtoLvol(r.Name, lvol)
@@ -156,15 +160,9 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 	return &Replica{
 		ctx: ctx,
 
+		Head: nil,
 		ActiveChain: []*Lvol{
 			nil,
-			{
-				Name:       replicaName,
-				Alias:      spdktypes.GetLvolAlias(lvsName, replicaName),
-				SpecSize:   roundedSpecSize,
-				ActualSize: actualSize,
-				Children:   map[string]*Lvol{},
-			},
 		},
 		ChainLength:     2,
 		SnapshotLvolMap: map[string]*Lvol{},
@@ -187,16 +185,6 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 
 		log: log,
 	}
-}
-
-func (r *Replica) GetVolumeHead() *Lvol {
-	r.RLock()
-	defer r.RUnlock()
-
-	if r.ChainLength < 2 {
-		return nil
-	}
-	return r.ActiveChain[r.ChainLength-1]
 }
 
 func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
@@ -255,7 +243,7 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 		return fmt.Errorf("invalid state %s with rebuilding %v for replica %s construct", r.State, r.isRebuilding, r.Name)
 	}
 
-	if err := r.validateReplicaInfo(bdevLvolMap[r.Name]); err != nil {
+	if err := r.validateReplicaHead(bdevLvolMap[r.Name]); err != nil {
 		return err
 	}
 
@@ -268,9 +256,11 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 		return err
 	}
 
+	r.Head = newChain[len(newChain)-1]
 	r.ActiveChain = newChain
 	r.ChainLength = len(r.ActiveChain)
 	r.SnapshotLvolMap = newSnapshotLvolMap
+
 	if r.State == types.InstanceStatePending {
 		r.State = types.InstanceStateStopped
 	}
@@ -303,7 +293,7 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 		return nil
 	}
 
-	if err := r.validateReplicaInfo(bdevLvolMap[r.Name]); err != nil {
+	if err := r.validateReplicaHead(bdevLvolMap[r.Name]); err != nil {
 		return err
 	}
 
@@ -444,7 +434,7 @@ func getExposedPort(subsystem *spdktypes.NvmfSubsystem) (exposedPort int32, err 
 	return 0, fmt.Errorf("cannot find a exposed port in the Nvmf subsystem")
 }
 
-func (r *Replica) validateReplicaInfo(headBdevLvol *spdktypes.BdevInfo) (err error) {
+func (r *Replica) validateReplicaHead(headBdevLvol *spdktypes.BdevInfo) (err error) {
 	if headBdevLvol == nil {
 		return fmt.Errorf("found nil head bdev lvol for replica %s", r.Name)
 	}
@@ -460,6 +450,89 @@ func (r *Replica) validateReplicaInfo(headBdevLvol *spdktypes.BdevInfo) (err err
 	}
 
 	return nil
+}
+
+func (r *Replica) IsHeadAvailable(spdkClient *spdkclient.Client) (isAvailable bool, err error) {
+	defer func() {
+		if err != nil || isAvailable {
+			return
+		}
+		r.Head = nil
+		if r.ActiveChain[len(r.ActiveChain)-1] != nil &&
+			r.ActiveChain[len(r.ActiveChain)-1].Name == r.Name {
+			r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
+		}
+	}()
+
+	if len(r.ActiveChain) < 2 {
+		return false, nil
+	}
+	if r.Head == nil {
+		return false, nil
+	}
+
+	bdevLvolList, err := spdkClient.BdevLvolGet(r.Alias, 0)
+	if err != nil {
+		return false, err
+	}
+	if len(bdevLvolList) < 1 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func (r *Replica) updateHeadCache(spdkClient *spdkclient.Client) (err error) {
+	bdevLvolList, err := spdkClient.BdevLvolGet(r.Alias, 0)
+	if err != nil {
+		return err
+	}
+	if len(bdevLvolList) < 1 {
+		return fmt.Errorf("cannot find head lvol %v for the cache update", r.Alias)
+	}
+
+	r.Head = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+
+	if len(r.ActiveChain) == 1 || (r.ActiveChain[len(r.ActiveChain)-1] != nil && r.ActiveChain[len(r.ActiveChain)-1].Name != r.Name) {
+		r.ActiveChain = append(r.ActiveChain, r.Head)
+	} else {
+		r.ActiveChain[len(r.ActiveChain)-1] = r.Head
+	}
+	if r.ActiveChain[len(r.ActiveChain)-2] != nil {
+		if r.ActiveChain[len(r.ActiveChain)-2].Name != r.Head.Parent {
+			return fmt.Errorf("found the last entry of the active chain %v is not the head parent %v", r.ActiveChain[len(r.ActiveChain)-2].Name, r.Head.Parent)
+		}
+		r.ActiveChain[len(r.ActiveChain)-2].Children[r.Head.Name] = r.Head
+	}
+
+	return nil
+}
+
+func (r *Replica) prepareHead(spdkClient *spdkclient.Client) (err error) {
+	isHeadAvailable, err := r.IsHeadAvailable(spdkClient)
+	if err != nil {
+		return err
+	}
+
+	if !isHeadAvailable {
+		r.log.Info("Creating a lvol bdev as replica Head")
+		if r.ActiveChain[len(r.ActiveChain)-1] != nil { // The replica has a backing image or somehow there are already snapshots in the chain
+			if _, err := spdkClient.BdevLvolClone(r.ActiveChain[len(r.ActiveChain)-1].UUID, r.Name); err != nil {
+				return err
+			}
+			if r.ActiveChain[len(r.ActiveChain)-1].SpecSize != r.SpecSize {
+				if _, err := spdkClient.BdevLvolResize(r.Alias, r.SpecSize); err != nil {
+					return err
+				}
+			}
+		} else {
+			if _, err := spdkClient.BdevLvolCreate("", r.LvsUUID, r.Name, util.BytesToMiB(r.SpecSize), "", true); err != nil {
+				return err
+			}
+		}
+	}
+
+	return r.updateHeadCache(spdkClient)
 }
 
 // getRootLvolName relies on the lvol name to identify if a lvol belongs to the replica,
@@ -607,85 +680,40 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 		}
 	}()
 
-	if r.ChainLength < 2 {
-		return nil, fmt.Errorf("invalid chain length %d for replica creation", r.ChainLength)
-	}
-	headSvcLvol := r.ActiveChain[r.ChainLength-1]
-
-	if headSvcLvol.UUID == "" && r.State == types.InstanceStateStopped {
-		r.log.Debugf("Updating replica %s state from %v to %v because headSvcLvol.UUID is empty", r.Name, r.State, types.InstanceStatePending)
-		r.State = types.InstanceStatePending
-	}
-
 	// Create bdev lvol if the replica is the new one
 	if r.State == types.InstanceStatePending {
-		var lvsList []spdktypes.LvstoreInfo
-		if r.LvsUUID != "" {
-			lvsList, err = spdkClient.BdevLvolGetLvstore("", r.LvsUUID)
-		} else if r.LvsName != "" {
-			lvsList, err = spdkClient.BdevLvolGetLvstore(r.LvsName, "")
+		if r.ChainLength != 1 {
+			return nil, fmt.Errorf("invalid chain length %d for new replica creation", r.ChainLength)
 		}
-		if err != nil {
-			return nil, err
-		}
-		if len(lvsList) != 1 {
-			return nil, fmt.Errorf("found zero or multiple lvstore with name %s and UUID %s during replica %s creation", r.LvsName, r.LvsUUID, r.Name)
-		}
-		if r.LvsName == "" {
-			r.LvsName = lvsList[0].Name
-		}
-		if r.LvsUUID == "" {
-			r.LvsUUID = lvsList[0].UUID
-		}
-		if r.LvsName != lvsList[0].Name || r.LvsUUID != lvsList[0].UUID {
-			return nil, fmt.Errorf("found mismatching between the actual lvstore name %s with UUID %s and the recorded lvstore name %s with UUID %s during replica %s creation", lvsList[0].Name, lvsList[0].UUID, r.LvsName, r.LvsUUID, r.Name)
-		}
-
-		bdevLvolList, err := spdkClient.BdevLvolGet(r.Alias, 0)
-		if err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-			return nil, errors.Wrapf(err, "failed to check existence of lvol bdev for the new replica %v", r.Name)
-		}
-
-		if len(bdevLvolList) == 0 {
-			r.log.Info("Creating a lvol bdev for the new replica")
-			if _, err := spdkClient.BdevLvolCreate("", r.LvsUUID, r.Name, util.BytesToMiB(r.SpecSize), "", true); err != nil {
-				return nil, err
-			}
-			bdevLvolList, err = spdkClient.BdevLvolGet(r.Alias, 0)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			r.log.Infof("Skipping creating a lvol bdev %v during replica creation because it already exists", r.Alias)
-
-			replicaLvolFilter := func(bdev *spdktypes.BdevInfo) bool {
-				var lvolName string
-				if len(bdev.Aliases) == 1 {
-					lvolName = spdktypes.GetLvolNameFromAlias(bdev.Aliases[0])
-				}
-				return IsReplicaLvol(r.Name, lvolName) || (r.ActiveChain[0] != nil && r.ActiveChain[0].Name == lvolName)
-			}
-			bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, replicaLvolFilter)
-			if err != nil {
-				return nil, err
-			}
-
-			r.log.Infof("Constructing replica %v object during replica creation", r.Name)
-			err = r.construct(bdevLvolMap)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		if len(bdevLvolList) < 1 {
-			return nil, fmt.Errorf("cannot find lvol %v after creation", r.Alias)
-		}
-
-		headSvcLvol.UUID = bdevLvolList[0].UUID
-		headSvcLvol.CreationTime = bdevLvolList[0].CreationTime
-		headSvcLvol.ActualSize = bdevLvolList[0].DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
-		r.State = types.InstanceStateStopped
 	}
+
+	var lvsList []spdktypes.LvstoreInfo
+	if r.LvsUUID != "" {
+		lvsList, err = spdkClient.BdevLvolGetLvstore("", r.LvsUUID)
+	} else if r.LvsName != "" {
+		lvsList, err = spdkClient.BdevLvolGetLvstore(r.LvsName, "")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(lvsList) != 1 {
+		return nil, fmt.Errorf("found zero or multiple lvstore with name %s and UUID %s during replica %s creation", r.LvsName, r.LvsUUID, r.Name)
+	}
+	if r.LvsName == "" {
+		r.LvsName = lvsList[0].Name
+	}
+	if r.LvsUUID == "" {
+		r.LvsUUID = lvsList[0].UUID
+	}
+	if r.LvsName != lvsList[0].Name || r.LvsUUID != lvsList[0].UUID {
+		return nil, fmt.Errorf("found mismatching between the actual lvstore name %s with UUID %s and the recorded lvstore name %s with UUID %s during replica %s creation", lvsList[0].Name, lvsList[0].UUID, r.LvsName, r.LvsUUID, r.Name)
+	}
+
+	// A stopped replica may be a broken one. We need to make sure the head lvol is ready first.
+	if err := r.prepareHead(spdkClient); err != nil {
+		return nil, err
+	}
+	r.State = types.InstanceStateStopped
 
 	podIP, err := commonnet.GetIPForPod()
 	if err != nil {
@@ -712,9 +740,8 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 	}
 
 	nguid := commonutils.RandomID(nvmeNguidLength)
-
-	if err := spdkClient.StartExposeBdev(nqn, headSvcLvol.UUID, nguid, podIP, strconv.Itoa(int(r.PortStart))); err != nil {
-		return nil, errors.Wrapf(err, "failed to expose replica %v", r.Name)
+	if err := spdkClient.StartExposeBdev(nqn, r.Head.UUID, nguid, podIP, strconv.Itoa(int(r.PortStart))); err != nil {
+		return nil, err
 	}
 	r.IsExposed = true
 	r.State = types.InstanceStateRunning
@@ -874,10 +901,9 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 		}
 	}()
 
-	if r.ChainLength < 2 {
-		return nil, fmt.Errorf("invalid chain length %d for replica snapshot creation", r.ChainLength)
+	if r.Head == nil {
+		return nil, fmt.Errorf("nil head for replica snapshot creation")
 	}
-	headSvcLvol := r.ActiveChain[r.ChainLength-1]
 
 	var xattrs []spdkclient.Xattr
 	if opts != nil {
@@ -894,7 +920,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 		xattrs = append(xattrs, snapshotTimestamp)
 	}
 
-	snapUUID, err := spdkClient.BdevLvolSnapshot(headSvcLvol.UUID, snapLvolName, xattrs)
+	snapUUID, err := spdkClient.BdevLvolSnapshot(r.Head.UUID, snapLvolName, xattrs)
 	if err != nil {
 		return nil, err
 	}
@@ -904,23 +930,30 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 		return nil, err
 	}
 	if len(bdevLvolList) != 1 {
-		return nil, fmt.Errorf("zero or multiple snap lvols with UUID %s found after lvol snapshot", snapUUID)
+		return nil, fmt.Errorf("zero or multiple snap lvols with UUID %s found after lvol snapshot create", snapUUID)
 	}
-
 	snapSvcLvol := BdevLvolInfoToServiceLvol(&bdevLvolList[0])
-	snapSvcLvol.Children[headSvcLvol.Name] = headSvcLvol
+
+	bdevLvolList, err = spdkClient.BdevLvolGet(r.Head.Alias, 0)
+	if err != nil {
+		return nil, err
+	}
+	if len(bdevLvolList) != 1 {
+		return nil, fmt.Errorf("zero or multiple head lvols with UUID %s found after lvol snapshot create", snapUUID)
+	}
+	r.Head = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+	snapSvcLvol.Children[r.Head.Name] = r.Head
 
 	// Already contain a valid snapshot lvol or backing image lvol before this snapshot creation
-	if r.ActiveChain[r.ChainLength-2] != nil {
-		prevSvcLvol := r.ActiveChain[r.ChainLength-2]
-		delete(prevSvcLvol.Children, headSvcLvol.Name)
+	if len(r.ActiveChain) > 1 && r.ActiveChain[len(r.ActiveChain)-2] != nil {
+		prevSvcLvol := r.ActiveChain[len(r.ActiveChain)-2]
+		delete(prevSvcLvol.Children, r.Head.Name)
 		prevSvcLvol.Children[snapSvcLvol.Name] = snapSvcLvol
 	}
 	r.ActiveChain[r.ChainLength-1] = snapSvcLvol
-	r.ActiveChain = append(r.ActiveChain, headSvcLvol)
+	r.ActiveChain = append(r.ActiveChain, r.Head)
 	r.ChainLength++
 	r.SnapshotLvolMap[snapLvolName] = snapSvcLvol
-	headSvcLvol.Parent = snapSvcLvol.Name
 	updateRequired = true
 
 	r.log.Infof("Replica created snapshot %s(%s)", snapshotName, snapSvcLvol.Alias)
@@ -966,10 +999,6 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 			}
 		}
 	}()
-
-	if r.ChainLength < 2 {
-		return nil, fmt.Errorf("invalid chain length %d for replica snapshot delete", r.ChainLength)
-	}
 
 	if _, err := spdkClient.BdevLvolDelete(snapSvcLvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return nil, err
@@ -1082,6 +1111,7 @@ func (r *Replica) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName str
 	if r.ActiveChain[r.ChainLength-2] != nil {
 		delete(r.ActiveChain[r.ChainLength-2].Children, r.Name)
 	}
+	r.Head = nil
 	r.ChainLength--
 	r.ActiveChain = r.ActiveChain[:r.ChainLength]
 
@@ -1113,6 +1143,7 @@ func (r *Replica) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName str
 		return nil, err
 	}
 
+	r.Head = newChain[len(newChain)-1]
 	r.ActiveChain = newChain
 	r.ChainLength = len(r.ActiveChain)
 	r.SnapshotLvolMap = newSnapshotLvolMap
@@ -1455,13 +1486,13 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		return "", err
 	}
 	if len(bdevLvolList) != 1 {
-		return "", fmt.Errorf("zero or multiple snap lvols with UUID %s found after rebuilding dst head %s creation", headLvolUUID, r.Name)
+		return "", fmt.Errorf("zero or multiple head lvols with UUID %s found after rebuilding dst head %s creation", headLvolUUID, r.Name)
 	}
-	headSvcLvol := BdevLvolInfoToServiceLvol(&bdevLvolList[0])
-	r.ActiveChain[1] = headSvcLvol
+	r.Head = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+	r.ActiveChain[1] = r.Head
 
 	nguid := commonutils.RandomID(nvmeNguidLength)
-	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), headSvcLvol.UUID, nguid, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
+	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.Head.UUID, nguid, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
 		return "", err
 	}
 	r.IsExposed = true
@@ -1483,7 +1514,7 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 
 	r.isRebuilding = true
 
-	r.log.Infof("Replica created a new head %s(%s) based on the external snapshot %s(%s) from healthy replica %s for rebuilding start", headSvcLvol.Alias, dstHeadLvolAddress, externalSnapshotName, externalSnapshotAddress, srcReplicaName)
+	r.log.Infof("Replica created a new head %s(%s) based on the external snapshot %s(%s) from healthy replica %s for rebuilding start", r.Head.Alias, dstHeadLvolAddress, externalSnapshotName, externalSnapshotAddress, srcReplicaName)
 
 	return dstHeadLvolAddress, nil
 }
