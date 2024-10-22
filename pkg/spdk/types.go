@@ -23,6 +23,7 @@ const (
 	DiskTypeBlock      = "block"
 
 	ReplicaRebuildingLvolSuffix  = "rebuilding"
+	ReplicaExpiredLvolSuffix     = "expired"
 	RebuildingSnapshotNamePrefix = "rebuild"
 
 	BackingImageTempHeadLvolSuffix = "temp-head"
@@ -193,12 +194,20 @@ func GenerateRebuildingSnapshotName() string {
 	return fmt.Sprintf("%s-%s", RebuildingSnapshotNamePrefix, util.UUID()[:8])
 }
 
+func GenerateReplicaExpiredLvolName(replicaName string) string {
+	return fmt.Sprintf("%s-%s-%s", replicaName, ReplicaExpiredLvolSuffix, util.UUID()[:8])
+}
+
 func GetReplicaRebuildingLvolName(replicaName string) string {
 	return fmt.Sprintf("%s-%s", replicaName, ReplicaRebuildingLvolSuffix)
 }
 
 func IsRebuildingLvol(lvolName string) bool {
 	return strings.HasSuffix(lvolName, ReplicaRebuildingLvolSuffix)
+}
+
+func IsReplicaExpiredLvol(replicaName, lvolName string) bool {
+	return strings.HasPrefix(lvolName, fmt.Sprintf("%s-%s", replicaName, ReplicaExpiredLvolSuffix))
 }
 
 func GetReplicaNameFromRebuildingLvolName(lvolName string) string {
