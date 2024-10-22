@@ -1462,10 +1462,6 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		updateRequired = true
 	}()
 
-	if len(r.ActiveChain) != 2 {
-		return "", fmt.Errorf("invalid chain length %d for dst replica %v rebuilding start", len(r.ActiveChain), r.Name)
-	}
-
 	// Replica.Delete and Replica.Create do not guarantee that the previous rebuilding src replica info is cleaned up
 	if r.rebuildingDstCache.srcReplicaName != "" || r.rebuildingDstCache.srcReplicaAddress != "" || r.rebuildingDstCache.externalSnapshotName != "" || r.rebuildingDstCache.externalSnapshotBdevName != "" {
 		if err := r.doCleanupForRebuildingDst(spdkClient, false); err != nil {
@@ -1494,21 +1490,33 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		}
 	}
 
-	// Create a new head lvol based on the external src snapshot lvol
 	if r.IsExposed {
 		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil {
 			return "", err
 		}
 		r.IsExposed = false
 	}
+	// For the old head, if it's a non-empty one, rename it for reuse later.
+	// Otherwise, directly remove it
+	if r.Head.ActualSize > 0 {
+		expiredLvolName := GenerateReplicaExpiredLvolName(r.Name)
+		if _, err := spdkClient.BdevLvolRename(r.Head.UUID, expiredLvolName); err != nil {
+			r.log.WithError(err).Warnf("Failed to rename the previous head lvol %s to %s for dst replica %v rebuilding start, will try to remove it instead", r.Head.Alias, expiredLvolName, r.Name)
+		}
+	}
 	if _, err := spdkClient.BdevLvolDelete(r.Alias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return "", err
 	}
+	if r.Head != nil && r.ActiveChain[len(r.ActiveChain)-1] == r.Head {
+		r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
+	}
+	r.Head = nil
+
+	// Create a new head lvol based on the external src snapshot lvol then
 	headLvolUUID, err := spdkClient.BdevLvolCloneBdev(r.rebuildingDstCache.externalSnapshotBdevName, r.LvsName, r.Name)
 	if err != nil {
 		return "", err
 	}
-
 	bdevLvolList, err := spdkClient.BdevLvolGet(headLvolUUID, 0)
 	if err != nil {
 		return "", err
@@ -1517,7 +1525,7 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		return "", fmt.Errorf("zero or multiple head lvols with UUID %s found after rebuilding dst head %s creation", headLvolUUID, r.Name)
 	}
 	r.Head = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
-	r.ActiveChain[1] = r.Head
+	r.ActiveChain = append(r.ActiveChain, r.Head)
 
 	nguid := commonutils.RandomID(nvmeNguidLength)
 	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.Head.UUID, nguid, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
@@ -1530,6 +1538,46 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		r.rebuildingDstCache.rebuildingSnapshotMap[apiLvol.Name] = apiLvol
 		r.rebuildingDstCache.rebuildingSize += apiLvol.ActualSize
 	}
+
+	// Delete extra snapshots if any
+	rebuildingLvolName := GetReplicaRebuildingLvolName(r.Name)
+	bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, r.replicaLvolFilter)
+	if err != nil {
+		return "", err
+	}
+	for lvolName, lvol := range bdevLvolMap {
+		if r.rebuildingDstCache.rebuildingSnapshotMap[lvolName] != nil {
+			continue
+		}
+		if IsReplicaExpiredLvol(r.Name, lvolName) {
+			continue
+		}
+
+		// Rename the non-empty previous rebuilding lvol so that it can be reused later
+		if lvolName == rebuildingLvolName {
+			if lvol.DriverSpecific.Lvol.NumAllocatedClusters > 0 {
+				expiredLvolName := GenerateReplicaExpiredLvolName(r.Name)
+				if _, err := spdkClient.BdevLvolRename(lvol.UUID, expiredLvolName); err != nil {
+					r.log.WithError(err).Warnf("Failed to rename the previous rebuilding lvol %s to %s for dst replica %v rebuilding start, will try to remove it instead", lvolName, expiredLvolName, r.Name)
+				} else {
+					continue
+				}
+			}
+		}
+
+		// If an extra snapshot lvol has multiple children, decoupling it from its children before deletion
+		if len(lvol.DriverSpecific.Lvol.Clones) > 1 {
+			for _, childLvolName := range lvol.DriverSpecific.Lvol.Clones {
+				if _, err := spdkClient.BdevLvolDetachParent(childLvolName); err != nil {
+					return "", err
+				}
+			}
+		}
+		if _, err := spdkClient.BdevLvolDelete(lvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return "", err
+		}
+	}
+
 	r.rebuildingDstCache.rebuildingError = ""
 	r.rebuildingDstCache.rebuildingState = types.ProgressStateInProgress
 
