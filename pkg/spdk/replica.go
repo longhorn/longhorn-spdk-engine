@@ -1666,6 +1666,23 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 	if err != nil {
 		return err
 	}
+	// Remove orphan lvols if any. These orphans may be the unused lvols of the previously failed replica
+	chainLvolMap := map[string]*Lvol{}
+	for _, inChainLvol := range r.ActiveChain {
+		chainLvolMap[inChainLvol.Name] = inChainLvol
+	}
+	for lvolName, lvol := range bdevLvolMap {
+		if r.rebuildingDstCache.rebuildingSnapshotMap[lvolName] != nil {
+			continue
+		}
+		if chainLvolMap[lvolName] != nil {
+			continue
+		}
+		// TODO: What if there is a lvol containing multiple children in the orphan tree
+		if _, err := spdkClient.BdevLvolDelete(lvol.UUID); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return err
+		}
+	}
 	if err = r.construct(bdevLvolMap); err != nil {
 		return err
 	}
