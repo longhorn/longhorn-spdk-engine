@@ -502,6 +502,25 @@ func (c *Client) BdevLvolGetFragmap(name string, offset, size uint64) (*spdktype
 	return &result, nil
 }
 
+// BdevLvolRename renames a logical volume.
+//
+//	"oldName": Required. UUID or alias of the existing logical volume.
+//
+//	"newName": Required. New logical volume name.
+func (c *Client) BdevLvolRename(oldName, newName string) (renamed bool, err error) {
+	req := spdktypes.BdevLvolRenameRequest{
+		OldName: oldName,
+		NewName: newName,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommandWithLongTimeout("bdev_lvol_rename", req)
+	if err != nil {
+		return false, err
+	}
+
+	return renamed, json.Unmarshal(cmdOutput, &renamed)
+}
+
 // BdevRaidCreate constructs a new RAID bdev.
 //
 //	"name": Required. a RAID bdev name rather than an alias or a UUID.
