@@ -268,7 +268,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica2.Name: types.ModeRW,
 			}
 			endpoint := helperutil.GetLonghornDevicePath(volumeName)
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -324,7 +324,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			err = spdkCli.ReplicaDelete(replicaName2, false)
 			c.Assert(err, IsNil)
 
-			replica1, err = spdkCli.ReplicaGet(replicaName1)
+			replica1, err = spdkCli.ReplicaGet(replicaName1, false)
 			c.Assert(err, IsNil)
 			c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
@@ -332,7 +332,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica1.PortStart, Equals, int32(0))
 			c.Assert(replica1.PortEnd, Equals, int32(0))
 
-			replica2, err = spdkCli.ReplicaGet(replicaName1)
+			replica2, err = spdkCli.ReplicaGet(replicaName1, false)
 			c.Assert(err, IsNil)
 			c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
@@ -351,7 +351,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
 				replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
 			}
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
+			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -380,7 +380,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName2, net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))))
 			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -410,7 +410,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
 				replica3.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))),
 			}
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -527,7 +527,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 				replica2.Name: types.ModeRW,
 			}
 			endpoint := helperutil.GetLonghornDevicePath(volumeName)
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -859,7 +859,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))))
 			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -886,7 +886,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			replicaAddressMap[replica3.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart)))
 			snapshotNameRebuild1 := ""
 			for replicaName := range replicaAddressMap {
-				replica, err := spdkCli.ReplicaGet(replicaName)
+				replica, err := spdkCli.ReplicaGet(replicaName, false)
 				c.Assert(err, IsNil)
 				for snapName, snapLvol := range replica.Snapshots {
 					if strings.HasPrefix(snapName, server.RebuildingSnapshotNamePrefix) {
@@ -904,7 +904,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(snapshotNameRebuild1, Not(Equals), "")
 
 			// Verify the 1st rebuilding result
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -953,7 +953,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName2, net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))))
 			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -984,7 +984,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			replicaAddressMap[replica4.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica4.PortStart)))
 			snapshotNameRebuild2 := ""
 			for replicaName := range replicaAddressMap {
-				replica, err := spdkCli.ReplicaGet(replicaName)
+				replica, err := spdkCli.ReplicaGet(replicaName, false)
 				c.Assert(err, IsNil)
 				for snapName, snapLvol := range replica.Snapshots {
 					if snapName != snapshotNameRebuild1 && strings.HasPrefix(snapName, server.RebuildingSnapshotNamePrefix) {
@@ -1002,7 +1002,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(snapshotNameRebuild2, Not(Equals), "")
 
 			// Verify the 2nd rebuilding result
-			engine, err = spdkCli.EngineGet(engineName)
+			engine, err = spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
@@ -1058,7 +1058,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			delete(snapshotOpts, snapshotNameRebuild1)
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts)
 			for _, replicaName := range []string{replicaName3, replicaName4} {
-				replica, err := spdkCli.ReplicaGet(replicaName)
+				replica, err := spdkCli.ReplicaGet(replicaName, false)
 				c.Assert(err, IsNil)
 				c.Assert(replica.Head.Parent, Equals, snapshotNameRebuild2)
 				c.Assert(replica.Head.ActualSize, Equals, uint64(0))
@@ -1174,11 +1174,11 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 }
 
 func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, replicaList []string, snapshotMap map[string][]string, snapshotOpts map[string]api.SnapshotOptions) {
-	engine, err := spdkCli.EngineGet(engineName)
+	engine, err := spdkCli.EngineGet(engineName, false)
 	c.Assert(err, IsNil)
 
 	for _, replicaName := range replicaList {
-		replica, err := spdkCli.ReplicaGet(replicaName)
+		replica, err := spdkCli.ReplicaGet(replicaName, false)
 		c.Assert(err, IsNil)
 		c.Assert(len(replica.Snapshots), Equals, len(snapshotMap))
 
@@ -1212,7 +1212,7 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 	c.Assert(err, IsNil)
 	os.Setenv(commonnet.EnvPodIP, ip)
 
-	engine, err := spdkCli.EngineGet(engineName)
+	engine, err := spdkCli.EngineGet(engineName, false)
 	c.Assert(err, IsNil)
 
 	if engine.State != types.InstanceStateRunning {
@@ -1225,7 +1225,7 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 		// Restart the engine without the frontend
 		err = spdkCli.EngineDelete(engineName)
 		c.Assert(err, IsNil)
-		engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
+		engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false, false)
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -1240,7 +1240,7 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 		// Restart the engine with the previous frontend
 		err = spdkCli.EngineDelete(engineName)
 		c.Assert(err, IsNil)
-		engine, err = spdkCli.EngineCreate(engineName, volumeName, prevFrontend, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false)
+		engine, err = spdkCli.EngineCreate(engineName, volumeName, prevFrontend, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false, false)
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -1287,7 +1287,7 @@ func WaitForReplicaRebuildingComplete(c *C, spdkCli *client.SPDKClient, engineNa
 		}
 
 		if rebuildingStatus.TotalState == types.ProgressStateComplete {
-			engine, err := spdkCli.EngineGet(engineName)
+			engine, err := spdkCli.EngineGet(engineName, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			if engine.ReplicaModeMap[replicaName] == types.ModeRW {
@@ -1351,7 +1351,7 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 		replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
 	}
 
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, "127.0.0.1", ip, false)
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, "127.0.0.1", ip, false, false)
 	c.Assert(err, IsNil)
 
 	c.Assert(engine.Endpoint, Equals, "")
@@ -1367,7 +1367,7 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 	err = spdkCli.EngineDeleteTarget(engineName)
 	c.Assert(err, IsNil)
 
-	_, err = spdkCli.EngineGet(engineName)
+	_, err = spdkCli.EngineGet(engineName, false)
 	c.Assert(strings.Contains(err.Error(), "cannot find engine"), Equals, true)
 
 	err = spdkCli.ReplicaDelete(replicaName1, false)
@@ -1425,11 +1425,11 @@ func (s *TestSuite) TestSPDKEngineCreateWithUpgradeRequired(c *C) {
 		replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
 	}
 
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, "127.0.0.1", ip, false)
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, "127.0.0.1", ip, false, false)
 	c.Assert(err, IsNil)
 
 	targetAddress := fmt.Sprintf("%s:%d", engine.TargetIP, engine.TargetPort)
-	engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, targetAddress, true)
+	engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, targetAddress, true, false)
 	c.Assert(err, IsNil)
 	c.Assert(engine.Endpoint, Not(Equals), "")
 	// Initiator is not created, so the IP and Port should be empty
