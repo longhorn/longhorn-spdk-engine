@@ -704,9 +704,17 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 	}
 	r.portAllocator = bitmap
 
+	nqn := helpertypes.GetNQN(r.Name)
+
+	// Blindly stop exposing the bdev if it exists. This is to avoid potential inconsistencies during salvage case.
+	if err := spdkClient.StopExposeBdev(nqn); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return nil, errors.Wrapf(err, "failed to stop expose replica %v", r.Name)
+	}
+
 	nguid := commonutils.RandomID(nvmeNguidLength)
-	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), headSvcLvol.UUID, nguid, podIP, strconv.Itoa(int(r.PortStart))); err != nil {
-		return nil, err
+
+	if err := spdkClient.StartExposeBdev(nqn, headSvcLvol.UUID, nguid, podIP, strconv.Itoa(int(r.PortStart))); err != nil {
+		return nil, errors.Wrapf(err, "failed to expose replica %v", r.Name)
 	}
 	r.IsExposed = true
 	r.State = types.InstanceStateRunning
