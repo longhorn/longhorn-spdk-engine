@@ -45,13 +45,13 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20241013024428-b52180a5191f
+# github.com/longhorn/backupstore v0.0.0-20241103035147-065450bb2340
 ## explicit; go 1.22.0
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20241012153249-4c71f1cbdd9e
+# github.com/longhorn/go-common-libs v0.0.0-20241102040927-43901cc2fa33
 ## explicit; go 1.22.0
 github.com/longhorn/go-common-libs/backup
 github.com/longhorn/go-common-libs/bitmap
@@ -64,7 +64,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.0.0-20241017032159-f0613870a0b5
+# github.com/longhorn/go-spdk-helper v0.0.0-20241103044742-606c0ee8d532
 ## explicit; go 1.22.0
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
 github.com/longhorn/go-spdk-helper/pkg/nvme
@@ -73,7 +73,7 @@ github.com/longhorn/go-spdk-helper/pkg/spdk/setup
 github.com/longhorn/go-spdk-helper/pkg/spdk/types
 github.com/longhorn/go-spdk-helper/pkg/types
 github.com/longhorn/go-spdk-helper/pkg/util
-# github.com/longhorn/types v0.0.0-20241007141758-3640f2357238
+# github.com/longhorn/types v0.0.0-20241101010532-9e901229a935
 ## explicit; go 1.21
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0
@@ -150,6 +150,9 @@ github.com/yusufpapurcu/wmi
 # go.uber.org/multierr v1.11.0
 ## explicit; go 1.19
 go.uber.org/multierr
+# golang.org/x/exp v0.0.0-20241009180824-f66d83c29e7c
+## explicit; go 1.22.0
+golang.org/x/exp/constraints
 # golang.org/x/net v0.30.0
 ## explicit; go 1.18
 golang.org/x/net/context
@@ -276,7 +279,7 @@ google.golang.org/protobuf/types/known/timestamppb
 # gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 ## explicit; go 1.11
 gopkg.in/check.v1
-# k8s.io/apimachinery v0.31.1
+# k8s.io/apimachinery v0.31.2
 ## explicit; go 1.22.0
 k8s.io/apimachinery/pkg/util/errors
 k8s.io/apimachinery/pkg/util/runtime
@@ -293,7 +296,7 @@ k8s.io/klog/v2/internal/dbg
 k8s.io/klog/v2/internal/serialize
 k8s.io/klog/v2/internal/severity
 k8s.io/klog/v2/internal/sloghandler
-# k8s.io/mount-utils v0.31.1
+# k8s.io/mount-utils v0.31.2
 ## explicit; go 1.22.0
 k8s.io/mount-utils
 # k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
