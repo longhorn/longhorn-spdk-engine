@@ -1897,12 +1897,12 @@ func (e *Engine) waitForRestoreComplete() error {
 	var err error
 	for range periodicChecker.C {
 		isReplicaRestoreCompleted := true
-		for replicaName, replicaAddress := range e.ReplicaAddressMap {
-			if e.ReplicaModeMap[replicaName] != types.ModeRW {
+		for replicaName, replicaStatus := range e.ReplicaStatusMap {
+			if replicaStatus.Mode != types.ModeRW {
 				continue
 			}
 
-			isReplicaRestoreCompleted, err = e.isReplicaRestoreCompleted(replicaName, replicaAddress)
+			isReplicaRestoreCompleted, err = e.isReplicaRestoreCompleted(replicaName, replicaStatus.Address)
 			if err != nil {
 				return errors.Wrapf(err, "failed to check replica %s restore status", replicaName)
 			}
