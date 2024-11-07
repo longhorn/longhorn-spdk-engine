@@ -255,8 +255,11 @@ func (s *Server) verify() (err error) {
 		replicaMapForSync[lvolName] = replicaMap[lvolName]
 	}
 	for replicaName, r := range replicaMap {
-		// Try the best to avoid eliminating broken replicas without a head lvol
+		// Try the best to avoid eliminating broken replicas or rebuilding replicas without head lvols
 		if bdevLvolMap[r.Name] == nil {
+			if r.IsRebuilding() {
+				continue
+			}
 			noReplicaLvol := true
 			for lvolName := range bdevLvolMap {
 				if IsReplicaLvol(r.Name, lvolName) {
