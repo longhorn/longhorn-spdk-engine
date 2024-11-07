@@ -182,6 +182,12 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 	}
 }
 
+func (r *Replica) IsRebuilding() bool {
+	r.RLock()
+	defer r.RUnlock()
+	return r.State == types.InstanceStateRunning && r.isRebuilding
+}
+
 func (r *Replica) replicaLvolFilter(bdev *spdktypes.BdevInfo) bool {
 	if bdev == nil || len(bdev.Aliases) < 1 || bdev.DriverSpecific.Lvol == nil {
 		return false
