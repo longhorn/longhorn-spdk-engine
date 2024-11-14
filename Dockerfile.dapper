@@ -13,7 +13,7 @@ ENV DAPPER_RUN_ARGS --privileged --tmpfs /go/src/github.com/longhorn/longhorn-sp
 ENV DAPPER_SOURCE /go/src/github.com/longhorn/longhorn-spdk-engine
 ENV GOLANGCI_LINT_VERSION="v1.60.3"
 
-ENV SPDK_COMMIT_ID a6478cde7e0cff2fb09992868308a7387aa5202a
+ENV SPDK_COMMIT_ID 10463b5c13b454e173707628b9eac608081f5082
 ENV LIBJSONC_COMMIT_ID b4c371fa0cbc4dcbaccc359ce9e957a22988fb34
 # nvme-cli 2.9.1
 ENV NVME_CLI_COMMIT_ID b340fd7dcf1aef76f8d46ab28bef3c170d310887 
