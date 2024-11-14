@@ -1308,24 +1308,10 @@ func (e *Engine) replicaShallowCopy(srcReplicaServiceCli, dstReplicaServiceCli *
 	}
 
 	// Traverse the src replica snapshot tree with a DFS way and do shallow copy one by one
-	currentSnapshotName, prevSnapshotName := "", ""
+	currentSnapshotName := ""
 	for idx := 0; idx < len(rebuildingSnapshotList); idx++ {
 		currentSnapshotName = rebuildingSnapshotList[idx].Name
 		e.log.Debugf("Engine is syncing snapshot %s from rebuilding src replica %s to rebuilding dst replica %s", currentSnapshotName, srcReplicaName, dstReplicaName)
-		// TODO: Handle backing image
-		if prevSnapshotName == "" || rebuildingSnapshotMap[currentSnapshotName].Parent != prevSnapshotName {
-			if err = srcReplicaServiceCli.ReplicaRebuildingSrcDetach(srcReplicaName, dstReplicaName); err != nil {
-				return err
-			}
-			// Create or Recreate a rebuilding lvol behinds the parent of the current snapshot
-			dstRebuildingLvolAddress, err := dstReplicaServiceCli.ReplicaRebuildingDstSnapshotRevert(dstReplicaName, rebuildingSnapshotMap[currentSnapshotName].Parent)
-			if err != nil {
-				return err
-			}
-			if err = srcReplicaServiceCli.ReplicaRebuildingSrcAttach(srcReplicaName, dstReplicaName, dstRebuildingLvolAddress); err != nil {
-				return err
-			}
-		}
 
 		if err := dstReplicaServiceCli.ReplicaRebuildingDstShallowCopyStart(dstReplicaName, currentSnapshotName); err != nil {
 			return errors.Wrapf(err, "failed to start shallow copy snapshot %s", currentSnapshotName)
@@ -1355,7 +1341,6 @@ func (e *Engine) replicaShallowCopy(srcReplicaServiceCli, dstReplicaServiceCli *
 		if err = dstReplicaServiceCli.ReplicaRebuildingDstSnapshotCreate(dstReplicaName, currentSnapshotName, snapshotOptions); err != nil {
 			return err
 		}
-		prevSnapshotName = currentSnapshotName
 	}
 
 	e.log.Infof("Engine shallow copied all snapshots from rebuilding src replica %s to rebuilding dst replica %s", srcReplicaName, dstReplicaName)
@@ -1395,13 +1380,6 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 	dstReplicaStatus := e.ReplicaStatusMap[dstReplicaName]
 	if dstReplicaStatus == nil {
 		return fmt.Errorf("cannot find the dst replica %s in the engine %s replica status map during replica add finish", dstReplicaName, e.Name)
-	}
-
-	// Blindly ask the source replica to detach the rebuilding lvol
-	// If this detachment fails, there may be leftover rebuilding NVMe controller in spdk_tgt of the src replica. We should continue since it's not a fatal error and shall not block the flow
-	// Similarly, the below src/dst replica finish should not block the flow either.
-	if srcReplicaErr := srcReplicaServiceCli.ReplicaRebuildingSrcDetach(srcReplicaName, dstReplicaName); srcReplicaErr != nil {
-		e.log.WithError(srcReplicaErr).Errorf("Engine failed to detach the rebuilding lvol for rebuilding src replica %s, will ignore this error and continue", srcReplicaName)
 	}
 
 	// Pause the IO again by suspending the NVMe initiator
