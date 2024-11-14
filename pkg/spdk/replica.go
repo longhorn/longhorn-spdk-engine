@@ -628,11 +628,11 @@ func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap
 	}
 
 	var headSvcLvol *Lvol
-	headParentSnapshotName := headBdevLvol.DriverSpecific.Lvol.BaseSnapshot
-	if IsReplicaSnapshotLvol(replicaName, headParentSnapshotName) {
-		headParentSnapSvcLvol := snapshotLvolMap[headParentSnapshotName]
+	headParentSnapshotLvolName := headBdevLvol.DriverSpecific.Lvol.BaseSnapshot
+	if IsReplicaSnapshotLvol(replicaName, headParentSnapshotLvolName) {
+		headParentSnapSvcLvol := snapshotLvolMap[headParentSnapshotLvolName]
 		if headParentSnapSvcLvol == nil {
-			return nil, fmt.Errorf("cannot find the parent snapshot %s of the head for replica %s", headParentSnapshotName, replicaName)
+			return nil, fmt.Errorf("cannot find the parent snapshot %s of the head for replica %s", headParentSnapshotLvolName, replicaName)
 		}
 		headSvcLvol = headParentSnapSvcLvol.Children[replicaName]
 	} else { // The parent of the head is nil or a backing image
