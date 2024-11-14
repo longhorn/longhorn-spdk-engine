@@ -531,7 +531,14 @@ func (c *Client) BdevLvolRename(oldName, newName string) (renamed bool, err erro
 //	"stripSizeKb": Required. Strip size in KB. It's valid for raid0 and raid5f only. For other raid levels, this would be modified to 0.
 //
 //	"baseBdevs": Required. The bdev list used as the underlying disk of the RAID.
-func (c *Client) BdevRaidCreate(name string, raidLevel spdktypes.BdevRaidLevel, stripSizeKb uint32, baseBdevs []string) (created bool, err error) {
+//
+//	"uuid": Optional. UUID for this raid bdev. Empty value will be ignored.
+//
+//	"superblock": Optional. Raid bdev info will be stored in superblock on each base bdev. Default false.
+//
+//	"delta_bitmap": Optional. A delta bitmap for faulty base bdevs will be recorded. Default false.
+func (c *Client) BdevRaidCreate(name string, raidLevel spdktypes.BdevRaidLevel, stripSizeKb uint32, baseBdevs []string,
+	uuid string, superblock bool, delta_bitmap bool) (created bool, err error) {
 	if raidLevel != spdktypes.BdevRaidLevel0 && raidLevel != spdktypes.BdevRaidLevelRaid0 && raidLevel != spdktypes.BdevRaidLevel5f && raidLevel != spdktypes.BdevRaidLevelRaid5f {
 		stripSizeKb = 0
 	}
@@ -540,6 +547,9 @@ func (c *Client) BdevRaidCreate(name string, raidLevel spdktypes.BdevRaidLevel, 
 		RaidLevel:   raidLevel,
 		StripSizeKb: stripSizeKb,
 		BaseBdevs:   baseBdevs,
+		UUID:        uuid,
+		SuperBlock:  superblock,
+		DeltaBitmap: delta_bitmap,
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("bdev_raid_create", req)
@@ -684,6 +694,54 @@ func (c *Client) BdevRaidGrowBaseBdev(raidName, baseBdevName string) (growed boo
 	}
 
 	return growed, json.Unmarshal(cmdOutput, &growed)
+}
+
+// BdevRaidGetBaseBdevDeltaMap get the delta bitmap of a faulty base bdev
+//
+//	"baseBdevName": Required. The faulty base bdev name to get the delta bitmap of.
+func (c *Client) BdevRaidGetBaseBdevDeltaMap(baseBdevName string) (deltaMap *spdktypes.BdevRaidBaseBdevDeltaMap, err error) {
+	req := spdktypes.BdevRaidGetBaseBdevDeltaMapRequest{
+		BaseName: baseBdevName,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_raid_get_base_bdev_delta_bitmap", req)
+	if err != nil {
+		return nil, err
+	}
+
+	return deltaMap, json.Unmarshal(cmdOutput, &deltaMap)
+}
+
+// BdevRaidStopBaseBdevDeltaMap stop the updating of the delta bitmap of a faulty base bdev
+//
+//	"baseBdevName": Required. The faulty base bdev name to stop the delta bitmap of.
+func (c *Client) BdevRaidStopBaseBdevDeltaMap(baseBdevName string) (stopped bool, err error) {
+	req := spdktypes.BdevRaidStopBaseBdevDeltaMapRequest{
+		BaseName: baseBdevName,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_raid_stop_base_bdev_delta_bitmap", req)
+	if err != nil {
+		return false, err
+	}
+
+	return stopped, json.Unmarshal(cmdOutput, &stopped)
+}
+
+// BdevRaidClearBaseBdevFaultyState clear the faulty state of a base bdev
+//
+//	"baseBdevName": Required. The faulty base bdev name to clear the faulty state of.
+func (c *Client) BdevRaidClearBaseBdevFaultyState(baseBdevName string) (cleared bool, err error) {
+	req := spdktypes.BdevRaidClearBaseBdevFaultyStateRequest{
+		BaseName: baseBdevName,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_raid_clear_base_bdev_faulty_state", req)
+	if err != nil {
+		return false, err
+	}
+
+	return cleared, json.Unmarshal(cmdOutput, &cleared)
 }
 
 // BdevNvmeAttachController constructs NVMe bdev.

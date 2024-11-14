@@ -37,6 +37,9 @@ type BdevRaidCreateRequest struct {
 	RaidLevel   BdevRaidLevel `json:"raid_level"`
 	StripSizeKb uint32        `json:"strip_size_kb"`
 	BaseBdevs   []string      `json:"base_bdevs"`
+	UUID        string        `json:"uuid,omitempty"`
+	SuperBlock  bool          `json:"superblock"`
+	DeltaBitmap bool          `json:"delta_bitmap"`
 }
 
 type BdevRaidDeleteRequest struct {
@@ -63,4 +66,21 @@ type BdevRaidRemoveBaseBdevRequest struct {
 type BdevRaidGrowBaseBdevRequest struct {
 	RaidName string `json:"raid_name"`
 	BaseName string `json:"base_name"`
+}
+
+type BdevRaidGetBaseBdevDeltaMapRequest struct {
+	BaseName string `json:"base_bdev_name"`
+}
+
+type BdevRaidBaseBdevDeltaMap struct {
+	RegionSize  uint64 `json:"region_size"`
+	DeltaBitmap string `json:"delta_bitmap"`
+}
+
+type BdevRaidStopBaseBdevDeltaMapRequest struct {
+	BaseName string `json:"base_bdev_name"`
+}
+
+type BdevRaidClearBaseBdevFaultyStateRequest struct {
+	BaseName string `json:"base_bdev_name"`
 }

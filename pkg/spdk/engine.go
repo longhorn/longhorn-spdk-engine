@@ -223,7 +223,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		e.checkAndUpdateInfoFromReplicaNoLock()
 
 		e.log.Infof("Tried to connected all replicas %+v, then launching raid during engine creation", e.ReplicaStatusMap)
-		if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
+		if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList, "", false, false); err != nil {
 			return nil, err
 		}
 	} else {
@@ -1619,7 +1619,7 @@ func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, rep
 			}
 			replicaBdevList = append(replicaBdevList, replicaStatus.BdevName)
 		}
-		if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
+		if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList, "", false, false); err != nil {
 			e.log.WithError(err).Errorf("Failed to re-create RAID after snapshot %s revert", snapshotName)
 			return false, err
 		}
@@ -1963,7 +1963,7 @@ func (e *Engine) BackupRestoreFinish(spdkClient *spdkclient.Client) error {
 	}
 
 	e.log.Infof("Creating raid bdev %s with replicas %+v before finishing restoration", e.Name, replicaBdevList)
-	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
+	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList, "", false, false); err != nil {
 		if !jsonrpc.IsJSONRPCRespErrorFileExists(err) {
 			e.log.WithError(err).Errorf("Failed to create raid bdev before finishing restoration")
 			return err
