@@ -1124,10 +1124,19 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 			}
 		}
 		if engineErr != nil || err != nil {
-			if e.ReplicaStatusMap[dstReplicaName] != nil && e.ReplicaStatusMap[dstReplicaName].Mode != types.ModeERR {
-				e.log.WithError(err).Errorf("Engine failed to start replica %s rebuilding, will mark the rebuilding replica mode from %v to ERR", dstReplicaName, e.ReplicaStatusMap[dstReplicaName].Mode)
+			prevMode := types.Mode("")
+			if e.ReplicaStatusMap[dstReplicaName] != nil {
+				prevMode = e.ReplicaStatusMap[dstReplicaName].Mode
 				e.ReplicaStatusMap[dstReplicaName].Mode = types.ModeERR
+				e.ReplicaStatusMap[dstReplicaName].Address = dstReplicaAddress
+			} else {
+				e.ReplicaStatusMap[dstReplicaName] = &EngineReplicaStatus{
+					Mode:    types.ModeERR,
+					Address: dstReplicaAddress,
+				}
 			}
+			e.log = e.log.WithField("replicaStatusMap", e.ReplicaStatusMap)
+			e.log.WithError(err).Errorf("Engine failed to start replica %s rebuilding, will mark the rebuilding replica mode from %v to ERR", dstReplicaName, prevMode)
 			updateRequired = true
 		}
 	}()
@@ -1153,22 +1162,26 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	defer func() {
 		go func() {
 			defer func() {
+				// Do not use e.log here. Since this deferred goroutine is not protected by a lock while e.log may change from time to time
 				if errClose := srcReplicaServiceCli.Close(); errClose != nil {
-					e.log.WithError(errClose).Errorf("Failed to close source replica %s client with address %s during add replica", srcReplicaName, srcReplicaAddress)
+					logrus.WithError(errClose).Errorf("Engine %s failed to close source replica %s client with address %s during add replica", e.Name, srcReplicaName, srcReplicaAddress)
 				}
 				if errClose := dstReplicaServiceCli.Close(); errClose != nil {
-					e.log.WithError(errClose).Errorf("Failed to close dest replica %s client with address %s during add replica", dstReplicaName, dstReplicaAddress)
+					logrus.WithError(errClose).Errorf("Engine %s failed to close dest replica %s client with address %s during add replica", e.Name, dstReplicaName, dstReplicaAddress)
 				}
+				// TODO: handle the floating connections after erroring out
 			}()
 
 			if err == nil && engineErr == nil {
 				if err = e.replicaShallowCopy(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshotList); err != nil {
-					e.log.WithError(err).Errorf("Engine failed to do the shallow copy for replica %s add", dstReplicaName)
+					logrus.WithError(err).Errorf("Engine %s failed to do the shallow copy for replica %s add", e.Name, dstReplicaName)
 				}
+			} else {
+				logrus.Errorf("Engine %s won't do shallow copy for replica %s add due to replica error: %v, or engine error %v", e.Name, dstReplicaName, err, engineErr)
 			}
 			// Should be executed no matter if there is an error. It's used to clean up the replica add related resources.
-			if err = e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, dstReplicaName); err != nil {
-				e.log.WithError(err).Errorf("Engine failed to finish replica %s add", dstReplicaName)
+			if finishErr := e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, dstReplicaName); finishErr != nil {
+				logrus.WithError(finishErr).Errorf("Engine %s failed to finish replica %s add", e.Name, dstReplicaName)
 			}
 		}()
 	}()
@@ -1182,9 +1195,9 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 			return err
 		}
 		defer func() {
-			if err = e.initiator.Resume(); err != nil {
-				err = errors.Wrapf(err, "failed to resume NVMe initiator during engine %s replica %s add start", e.Name, dstReplicaName)
-				engineErr = err
+			if frontendErr := e.initiator.Resume(); frontendErr != nil {
+				frontendErr = errors.Wrapf(frontendErr, "failed to resume NVMe initiator during engine %s replica %s add start", e.Name, dstReplicaName)
+				engineErr = frontendErr
 			}
 		}()
 	}
@@ -1288,6 +1301,8 @@ func (e *Engine) replicaShallowCopy(srcReplicaServiceCli, dstReplicaServiceCli *
 			e.Unlock()
 		}
 	}()
+
+	e.log.Infof("Engine is starting snapshots shallow copy from rebuilding src replica %s to rebuilding dst replica %s", srcReplicaName, dstReplicaName)
 
 	rebuildingSnapshotMap := map[string]*api.Lvol{}
 	for _, snapshotApiLvol := range rebuildingSnapshotList {
