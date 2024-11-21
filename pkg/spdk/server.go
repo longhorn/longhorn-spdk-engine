@@ -1172,6 +1172,9 @@ func (s *Server) EngineWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_EngineW
 }
 
 func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
+	if req.ReplicaName == "" || req.ReplicaAddress == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and address are required")
+	}
 	s.RLock()
 	e := s.engineMap[req.EngineName]
 	spdkClient := s.spdkClient
