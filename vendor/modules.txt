@@ -51,7 +51,7 @@ github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20241117040506-5685d80d0eea
+# github.com/longhorn/go-common-libs v0.0.0-20241123075700-b6fce15463ce
 ## explicit; go 1.22.7
 github.com/longhorn/go-common-libs/backup
 github.com/longhorn/go-common-libs/bitmap
@@ -64,7 +64,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.0.0-20241119100050-6cd194fc6cdc
+# github.com/longhorn/go-spdk-helper v0.0.0-20241123080431-7e915c6e2fc5
 ## explicit; go 1.22.7
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
 github.com/longhorn/go-spdk-helper/pkg/nvme
@@ -73,7 +73,7 @@ github.com/longhorn/go-spdk-helper/pkg/spdk/setup
 github.com/longhorn/go-spdk-helper/pkg/spdk/types
 github.com/longhorn/go-spdk-helper/pkg/types
 github.com/longhorn/go-spdk-helper/pkg/util
-# github.com/longhorn/types v0.0.0-20241117042122-c899b8796df9
+# github.com/longhorn/types v0.0.0-20241123075624-48c550af4eab
 ## explicit; go 1.22.7
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0
@@ -298,7 +298,7 @@ k8s.io/klog/v2/internal/dbg
 k8s.io/klog/v2/internal/serialize
 k8s.io/klog/v2/internal/severity
 k8s.io/klog/v2/internal/sloghandler
-# k8s.io/mount-utils v0.31.2
+# k8s.io/mount-utils v0.31.3
 ## explicit; go 1.22.0
 k8s.io/mount-utils
 # k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
