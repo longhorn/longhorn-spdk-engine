@@ -64,7 +64,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.0.0-20241115132910-af0134eda2a6
+# github.com/longhorn/go-spdk-helper v0.0.0-20241119100050-6cd194fc6cdc
 ## explicit; go 1.22.7
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
 github.com/longhorn/go-spdk-helper/pkg/nvme
@@ -281,7 +281,7 @@ google.golang.org/protobuf/types/known/timestamppb
 # gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 ## explicit; go 1.11
 gopkg.in/check.v1
-# k8s.io/apimachinery v0.31.2
+# k8s.io/apimachinery v0.31.3
 ## explicit; go 1.22.0
 k8s.io/apimachinery/pkg/util/errors
 k8s.io/apimachinery/pkg/util/runtime
