@@ -707,7 +707,7 @@ func (s *Server) ReplicaRebuildingSrcFinish(ctx context.Context, req *spdkrpc.Re
 	return &emptypb.Empty{}, nil
 }
 
-func (s *Server) ReplicaRebuildingSrcShallowCopyStart(ctx context.Context, req *spdkrpc.ReplicaRebuildingSrcShallowCopyStartRequest) (ret *spdkrpc.ReplicaRebuildingSrcShallowCopyStartResponse, err error) {
+func (s *Server) ReplicaRebuildingSrcShallowCopyStart(ctx context.Context, req *spdkrpc.ReplicaRebuildingSrcShallowCopyStartRequest) (ret *emptypb.Empty, err error) {
 	if req.Name == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
 	}
@@ -727,12 +727,11 @@ func (s *Server) ReplicaRebuildingSrcShallowCopyStart(ctx context.Context, req *
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding src snapshot %s shallow copy start", req.Name, req.SnapshotName)
 	}
 
-	shallowCopyOpId, err := r.RebuildingSrcShallowCopyStart(spdkClient, req.SnapshotName, req.DstRebuildingLvolAddress)
-	if err != nil {
+	if err := r.RebuildingSrcShallowCopyStart(spdkClient, req.SnapshotName, req.DstRebuildingLvolAddress); err != nil {
 		return nil, err
 	}
 
-	return &spdkrpc.ReplicaRebuildingSrcShallowCopyStartResponse{ShallowCopyOpId: shallowCopyOpId}, nil
+	return &emptypb.Empty{}, nil
 }
 
 func (s *Server) ReplicaRebuildingSrcShallowCopyCheck(ctx context.Context, req *spdkrpc.ReplicaRebuildingSrcShallowCopyCheckRequest) (ret *spdkrpc.ReplicaRebuildingSrcShallowCopyCheckResponse, err error) {
@@ -742,20 +741,16 @@ func (s *Server) ReplicaRebuildingSrcShallowCopyCheck(ctx context.Context, req *
 	if req.SnapshotName == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica snapshot name is required")
 	}
-	if req.ShallowCopyOpId == 0 {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid shallow copy op ID %v", req.ShallowCopyOpId)
-	}
 
 	s.RLock()
 	r := s.replicaMap[req.Name]
-	spdkClient := s.spdkClient
 	s.RUnlock()
 
 	if r == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding src snapshot %s shallow copy check", req.Name, req.SnapshotName)
 	}
 
-	status, err := r.RebuildingSrcShallowCopyCheck(spdkClient, req.ShallowCopyOpId)
+	status, err := r.RebuildingSrcShallowCopyCheck(req.SnapshotName)
 	if err != nil {
 		return nil, err
 	}

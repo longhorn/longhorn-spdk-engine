@@ -108,7 +108,6 @@ type RebuildingDstCache struct {
 	processedSnapshotsSize uint64
 
 	processingSnapshotName string
-	processingOpID         uint32
 	processingState        string
 	processingSize         uint64
 }
@@ -120,6 +119,10 @@ type RebuildingSrcCache struct {
 
 	exposedSnapshotAlias string
 	exposedSnapshotPort  int32
+
+	shallowCopySnapshotName string
+	shallowCopyOpID         uint32
+	shallowCopyStatus       spdktypes.ShallowCopyStatus
 }
 
 func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
@@ -1346,6 +1349,10 @@ func (r *Replica) RebuildingSrcFinish(spdkClient *spdkclient.Client, dstReplicaN
 }
 
 func (r *Replica) doCleanupForRebuildingSrc(spdkClient *spdkclient.Client) {
+	r.rebuildingSrcCache.shallowCopySnapshotName = ""
+	r.rebuildingSrcCache.shallowCopyOpID = 0
+	r.rebuildingSrcCache.shallowCopyStatus = spdktypes.ShallowCopyStatus{}
+
 	if r.rebuildingSrcCache.dstRebuildingBdevName != "" {
 		if err := disconnectNVMfBdev(spdkClient, r.rebuildingSrcCache.dstRebuildingBdevName); err != nil {
 			r.log.WithError(err).Errorf("Failed to disconnect the rebuilding dst bdev %s for rebuilding src cleanup, will continue", r.rebuildingSrcCache.dstRebuildingBdevName)
@@ -1370,11 +1377,8 @@ func (r *Replica) doCleanupForRebuildingSrc(spdkClient *spdkclient.Client) {
 	r.rebuildingSrcCache.dstReplicaName = ""
 }
 
-// rebuildingSrcAttach blindly attaches the rebuilding lvol of the dst replica as NVMf controller no matter if src and dst are on different nodes
-func (r *Replica) rebuildingSrcAttach(spdkClient *spdkclient.Client, dstReplicaName, dstRebuildingLvolAddress string) (err error) {
-	r.Lock()
-	defer r.Unlock()
-
+// rebuildingSrcAttachNoLock blindly attaches the rebuilding lvol of the dst replica as NVMf controller no matter if src and dst are on different nodes
+func (r *Replica) rebuildingSrcAttachNoLock(spdkClient *spdkclient.Client, dstReplicaName, dstRebuildingLvolAddress string) (err error) {
 	dstRebuildingLvolName := GetReplicaRebuildingLvolName(dstReplicaName)
 	if r.rebuildingSrcCache.dstRebuildingBdevName != "" {
 		controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(r.rebuildingSrcCache.dstRebuildingBdevName)
@@ -1393,11 +1397,8 @@ func (r *Replica) rebuildingSrcAttach(spdkClient *spdkclient.Client, dstReplicaN
 	return nil
 }
 
-// rebuildingSrcDetach detaches the rebuilding lvol of the dst replica as NVMf controller if src and dst are on different nodes
-func (r *Replica) rebuildingSrcDetach(spdkClient *spdkclient.Client) (err error) {
-	r.Lock()
-	defer r.Unlock()
-
+// rebuildingSrcDetachNoLock detaches the rebuilding lvol of the dst replica as NVMf controller if src and dst are on different nodes
+func (r *Replica) rebuildingSrcDetachNoLock(spdkClient *spdkclient.Client) (err error) {
 	if r.rebuildingSrcCache.dstRebuildingBdevName == "" {
 		return nil
 	}
@@ -1410,46 +1411,141 @@ func (r *Replica) rebuildingSrcDetach(spdkClient *spdkclient.Client) (err error)
 }
 
 // RebuildingSrcShallowCopyStart asks the src replica to attach the dst rebuilding lvol, start a shallow copy from its snapshot lvol to it, then detach it.
-// It returns the shallow copy op ID, which is for retrieving the shallow copy progress and status. The caller is responsible for storing the op ID.
-func (r *Replica) RebuildingSrcShallowCopyStart(spdkClient *spdkclient.Client, snapshotName, dstRebuildingLvolAddress string) (shallowCopyOpID uint32, err error) {
-	if err = r.rebuildingSrcDetach(spdkClient); err != nil {
-		return 0, errors.Wrapf(err, "failed to detach the rebuilding lvol of the dst replica %s before src replica %s shallow copy start", r.rebuildingSrcCache.dstReplicaName, r.Name)
+func (r *Replica) RebuildingSrcShallowCopyStart(spdkClient *spdkclient.Client, snapshotName, dstRebuildingLvolAddress string) (err error) {
+	r.Lock()
+	defer r.Unlock()
+
+	if r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateInProgress || r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateStarting {
+		return fmt.Errorf("cannot start a shallow copy from snapshot %s for the src replica %s since there is already a shallow copy starting or in progress", snapshotName, r.Name)
 	}
-	if err = r.rebuildingSrcAttach(spdkClient, r.rebuildingSrcCache.dstReplicaName, dstRebuildingLvolAddress); err != nil {
-		return 0, errors.Wrapf(err, "failed to attach the rebuilding lvol of the dst replica %s before src replica %s shallow copy start", r.rebuildingSrcCache.dstReplicaName, r.Name)
+
+	if err = r.rebuildingSrcDetachNoLock(spdkClient); err != nil {
+		return errors.Wrapf(err, "failed to detach the rebuilding lvol of the dst replica %s before src replica %s shallow copy start", r.rebuildingSrcCache.dstReplicaName, r.Name)
 	}
+	if err = r.rebuildingSrcAttachNoLock(spdkClient, r.rebuildingSrcCache.dstReplicaName, dstRebuildingLvolAddress); err != nil {
+		return errors.Wrapf(err, "failed to attach the rebuilding lvol of the dst replica %s before src replica %s shallow copy start", r.rebuildingSrcCache.dstReplicaName, r.Name)
+	}
+
+	var shallowCopyOpID uint32
 	defer func() {
-		if err = r.rebuildingSrcDetach(spdkClient); err != nil {
-			err = errors.Wrapf(err, "failed to detach the rebuilding lvol of the dst replica %s after src replica %s shallow copy start", r.rebuildingSrcCache.dstReplicaName, r.Name)
+		if err != nil || shallowCopyOpID == 0 {
 			return
 		}
+		go func() {
+			timer := time.NewTimer(MaxShallowCopyWaitTime)
+			defer timer.Stop()
+			ticker := time.NewTicker(ShallowCopyCheckInterval)
+			defer ticker.Stop()
+			continuousRetryCount := 0
+			for stopWaiting := false; !stopWaiting; {
+				select {
+				case <-timer.C:
+					r.log.Errorf("Timeout waiting for the src replica %s shallow copy %v complete before detaching the rebuilding lvol of the dst replica %s, will give up", r.Name, shallowCopyOpID, r.rebuildingSrcCache.dstReplicaName)
+					stopWaiting = true
+					break
+				case <-ticker.C:
+					r.Lock()
+					if r.rebuildingSrcCache.shallowCopyOpID != shallowCopyOpID || r.rebuildingSrcCache.shallowCopySnapshotName != snapshotName {
+						r.Unlock()
+						stopWaiting = true
+						break
+					}
+					status, err := r.rebuildingSrcShallowCopyStatusUpdateAndHandlingNoLock(spdkClient)
+					r.Unlock()
+					if err != nil {
+						continuousRetryCount++
+						if continuousRetryCount > maxNumRetries {
+							r.log.WithError(err).Errorf("Failed to check the src replica %s shallow copy %v status over %d times before detaching the rebuilding lvol of the dst replica %s, will give up", r.Name, shallowCopyOpID, maxNumRetries, r.rebuildingSrcCache.dstReplicaName)
+							stopWaiting = true
+							break
+						}
+						logrus.WithError(err).Errorf("Failed to check the src replica %s shallow copy %v status before detaching the rebuilding lvol of the dst replica %s", r.Name, shallowCopyOpID, r.rebuildingSrcCache.dstReplicaName)
+						continue
+					}
+					continuousRetryCount = 0
+					if status.State == types.ProgressStateError || status.State == types.ProgressStateComplete {
+						stopWaiting = true
+						break
+					}
+				}
+			}
+		}()
 	}()
 
-	r.RLock()
 	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
-	srcSnapLvol := r.SnapshotLvolMap[snapLvolName]
-	dstBdevName := r.rebuildingSrcCache.dstRebuildingBdevName
-	r.RUnlock()
 
-	if dstBdevName == "" {
-		return 0, fmt.Errorf("no destination bdev for src replica %s shallow copy start", r.Name)
+	if r.rebuildingSrcCache.dstRebuildingBdevName == "" {
+		return fmt.Errorf("no destination bdev for src replica %s shallow copy start", r.Name)
 	}
-	if srcSnapLvol == nil {
-		return 0, fmt.Errorf("cannot find snapshot %s for src replica %s shallow copy start", snapshotName, r.Name)
+	if r.SnapshotLvolMap[snapLvolName] == nil {
+		return fmt.Errorf("cannot find snapshot %s for src replica %s shallow copy start", snapshotName, r.Name)
 	}
 
-	return spdkClient.BdevLvolStartShallowCopy(srcSnapLvol.UUID, dstBdevName)
+	if shallowCopyOpID, err = spdkClient.BdevLvolStartShallowCopy(r.SnapshotLvolMap[snapLvolName].UUID, r.rebuildingSrcCache.dstRebuildingBdevName); err != nil {
+		return err
+	}
+	r.rebuildingSrcCache.shallowCopySnapshotName = snapshotName
+	r.rebuildingSrcCache.shallowCopyOpID = shallowCopyOpID
+	r.rebuildingSrcCache.shallowCopyStatus = spdktypes.ShallowCopyStatus{}
+
+	if _, err = r.rebuildingSrcShallowCopyStatusUpdateAndHandlingNoLock(spdkClient); err != nil {
+		return err
+	}
+
+	return
 }
 
-// RebuildingSrcShallowCopyCheck asks the src replica to check the shallow copy progress and status via the shallow copy op ID returned by RebuildingSrcShallowCopyStart.
-func (r *Replica) RebuildingSrcShallowCopyCheck(spdkClient *spdkclient.Client, shallowCopyOpID uint32) (status *spdktypes.ShallowCopyStatus, err error) {
-	status, err = spdkClient.BdevLvolCheckShallowCopy(shallowCopyOpID)
+func (r *Replica) rebuildingSrcShallowCopyStatusUpdateAndHandlingNoLock(spdkClient *spdkclient.Client) (status *spdktypes.ShallowCopyStatus, err error) {
+	if r.rebuildingSrcCache.shallowCopyOpID == 0 {
+		return &spdktypes.ShallowCopyStatus{}, nil
+	}
+	// For a complete or errored shallow copy, spdk_tgt will clean up its status after the first check returns.
+	// Hence we need to directly use the cached status here.
+	if r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateError || r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateComplete {
+		return &spdktypes.ShallowCopyStatus{
+			State:          r.rebuildingSrcCache.shallowCopyStatus.State,
+			CopiedClusters: r.rebuildingSrcCache.shallowCopyStatus.CopiedClusters,
+			TotalClusters:  r.rebuildingSrcCache.shallowCopyStatus.TotalClusters,
+			Error:          r.rebuildingSrcCache.shallowCopyStatus.Error,
+		}, nil
+	}
+
+	status, err = spdkClient.BdevLvolCheckShallowCopy(r.rebuildingSrcCache.shallowCopyOpID)
 	if err != nil {
 		return nil, err
 	}
 	if status.State == types.SPDKShallowCopyStateInProgress {
 		status.State = types.ProgressStateInProgress
 	}
+
+	r.rebuildingSrcCache.shallowCopyStatus = *status
+
+	// The status update and the detachment should be done atomically
+	// Otherwise, the next shallow copy will be started before this detachment complete. In other words, the next shallow copy will be failed by this detachment.
+	if status.State == types.ProgressStateError || status.State == types.ProgressStateComplete {
+		err = r.rebuildingSrcDetachNoLock(spdkClient)
+		if err != nil {
+			r.log.WithError(err).Errorf("Failed to detach the rebuilding lvol of the dst replica %s after src replica %s shallow copy %v from snapshot %s finish, will continue", r.rebuildingSrcCache.dstReplicaName, r.Name, r.rebuildingSrcCache.shallowCopyOpID, r.rebuildingSrcCache.shallowCopySnapshotName)
+		}
+	}
+
+	return status, nil
+}
+
+// RebuildingSrcShallowCopyCheck asks the src replica to check the shallow copy progress and status via the snapshot name.
+func (r *Replica) RebuildingSrcShallowCopyCheck(snapshotName string) (status spdktypes.ShallowCopyStatus, err error) {
+	r.RLock()
+	recordedSnapshotName := r.rebuildingSrcCache.shallowCopySnapshotName
+	status = r.rebuildingSrcCache.shallowCopyStatus
+	r.RUnlock()
+
+	if snapshotName != recordedSnapshotName {
+		status = spdktypes.ShallowCopyStatus{
+			State: types.ProgressStateError,
+			Error: fmt.Sprintf("found mismatching between the required snapshot name %v and the recorded snapshotName %v for src replica %s shallow copy check", snapshotName, recordedSnapshotName, r.Name),
+		}
+	}
+
 	return status, nil
 }
 
@@ -1617,7 +1713,6 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	r.rebuildingDstCache.rebuildingState = types.ProgressStateInProgress
 
 	r.rebuildingDstCache.processingSnapshotName = ""
-	r.rebuildingDstCache.processingOpID = 0
 	r.rebuildingDstCache.processingState = types.ProgressStateStarting
 	r.rebuildingDstCache.processingSize = 0
 	r.rebuildingDstCache.processedSnapshotList = make([]string, 0, len(rebuildingSnapshotList))
@@ -1914,7 +2009,6 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 
 // RebuildingDstShallowCopyStart let the dst replica ask the src replica to start a shallow copy from a snapshot to the rebuilding lvol.
 // Each time before starting a shallow copy, the dst replica will prepare a new rebuilding lvol and expose it as a NVMf bdev.
-// This dst replica is responsible for storing the shallow copy op ID so that it can help check the progress and status later on.
 func (r *Replica) RebuildingDstShallowCopyStart(spdkClient *spdkclient.Client, snapshotName string) (err error) {
 	r.Lock()
 	defer r.Unlock()
@@ -1958,8 +2052,7 @@ func (r *Replica) RebuildingDstShallowCopyStart(spdkClient *spdkclient.Client, s
 
 	// Directly start a shallow copy when there is no existing snapshot lvol
 	if len(bdevLvolList) < 1 {
-		r.rebuildingDstCache.processingOpID, err = srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyStart(r.rebuildingDstCache.srcReplicaName, snapshotName, dstRebuildingLvolAddress)
-		return err
+		return srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyStart(r.rebuildingDstCache.srcReplicaName, snapshotName, dstRebuildingLvolAddress)
 	}
 
 	// Otherwise, try to reuse the existing lvol
@@ -1985,14 +2078,12 @@ func (r *Replica) RebuildingDstShallowCopyStart(spdkClient *spdkclient.Client, s
 			return err
 		}
 		r.log.Infof("Replica found a corrupted or outdated snapshot lvol %s and coalesced it into rebuilding lvol %s for a delta shallow copy", dstSnapLvolName, GetReplicaRebuildingLvolName(r.Name))
-		r.rebuildingDstCache.processingOpID, err = srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyStart(r.rebuildingDstCache.srcReplicaName, snapshotName, dstRebuildingLvolAddress)
-		return err
+		return srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyStart(r.rebuildingDstCache.srcReplicaName, snapshotName, dstRebuildingLvolAddress)
 	} else {
 		r.log.Infof("Replica will reuse an intact snapshot lvol %s then skip the shallow copy", dstSnapLvolName)
 	}
 
 	// Need to manually update the progress after reuse the existing snapshot lvol
-	r.rebuildingDstCache.processingOpID = 0
 	r.rebuildingDstCache.processingState = types.ProgressStateComplete
 	r.rebuildingDstCache.processingSize = snaplvolActualSize
 
@@ -2055,7 +2146,7 @@ func (r *Replica) RebuildingDstShallowCopyCheck(spdkClient *spdkclient.Client) (
 			}
 		}()
 
-		state, copiedClusters, totalClusters, errorMsg, err := srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyCheck(r.rebuildingDstCache.srcReplicaName, r.Name, r.rebuildingDstCache.processingSnapshotName, r.rebuildingDstCache.processingOpID)
+		state, copiedClusters, totalClusters, errorMsg, err := srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyCheck(r.rebuildingDstCache.srcReplicaName, r.Name, r.rebuildingDstCache.processingSnapshotName)
 		if err != nil {
 			errorMsg = errors.Wrapf(err, "dst replica %s failed to check the shallow copy status from src replica %s for snapshot %s", r.Name, r.rebuildingDstCache.srcReplicaName, r.rebuildingDstCache.processingSnapshotName).Error()
 		}
@@ -2235,7 +2326,6 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 
 	r.rebuildingDstCache.processingState = types.ProgressStateStarting
 	r.rebuildingDstCache.processingSnapshotName = ""
-	r.rebuildingDstCache.processingOpID = 0
 	r.rebuildingDstCache.processingSize = 0
 	updateRequired = true
 
