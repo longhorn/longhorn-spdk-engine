@@ -258,40 +258,36 @@ func (c *SPDKClient) ReplicaRebuildingSrcFinish(srcReplicaName, dstReplicaName s
 }
 
 // ReplicaRebuildingSrcShallowCopyStart asks the src replica to start a shallow copy from its snapshot lvol to the dst rebuilding lvol.
-// It returns the shallow copy op ID, which is for retrieving the shallow copy progress and status. The caller is responsible for storing the op ID.
-func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyStart(srcReplicaName, snapshotName, dstRebuildingLvolAddress string) (uint32, error) {
+func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyStart(srcReplicaName, snapshotName, dstRebuildingLvolAddress string) error {
 	if srcReplicaName == "" || snapshotName == "" {
-		return 0, fmt.Errorf("failed to start rebuilding src replica shallow copy: missing required parameter replica name or snapshot name")
+		return fmt.Errorf("failed to start rebuilding src replica shallow copy: missing required parameter replica name or snapshot name")
 	}
 	if dstRebuildingLvolAddress == "" {
-		return 0, fmt.Errorf("failed to start rebuilding src replica shallow copy: missing required parameter dst rebuilding lvol address")
+		return fmt.Errorf("failed to start rebuilding src replica shallow copy: missing required parameter dst rebuilding lvol address")
 	}
 
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceMedTimeout)
 	defer cancel()
 
-	resp, err := client.ReplicaRebuildingSrcShallowCopyStart(ctx, &spdkrpc.ReplicaRebuildingSrcShallowCopyStartRequest{
+	_, err := client.ReplicaRebuildingSrcShallowCopyStart(ctx, &spdkrpc.ReplicaRebuildingSrcShallowCopyStartRequest{
 		Name:                     srcReplicaName,
 		SnapshotName:             snapshotName,
 		DstRebuildingLvolAddress: dstRebuildingLvolAddress,
 	})
 	if err != nil {
-		return 0, errors.Wrapf(err, "failed to start rebuilding src replica %v shallow copy snapshot %v", srcReplicaName, snapshotName)
+		return errors.Wrapf(err, "failed to start rebuilding src replica %v shallow copy snapshot %v", srcReplicaName, snapshotName)
 	}
-	return resp.ShallowCopyOpId, nil
+	return nil
 }
 
-// ReplicaRebuildingSrcShallowCopyCheck asks the src replica to check the shallow copy progress and status via the shallow copy op ID returned by RebuildingSrcShallowCopyStart.
-func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyCheck(srcReplicaName, dstReplicaName, snapshotName string, shallowCopyOpId uint32) (state string, copiedClusters, totalClusters uint64, errorMsg string, err error) {
+// ReplicaRebuildingSrcShallowCopyCheck asks the src replica to check the shallow copy progress and status via the snapshot name
+func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyCheck(srcReplicaName, dstReplicaName, snapshotName string) (state string, copiedClusters, totalClusters uint64, errorMsg string, err error) {
 	if srcReplicaName == "" || dstReplicaName == "" {
 		return "", 0, 0, "", fmt.Errorf("failed to check rebuilding src replica shallow copy: missing required parameter src replica name or dst replica name")
 	}
 	if snapshotName == "" {
 		return "", 0, 0, "", fmt.Errorf("failed to check rebuilding src replica shallow copy: missing required parameter snapshot name")
-	}
-	if shallowCopyOpId == 0 {
-		return "", 0, 0, "", fmt.Errorf("failed to check rebuilding src replica shallow copy: missing required parameter shallow copy operation ID")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -299,10 +295,9 @@ func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyCheck(srcReplicaName, dstRep
 	defer cancel()
 
 	resp, err := client.ReplicaRebuildingSrcShallowCopyCheck(ctx, &spdkrpc.ReplicaRebuildingSrcShallowCopyCheckRequest{
-		Name:            srcReplicaName,
-		DstReplicaName:  dstReplicaName,
-		SnapshotName:    snapshotName,
-		ShallowCopyOpId: shallowCopyOpId,
+		Name:           srcReplicaName,
+		DstReplicaName: dstReplicaName,
+		SnapshotName:   snapshotName,
 	})
 	if err != nil {
 		return "", 0, 0, "", errors.Wrapf(err, "failed to check rebuilding src replica %v shallow copy snapshot %v for dst replica %s", srcReplicaName, snapshotName, dstReplicaName)
