@@ -1310,6 +1310,10 @@ func (e *Engine) replicaShallowCopy(dstReplicaServiceCli *client.SPDKClient, src
 	}
 
 	// Traverse the src replica snapshot tree with a DFS way and do shallow copy one by one
+	timer := time.NewTimer(MaxShallowCopyWaitTime)
+	defer timer.Stop()
+	ticker := time.NewTicker(ShallowCopyCheckInterval)
+	defer ticker.Stop()
 	currentSnapshotName := ""
 	for idx := 0; idx < len(rebuildingSnapshotList); idx++ {
 		currentSnapshotName = rebuildingSnapshotList[idx].Name
@@ -1318,20 +1322,36 @@ func (e *Engine) replicaShallowCopy(dstReplicaServiceCli *client.SPDKClient, src
 		if err := dstReplicaServiceCli.ReplicaRebuildingDstShallowCopyStart(dstReplicaName, currentSnapshotName); err != nil {
 			return errors.Wrapf(err, "failed to start shallow copy snapshot %s", currentSnapshotName)
 		}
-		for {
-			shallowCopyStatus, err := dstReplicaServiceCli.ReplicaRebuildingDstShallowCopyCheck(dstReplicaName)
-			if err != nil {
-				return err
-			}
-			if shallowCopyStatus.State == helpertypes.ShallowCopyStateError || shallowCopyStatus.Error != "" {
-				return fmt.Errorf("rebuilding error during shallow copy for snapshot %s: %s", shallowCopyStatus.SnapshotName, shallowCopyStatus.Error)
-			}
-			if shallowCopyStatus.State == helpertypes.ShallowCopyStateComplete {
-				if shallowCopyStatus.Progress != 100 {
-					e.log.Warnf("Shallow copy snapshot %s is %s but somehow the progress is not 100%%", shallowCopyStatus.SnapshotName, helpertypes.ShallowCopyStateComplete)
+
+		timer.Reset(MaxShallowCopyWaitTime)
+		continuousRetryCount := 0
+		for finished := false; !finished; {
+			select {
+			case <-timer.C:
+				return errors.Errorf("Timeout engine failed to check the dst replica %s snapshot %s shallow copy status over %d times", dstReplicaName, currentSnapshotName, maxNumRetries)
+			case <-ticker.C:
+				shallowCopyStatus, err := dstReplicaServiceCli.ReplicaRebuildingDstShallowCopyCheck(dstReplicaName)
+				if err != nil {
+					continuousRetryCount++
+					if continuousRetryCount > maxNumRetries {
+						return errors.Wrapf(err, "Engine failed to check the dst replica %s snapshot %s shallow copy status over %d times", dstReplicaName, currentSnapshotName, maxNumRetries)
+					}
+					logrus.WithError(err).Errorf("Engine failed to check the dst replica %s snapshot %s shallow copy status, retry count %d", dstReplicaName, currentSnapshotName, continuousRetryCount)
+					continue
 				}
-				e.log.Infof("Shallow copied snapshot %s", shallowCopyStatus.SnapshotName)
-				break
+				if shallowCopyStatus.State == helpertypes.ShallowCopyStateError || shallowCopyStatus.Error != "" {
+					return fmt.Errorf("rebuilding error during shallow copy for snapshot %s: %s", shallowCopyStatus.SnapshotName, shallowCopyStatus.Error)
+				}
+
+				continuousRetryCount = 0
+				if shallowCopyStatus.State == helpertypes.ShallowCopyStateComplete {
+					if shallowCopyStatus.Progress != 100 {
+						e.log.Warnf("Shallow copy snapshot %s is %s but somehow the progress is not 100%%", shallowCopyStatus.SnapshotName, helpertypes.ShallowCopyStateComplete)
+					}
+					e.log.Infof("Shallow copied snapshot %s", shallowCopyStatus.SnapshotName)
+					finished = true
+					break
+				}
 			}
 		}
 
