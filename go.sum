@@ -18,6 +18,8 @@ github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSs
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/derekbit/go-spdk-helper v0.0.0-20241208073439-a6020c58ab85 h1:Z92nuV0JC+7pWTLu4KAyrjtQo6pQjCa2oaj0hD8sESk=
+github.com/derekbit/go-spdk-helper v0.0.0-20241208073439-a6020c58ab85/go.mod h1:JoJT6We5ctsc/I4t/ucRLqqlTgyXAJIVTl0P4KW33do=
 github.com/gammazero/deque v0.2.0 h1:SkieyNB4bg2/uZZLxvya0Pq6diUlwx7m2TeT7GAIWaA=
 github.com/gammazero/deque v0.2.0/go.mod h1:LFroj8x4cMYCukHJDbxFCkT+r9AndaJnFMuZDV34tuU=
 github.com/gammazero/workerpool v1.1.3 h1:WixN4xzukFoN0XSeXF6puqEqFTl2mECI9S6W44HWy9Q=
@@ -48,8 +50,6 @@ github.com/longhorn/backupstore v0.0.0-20241208060255-5c474bb003bd h1:lcqAEYf2+Z
 github.com/longhorn/backupstore v0.0.0-20241208060255-5c474bb003bd/go.mod h1:35urUcY2wO9lgFQnoR4l9i4Hc/x/fNzI8Pn/dloPSd0=
 github.com/longhorn/go-common-libs v0.0.0-20241208100509-e1932c65c078 h1:QnN9bPRhWr38ziOdknlC+NORk0PgQJcPX1vo20oVi9I=
 github.com/longhorn/go-common-libs v0.0.0-20241208100509-e1932c65c078/go.mod h1:whDcaYDin1L7uaKTpr86RxpfOT+VJQbubDWdEGPnvVs=
-github.com/longhorn/go-spdk-helper v0.0.0-20241208060229-9425f07f800a h1:o8ycbukiUGbBPNGnGbU3H+YSbjNsdk5KgJHoiWkpjmA=
-github.com/longhorn/go-spdk-helper v0.0.0-20241208060229-9425f07f800a/go.mod h1:JoJT6We5ctsc/I4t/ucRLqqlTgyXAJIVTl0P4KW33do=
 github.com/longhorn/types v0.0.0-20241208031854-891e672bc453 h1:NdPh1ARYoBnFqCn3sRNJXa+WeJZcS+J0wXpJBou26KM=
 github.com/longhorn/types v0.0.0-20241208031854-891e672bc453/go.mod h1:ZElOIs7s/Cjaw7P9kY+uvTzh87mfO34pk39B6TVmg0g=
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
