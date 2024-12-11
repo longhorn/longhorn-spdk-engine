@@ -1628,14 +1628,15 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		}
 		r.IsExposed = false
 	}
-	// For the old head, if it's a non-empty one, rename it for reuse later.
-	// Otherwise, directly remove it
-	if r.Head.ActualSize > 0 {
-		expiredLvolName := GenerateReplicaExpiredLvolName(r.Name)
-		if _, err := spdkClient.BdevLvolRename(r.Head.UUID, expiredLvolName); err != nil {
-			r.log.WithError(err).Warnf("Failed to rename the previous head lvol %s to %s for dst replica %v rebuilding start, will try to remove it instead", r.Head.Alias, expiredLvolName, r.Name)
-		}
-	}
+	// TODO: Uncomment below code after the delta shallow copy API is ready
+	//// For the old head, if it's a non-empty one, rename it for reuse later.
+	//// Otherwise, directly remove it
+	//if r.Head.ActualSize > 0 {
+	//	expiredLvolName := GenerateReplicaExpiredLvolName(r.Name)
+	//	if _, err := spdkClient.BdevLvolRename(r.Head.UUID, expiredLvolName); err != nil {
+	//		r.log.WithError(err).Warnf("Failed to rename the previous head lvol %s to %s for dst replica %v rebuilding start, will try to remove it instead", r.Head.Alias, expiredLvolName, r.Name)
+	//	}
+	//}
 	if _, err := spdkClient.BdevLvolDelete(r.Alias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return "", err
 	}
@@ -1667,7 +1668,7 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	dstHeadLvolAddress := net.JoinHostPort(r.IP, strconv.Itoa(int(r.PortStart)))
 
 	// Delete extra snapshots if any
-	rebuildingLvolName := GetReplicaRebuildingLvolName(r.Name)
+	//rebuildingLvolName := GetReplicaRebuildingLvolName(r.Name)
 	bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, r.replicaLvolFilter)
 	if err != nil {
 		return "", err
@@ -1683,17 +1684,18 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 			continue
 		}
 
-		// Rename the non-empty previous rebuilding lvol so that it can be reused later
-		if lvolName == rebuildingLvolName {
-			if lvol.DriverSpecific.Lvol.NumAllocatedClusters > 0 {
-				expiredLvolName := GenerateReplicaExpiredLvolName(r.Name)
-				if _, err := spdkClient.BdevLvolRename(lvol.UUID, expiredLvolName); err != nil {
-					r.log.WithError(err).Warnf("Failed to rename the previous rebuilding lvol %s to %s for dst replica %v rebuilding start, will try to remove it instead", lvolName, expiredLvolName, r.Name)
-				} else {
-					continue
-				}
-			}
-		}
+		// TODO: Uncomment below code after the delta shallow copy API is ready
+		//// Rename the non-empty previous rebuilding lvol so that it can be reused later
+		//if lvolName == rebuildingLvolName {
+		//	if lvol.DriverSpecific.Lvol.NumAllocatedClusters > 0 {
+		//		expiredLvolName := GenerateReplicaExpiredLvolName(r.Name)
+		//		if _, err := spdkClient.BdevLvolRename(lvol.UUID, expiredLvolName); err != nil {
+		//			r.log.WithError(err).Warnf("Failed to rename the previous rebuilding lvol %s to %s for dst replica %v rebuilding start, will try to remove it instead", lvolName, expiredLvolName, r.Name)
+		//		} else {
+		//			continue
+		//		}
+		//	}
+		//}
 
 		// If an extra snapshot lvol has multiple children, decoupling it from its children before deletion
 		if len(lvol.DriverSpecific.Lvol.Clones) > 1 {
@@ -1930,11 +1932,34 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 	}
 	dstSnapshotLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
 	if bdevLvolMap[dstSnapshotLvolName] != nil { // If there is an existing snapshot lvol, clone a rebuilding lvol behinds it
-		snapLvolAlias := spdktypes.GetLvolAlias(r.LvsName, dstSnapshotLvolName)
-		if _, err = spdkClient.BdevLvolClone(snapLvolAlias, rebuildingLvolName); err != nil {
-			return "", errors.Wrapf(err, "failed to clone rebuilding lvol %s behinds the existing snapshot lvol %s for dst replica %v rebuilding snapshot %s shallow copy prepare", rebuildingLvolName, snapLvolAlias, r.Name, snapshotName)
+		// Otherwise, try to reuse the existing lvol
+		// TODO: For a corrupted or outdated snapshot lvol, we should create a rebuilding lvol before delete it. So that its clusters will be coalesced into the rebuilding lvol, then we can start a delta shallow copy
+		// TODO: In the future, we can move the below logic to r.RebuildingDstShallowCopyStart after the delta shallow copy API is ready
+		dstSnapBdevLvol := bdevLvolMap[dstSnapshotLvolName]
+		snaplvolSnapshotTimestamp := dstSnapBdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotTimestamp]
+		snaplvolActualSize := dstSnapBdevLvol.DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
+		// TODO: Verify the checksum
+		isIntactSnap := srcSnapSvcLvol.SnapshotTimestamp == snaplvolSnapshotTimestamp &&
+			srcSnapSvcLvol.ActualSize == snaplvolActualSize
+		// For now directly delete the corrupted or outdated snapshot lvol and start a full shallow copy since we cannot validate existing data during the shallow copy
+		if !isIntactSnap {
+			for _, childLvolName := range dstSnapBdevLvol.DriverSpecific.Lvol.Clones {
+				if _, err := spdkClient.BdevLvolDetachParent(spdktypes.GetLvolAlias(r.LvsName, childLvolName)); err != nil {
+					return "", errors.Wrapf(err, "failed to decouple the child lvol %s from the corrupted or outdated snapshot lvol %s for dst replica %v rebuilding snapshot %s shallow copy prepare", childLvolName, dstSnapshotLvolName, r.Name, snapshotName)
+				}
+			}
+			if _, err := spdkClient.BdevLvolDelete(dstSnapBdevLvol.Aliases[0]); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+				return "", errors.Wrapf(err, "failed to delete the corrupted or outdated snapshot lvol %s for dst replica %v rebuilding snapshot %s shallow copy prepare", dstSnapshotLvolName, r.Name, snapshotName)
+			}
+			r.log.Infof("Replica found a corrupted or outdated snapshot lvol %s and delete it before the shallow copy", GetReplicaRebuildingLvolName(r.Name))
+		} else {
+			snapLvolAlias := spdktypes.GetLvolAlias(r.LvsName, dstSnapshotLvolName)
+			if _, err = spdkClient.BdevLvolClone(snapLvolAlias, rebuildingLvolName); err != nil {
+				return "", errors.Wrapf(err, "failed to clone rebuilding lvol %s behinds the existing snapshot lvol %s for dst replica %v rebuilding snapshot %s shallow copy prepare", rebuildingLvolName, snapLvolAlias, r.Name, snapshotName)
+			}
+			r.log.Infof("Replica found an intact snapshot lvol %s before the shallow copy", snapLvolAlias)
+			rebuildingLvolCreated = true
 		}
-		rebuildingLvolCreated = true
 	} else { // Then check if there is an expired lvol available
 		if bdevLvolMap[dstSnapshotParentLvolName] != nil { // For non-ancestor snapshot, check if dstSnapshotParentLvol has an expired lvol as child
 			for _, childLvolName := range bdevLvolMap[dstSnapshotParentLvolName].DriverSpecific.Lvol.Clones {
@@ -2056,36 +2081,11 @@ func (r *Replica) RebuildingDstShallowCopyStart(spdkClient *spdkclient.Client, s
 	}
 
 	// Otherwise, try to reuse the existing lvol
-	dstSnapBdevLvol := &bdevLvolList[0]
-	snaplvolSnapshotTimestamp := dstSnapBdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotTimestamp]
-	snaplvolActualSize := dstSnapBdevLvol.DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
-	// TODO: Verify the checksum
-	isIntactSnap := srcSnapSvcLvol.SnapshotTimestamp == snaplvolSnapshotTimestamp &&
-		srcSnapSvcLvol.ActualSize == snaplvolActualSize
-
-	// For corrupted or outdated snapshot lvol, delete it so that its clusters will be coalesced into the rebuilding lvol, then we can start a delta shallow copy
-	if !isIntactSnap {
-		for _, childLvolName := range dstSnapBdevLvol.DriverSpecific.Lvol.Clones {
-			if childLvolName == GetReplicaRebuildingLvolName(r.Name) {
-				continue
-			}
-			// TODO: How can we handle the children
-			if _, err := spdkClient.BdevLvolDecoupleParent(spdktypes.GetLvolAlias(r.LvsName, childLvolName)); err != nil {
-				return err
-			}
-		}
-		if _, err := spdkClient.BdevLvolDelete(spdktypes.GetLvolAlias(r.LvsName, dstSnapLvolName)); err != nil {
-			return err
-		}
-		r.log.Infof("Replica found a corrupted or outdated snapshot lvol %s and coalesced it into rebuilding lvol %s for a delta shallow copy", dstSnapLvolName, GetReplicaRebuildingLvolName(r.Name))
-		return srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyStart(r.rebuildingDstCache.srcReplicaName, snapshotName, dstRebuildingLvolAddress)
-	} else {
-		r.log.Infof("Replica will reuse an intact snapshot lvol %s then skip the shallow copy", dstSnapLvolName)
-	}
+	r.log.Infof("Replica directly reused an intact snapshot lvol %s then skipped the shallow copy", dstSnapLvolName)
 
 	// Need to manually update the progress after reuse the existing snapshot lvol
 	r.rebuildingDstCache.processingState = types.ProgressStateComplete
-	r.rebuildingDstCache.processingSize = snaplvolActualSize
+	r.rebuildingDstCache.processingSize = bdevLvolList[0].DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
 
 	return nil
 }
