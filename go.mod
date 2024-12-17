@@ -7,10 +7,10 @@ toolchain go1.23.4
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
-	github.com/longhorn/backupstore v0.0.0-20241216064330-a7bd15ad3b19
-	github.com/longhorn/go-common-libs v0.0.0-20241216082245-2bf72d23f8b9
-	github.com/longhorn/go-spdk-helper v0.0.0-20241210055426-92898a883955
-	github.com/longhorn/types v0.0.0-20241214151852-cf9e27d3d0a9
+	github.com/longhorn/backupstore v0.0.0-20241216162505-6ea1b1d542a3
+	github.com/longhorn/go-common-libs v0.0.0-20241217111348-5bad87d5320c
+	github.com/longhorn/go-spdk-helper v0.0.0-20241216160651-bcce92add55b
+	github.com/longhorn/types v0.0.0-20241217083824-2e0ecb487ccf
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
@@ -60,5 +60,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241015192408-796eee8c2d53 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/mount-utils v0.31.3 // indirect
-	k8s.io/utils v0.0.0-20241104163129-6fe5fd82f078 // indirect
+	k8s.io/utils v0.0.0-20241210054802-24370beab758 // indirect
 )
