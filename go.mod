@@ -12,11 +12,11 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
-	golang.org/x/net v0.22.0
+	golang.org/x/net v0.23.0
 	google.golang.org/grpc v1.62.1
 	google.golang.org/protobuf v1.33.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
-	k8s.io/apimachinery v0.29.2
+	k8s.io/apimachinery v0.28.15
 )
 
 require (
@@ -28,7 +28,7 @@ require (
 	github.com/gammazero/workerpool v1.1.2 // indirect
 	github.com/go-logr/logr v1.3.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/golang/protobuf v1.5.3 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/longhorn/nsfilelock v0.0.0-20200723175406-fa7c83ad0003 // indirect
