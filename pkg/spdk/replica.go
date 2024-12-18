@@ -69,6 +69,9 @@ type Replica struct {
 
 	IsExposed bool
 
+	// reconstructRequired will be set to true when stopping an errored replica
+	reconstructRequired bool
+
 	// The rebuilding destination replica should cache this info
 	isRebuilding       bool
 	rebuildingDstCache RebuildingDstCache
@@ -254,8 +257,13 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	}()
 
 	switch r.State {
-	case types.InstanceStateStopped, types.InstanceStatePending:
+	case types.InstanceStatePending:
 		break
+	case types.InstanceStateStopped:
+		if r.reconstructRequired {
+			break
+		}
+		return fmt.Errorf("invalid state %s for reconstructing required flag %v for replica %s construct", r.State, r.reconstructRequired, r.Name)
 	case types.InstanceStateRunning:
 		if r.isRebuilding {
 			break
@@ -282,6 +290,7 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	r.ActiveChain = newChain
 	r.SnapshotLvolMap = newSnapshotLvolMap
 	r.BackingImage = newChain[0]
+	r.reconstructRequired = false
 
 	if r.State == types.InstanceStatePending {
 		r.State = types.InstanceStateStopped
@@ -750,16 +759,17 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 		return nil, err
 	}
 
-	// Construct the snapshot lvol map and the active chain
-	bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, r.replicaLvolFilter)
-	if err != nil {
-		return nil, err
+	// In case of failed replica reuse being failed by r.validateAndUpdate(), we should make sure the caches are correct.
+	if r.reconstructRequired {
+		bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, r.replicaLvolFilter)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.construct(bdevLvolMap); err != nil {
+			return nil, err
+		}
+		r.State = types.InstanceStateStopped
 	}
-	if err := r.construct(bdevLvolMap); err != nil {
-		return nil, err
-	}
-
-	r.State = types.InstanceStateStopped
 
 	podIP, err := commonnet.GetIPForPod()
 	if err != nil {
@@ -824,6 +834,10 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 
 		if r.State != types.InstanceStateError {
 			r.ErrorMsg = ""
+		}
+
+		if prevState == types.ProgressStateError {
+			r.reconstructRequired = true
 		}
 
 		if prevState != r.State {
