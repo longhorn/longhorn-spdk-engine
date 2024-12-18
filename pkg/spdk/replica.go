@@ -552,21 +552,37 @@ func (r *Replica) prepareHead(spdkClient *spdkclient.Client, backingImage *Backi
 	}
 
 	if !isHeadAvailable {
-		r.log.Info("Creating a lvol bdev as replica head")
-		if r.ActiveChain[len(r.ActiveChain)-1] != nil { // The replica has a backing image or somehow there are already snapshots in the chain
-			uuid, err := spdkClient.BdevLvolClone(r.ActiveChain[len(r.ActiveChain)-1].UUID, r.Name)
-			if err != nil {
+		var headParentLvol *Lvol
+		if r.ActiveChain[len(r.ActiveChain)-1] != nil {
+			if r.ActiveChain[len(r.ActiveChain)-1].Name == r.Name {
+				if len(r.ActiveChain) < 2 {
+					return fmt.Errorf("found invalid active chain %+v when preparing head for replica %s", len(r.ActiveChain), r.Name)
+				}
+				headParentLvol = r.ActiveChain[len(r.ActiveChain)-2]
+			} else {
+				headParentLvol = r.ActiveChain[len(r.ActiveChain)-1]
+			}
+		} else {
+			if len(r.ActiveChain) > 1 { // The only possible case is that r.ActiveChain[len(r.ActiveChain)-1] is a nil head
+				r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
+				headParentLvol = r.ActiveChain[len(r.ActiveChain)-1]
+			}
+		}
+		if headParentLvol != nil { // The replica has a backing image or somehow there are already snapshots in the chain
+			if _, err := spdkClient.BdevLvolClone(headParentLvol.Alias, r.Name); err != nil {
 				return err
 			}
-			if r.ActiveChain[len(r.ActiveChain)-1].SpecSize != r.SpecSize {
-				if _, err := spdkClient.BdevLvolResize(uuid, util.BytesToMiB(r.SpecSize)); err != nil {
+			if headParentLvol.SpecSize != r.SpecSize {
+				if _, err := spdkClient.BdevLvolResize(r.Alias, util.BytesToMiB(r.SpecSize)); err != nil {
 					return err
 				}
 			}
+			r.log.Infof("Replica cloned a new head lvol from the parent lvol %s", headParentLvol.Name)
 		} else {
 			if _, err := spdkClient.BdevLvolCreate("", r.LvsUUID, r.Name, util.BytesToMiB(r.SpecSize), "", true); err != nil {
 				return err
 			}
+			r.log.Info("Replica created a new head lvol")
 		}
 	}
 
