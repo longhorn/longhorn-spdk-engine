@@ -69,6 +69,9 @@ type Replica struct {
 
 	IsExposed bool
 
+	// constructRequired will be set to true when stopping an errored replica
+	constructRequired bool
+
 	// The rebuilding destination replica should cache this info
 	isRebuilding       bool
 	rebuildingDstCache RebuildingDstCache
@@ -256,6 +259,11 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	switch r.State {
 	case types.InstanceStatePending:
 		break
+	case types.InstanceStateStopped:
+		if r.constructRequired {
+			break
+		}
+		return fmt.Errorf("invalid state %s with construct required flag %v for replica %s construct", r.State, r.constructRequired, r.Name)
 	case types.InstanceStateRunning:
 		if r.isRebuilding {
 			break
@@ -740,7 +748,19 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 	if err := r.prepareHead(spdkClient, backingImage); err != nil {
 		return nil, err
 	}
-	r.State = types.InstanceStateStopped
+
+	// In case of failed replica reuse being failed by r.validateAndUpdate(), we should make sure the caches are correct.
+	if r.constructRequired {
+		bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, r.replicaLvolFilter)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.construct(bdevLvolMap); err != nil {
+			return nil, err
+		}
+		r.constructRequired = false
+		r.State = types.InstanceStateStopped
+	}
 
 	podIP, err := commonnet.GetIPForPod()
 	if err != nil {
@@ -805,6 +825,10 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 
 		if r.State != types.InstanceStateError {
 			r.ErrorMsg = ""
+		}
+
+		if prevState == types.ProgressStateError {
+			r.constructRequired = true
 		}
 
 		if prevState != r.State {
