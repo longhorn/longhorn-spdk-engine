@@ -1842,12 +1842,15 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 // Option cleanupRequired should be set to true if Longhorn does not want to reuse this dst replica for the next fast rebuilding, which typically means the replica removal
 func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client) error {
 	aggregatedErrors := []error{}
-	if r.rebuildingDstCache.srcReplicaAddress != "" {
+	if r.rebuildingDstCache.externalSnapshotBdevName != "" {
 		if err := disconnectNVMfBdev(spdkClient, r.rebuildingDstCache.externalSnapshotBdevName); err != nil {
 			r.log.WithError(err).Errorf("Failed to disconnect the external src snapshot bdev %s for rebuilding dst cleanup, will continue", r.rebuildingDstCache.externalSnapshotBdevName)
 			aggregatedErrors = append(aggregatedErrors, err)
 		} else {
+			r.rebuildingDstCache.srcReplicaName = ""
 			r.rebuildingDstCache.srcReplicaAddress = ""
+			r.rebuildingDstCache.externalSnapshotName = ""
+			r.rebuildingDstCache.externalSnapshotBdevName = ""
 		}
 	}
 
@@ -1919,8 +1922,15 @@ func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client) error
 		}
 	}
 
-	r.rebuildingDstCache.processedSnapshotList = make([]string, 0)
 	r.rebuildingDstCache.rebuildingSnapshotMap = map[string]*api.Lvol{}
+	r.rebuildingDstCache.rebuildingSize = 0
+	r.rebuildingDstCache.rebuildingError = ""
+	r.rebuildingDstCache.rebuildingState = ""
+	r.rebuildingDstCache.processedSnapshotList = make([]string, 0)
+	r.rebuildingDstCache.processedSnapshotsSize = 0
+	r.rebuildingDstCache.processingSnapshotName = ""
+	r.rebuildingDstCache.processingSize = 0
+	r.rebuildingDstCache.processingState = ""
 
 	return util.CombineErrors(aggregatedErrors...)
 }
