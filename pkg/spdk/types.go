@@ -76,6 +76,7 @@ type Lvol struct {
 	CreationTime      string
 	UserCreated       bool
 	SnapshotTimestamp string
+	SnapshotChecksum  string
 }
 
 func ServiceBackingImageLvolToProtoBackingImageLvol(lvol *Lvol) *spdkrpc.Lvol {
@@ -117,6 +118,7 @@ func ServiceLvolToProtoLvol(replicaName string, lvol *Lvol) *spdkrpc.Lvol {
 		CreationTime:      lvol.CreationTime,
 		UserCreated:       lvol.UserCreated,
 		SnapshotTimestamp: lvol.SnapshotTimestamp,
+		SnapshotChecksum:  lvol.SnapshotChecksum,
 	}
 
 	if lvol.Name == replicaName {
@@ -150,6 +152,7 @@ func BdevLvolInfoToServiceLvol(bdev *spdktypes.BdevInfo) *Lvol {
 		CreationTime:      bdev.CreationTime,
 		UserCreated:       bdev.DriverSpecific.Lvol.Xattrs[spdkclient.UserCreated] == strconv.FormatBool(true),
 		SnapshotTimestamp: bdev.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotTimestamp],
+		SnapshotChecksum:  bdev.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotChecksum],
 	}
 }
 

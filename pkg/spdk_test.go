@@ -59,8 +59,10 @@ var (
 
 	defaultTestExecuteTimeout = 10 * time.Second
 
-	defaultTestRebuildingWaitInterval = 3 * time.Second
-	defaultTestRebuildingWaitCount    = 60
+	defaultTestRebuildingWaitInterval   = 3 * time.Second
+	defaultTestRebuildingWaitCount      = 60
+	defaultTestSnapChecksumWaitInterval = 1 * time.Second
+	defaultTestSnapChecksumWaitCount    = 60
 
 	maxBackingImageGetRetries = 300
 )
@@ -1427,7 +1429,10 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 				},
 				nil)
 
-			// Test online rebuilding twice
+			waitReplicaSnapshotChecksum(c, spdkCli, replicaName1, "")
+			waitReplicaSnapshotChecksum(c, spdkCli, replicaName2, "")
+
+			// Test online rebuilding
 
 			// Crash replica1
 			err = spdkCli.ReplicaDelete(replicaName1, false)
@@ -1659,6 +1664,45 @@ func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, 
 		}
 
 	}
+}
+
+func waitReplicaSnapshotChecksum(c *C, spdkCli *client.SPDKClient, replicaName, targetSnapName string) {
+	waitReplicaSnapshotChecksumTimeout(c, spdkCli, replicaName, targetSnapName, defaultTestSnapChecksumWaitCount)
+}
+
+func waitReplicaSnapshotChecksumTimeout(c *C, spdkCli *client.SPDKClient, replicaName, targetSnapName string, timeoutInSecond int) {
+	ticker := time.NewTicker(defaultTestSnapChecksumWaitInterval)
+	defer ticker.Stop()
+	timer := time.NewTimer(time.Duration(timeoutInSecond) * time.Second)
+	defer timer.Stop()
+
+	hasChecksum := true
+	for {
+		hasChecksum = true
+		select {
+		case <-timer.C:
+			c.Assert(hasChecksum, Equals, true)
+			return
+		case <-ticker.C:
+			replica, err := spdkCli.ReplicaGet(replicaName)
+			c.Assert(err, IsNil)
+			if targetSnapName == "" || replica.Snapshots[targetSnapName] != nil {
+				for snapName, snap := range replica.Snapshots {
+					if targetSnapName == "" || snapName == targetSnapName {
+						if snap.SnapshotChecksum == "" {
+							hasChecksum = false
+							break
+						}
+					}
+				}
+			}
+		}
+		if hasChecksum {
+			break
+		}
+	}
+
+	c.Assert(hasChecksum, Equals, true)
 }
 
 func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, engineName string, replicaAddressMap map[string]string) {

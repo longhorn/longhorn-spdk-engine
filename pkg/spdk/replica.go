@@ -67,7 +67,8 @@ type Replica struct {
 	State    types.InstanceState
 	ErrorMsg string
 
-	IsExposed bool
+	IsExposed               bool
+	SnapshotChecksumEnabled bool
 
 	// reconstructRequired will be set to true when stopping an errored replica
 	reconstructRequired bool
@@ -190,6 +191,8 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 		SpecSize:        roundedSpecSize,
 		State:           types.InstanceStatePending,
 
+		SnapshotChecksumEnabled: true,
+
 		rebuildingDstCache: RebuildingDstCache{
 			rebuildingSnapshotMap: map[string]*api.Lvol{},
 			processedSnapshotList: []string{},
@@ -228,6 +231,25 @@ func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
 	bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, r.replicaLvolFilter)
 	if err != nil {
 		return err
+	}
+
+	if r.SnapshotChecksumEnabled {
+		for _, bdevLvol := range bdevLvolMap {
+			if !bdevLvol.DriverSpecific.Lvol.Snapshot {
+				continue
+			}
+			if bdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotChecksum] != "" {
+				continue
+			}
+			// TODO: Use a goroutine pool
+			go func() {
+				logrus.Debugf("Replica %v is registering checksum for snapshot %v", r.Name, bdevLvol.Aliases[0])
+				_, err := spdkClient.BdevLvolRegisterSnapshotChecksum(bdevLvol.Aliases[0])
+				if err != nil {
+					logrus.Errorf("Replica %v failed to register checksum for snapshot %v: %v", r.Name, bdevLvol.Name, err)
+				}
+			}()
+		}
 	}
 
 	if r.State == types.InstanceStatePending {
@@ -441,6 +463,16 @@ func compareSvcLvols(prev, cur *Lvol, checkChildren, checkActualSize bool) error
 	// Need to revisit the actual size check.
 	if checkActualSize && prev.ActualSize != cur.ActualSize {
 		logrus.Warnf("Found mismatching lvol actual size %v with recorded prev lvol actual size %v when validating lvol %s", cur.ActualSize, prev.ActualSize, prev.Name)
+	}
+
+	if prev.SnapshotChecksum == "" {
+		prev.SnapshotChecksum = cur.SnapshotChecksum
+	}
+	if cur.SnapshotChecksum == "" {
+		prev.SnapshotChecksum = ""
+	}
+	if prev.SnapshotChecksum != cur.SnapshotChecksum {
+		return fmt.Errorf("found mismatching lvol snapshot checksum %v with recorded prev lvol snapshot checksum %v when validating lvol %s", cur.SnapshotChecksum, prev.SnapshotChecksum, prev.Name)
 	}
 
 	return nil
@@ -1095,6 +1127,7 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 			return nil, fmt.Errorf("failed to get the bdev of the only child lvol %s after snapshot %s delete", childSvcLvol.Name, snapshotName)
 		}
 		childSvcLvol.ActualSize = bdevLvol[0].DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
+		childSvcLvol.SnapshotChecksum = ""
 	}
 
 	updateRequired = true
@@ -1978,9 +2011,9 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 		dstSnapBdevLvol := bdevLvolMap[dstSnapshotLvolName]
 		snaplvolSnapshotTimestamp := dstSnapBdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotTimestamp]
 		snaplvolActualSize := dstSnapBdevLvol.DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
-		// TODO: Verify the checksum
 		isIntactSnap := srcSnapSvcLvol.SnapshotTimestamp == snaplvolSnapshotTimestamp &&
-			srcSnapSvcLvol.ActualSize == snaplvolActualSize
+			srcSnapSvcLvol.ActualSize == snaplvolActualSize &&
+			srcSnapSvcLvol.SnapshotChecksum != "" && srcSnapSvcLvol.SnapshotChecksum == dstSnapBdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotChecksum]
 		// For now directly delete the corrupted or outdated snapshot lvol and start a full shallow copy since we cannot validate existing data during the shallow copy
 		if !isIntactSnap {
 			for _, childLvolName := range dstSnapBdevLvol.DriverSpecific.Lvol.Clones {
