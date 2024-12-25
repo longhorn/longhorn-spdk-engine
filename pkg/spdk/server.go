@@ -3,7 +3,6 @@ package spdk
 import (
 	"fmt"
 	"net"
-	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -332,7 +331,7 @@ func (s *Server) verify() (err error) {
 			}
 		}
 	}
-	if !reflect.DeepEqual(s.replicaMap, replicaMap) {
+	if len(s.replicaMap) != len(replicaMap) {
 		logrus.Infof("spdk gRPC server: Replica map updated, map count is changed from %d to %d", len(s.replicaMap), len(replicaMap))
 	}
 	s.replicaMap = replicaMap
