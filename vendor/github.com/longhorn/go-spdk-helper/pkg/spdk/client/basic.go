@@ -18,7 +18,6 @@ type Xattr struct {
 const (
 	UserCreated       = "user_created"
 	SnapshotTimestamp = "snapshot_timestamp"
-	SnapshotChecksum  = "snapshot_checksum"
 )
 
 // BdevGetBdevs get information about block devices (bdevs).
@@ -297,12 +296,6 @@ func (c *Client) BdevLvolGetWithFilter(name string, timeout uint64, filter func(
 		if err == nil {
 			b.DriverSpecific.Lvol.Xattrs[SnapshotTimestamp] = snapshot_timestamp
 		}
-		if b.DriverSpecific.Lvol.Snapshot {
-			checksum, err := c.BdevLvolGetSnapshotChecksum(b.Name)
-			if err == nil {
-				b.DriverSpecific.Lvol.Xattrs[SnapshotChecksum] = checksum
-			}
-		}
 
 		bdevLvolInfoList = append(bdevLvolInfoList, b)
 	}
@@ -387,24 +380,6 @@ func (c *Client) BdevLvolDecoupleParent(name string) (decoupled bool, err error)
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommandWithLongTimeout("bdev_lvol_decouple_parent", req)
-	if err != nil {
-		return false, err
-	}
-
-	return decoupled, json.Unmarshal(cmdOutput, &decoupled)
-}
-
-// BdevLvolDetachParent detach the parent of a logical volume.
-// No new clusters are allocated to the child blob, no data are copied from the parent to the child, so lvol's data are not modified.
-// The parent must be a standard snapshot, not an external snapshot. All dependencies on the parent are removed
-//
-//	"name": Required. UUID or alias of the logical volume to detach the parent of it. The alias of a lvol is <LVSTORE NAME>/<LVOL NAME>.
-func (c *Client) BdevLvolDetachParent(name string) (decoupled bool, err error) {
-	req := spdktypes.BdevLvolDetachParentRequest{
-		Name: name,
-	}
-
-	cmdOutput, err := c.jsonCli.SendCommandWithLongTimeout("bdev_lvol_detach_parent", req)
 	if err != nil {
 		return false, err
 	}
@@ -546,23 +521,23 @@ func (c *Client) BdevLvolRegisterSnapshotChecksum(name string) (registered bool,
 // BdevLvolGetSnapshotChecksum gets snapshot's stored checksum. The checksum must has been previously registered.
 //
 //	"name": Required. UUID or alias of the snapshot. The alias of a snapshot is <LVSTORE NAME>/<SNAPSHOT NAME>.
-func (c *Client) BdevLvolGetSnapshotChecksum(name string) (checksum string, err error) {
+func (c *Client) BdevLvolGetSnapshotChecksum(name string) (checksum *uint64, err error) {
 	req := spdktypes.BdevLvolGetSnapshotChecksumRequest{
 		Name: name,
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommandWithLongTimeout("bdev_lvol_get_snapshot_checksum", req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	var snapshotChecksum spdktypes.BdevLvolSnapshotChecksum
 	err = json.Unmarshal(cmdOutput, &snapshotChecksum)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return strconv.FormatUint(snapshotChecksum.Checksum, 10), nil
+	return &snapshotChecksum.Checksum, nil
 }
 
 // BdevLvolRename renames a logical volume.
