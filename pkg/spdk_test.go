@@ -59,6 +59,8 @@ var (
 
 	defaultTestRebuildingWaitInterval = 3 * time.Second
 	defaultTestRebuildingWaitCount    = 60
+
+	maxBackingImageGetRetries = 300
 )
 
 func Test(t *testing.T) { TestingT(t) }
@@ -209,6 +211,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
+	defer spdkCli.Close()
 
 	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
@@ -225,6 +228,10 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
 	for i := 0; i < concurrentCount; i++ {
+		spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+		c.Assert(err, IsNil)
+		defer spdkCli.Close()
+
 		volumeName := fmt.Sprintf("test-vol-%d", i)
 		engineName := fmt.Sprintf("%s-engine", volumeName)
 		replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
@@ -234,15 +241,14 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 		go func() {
 			defer func() {
 				// Do cleanup
-				// TODO: Check why there is a race here
-				// err = spdkCli.EngineDelete(engineName)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName1, true)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName2, true)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName3, true)
-				// c.Assert(err, IsNil)
+				err = spdkCli.EngineDelete(engineName)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName1, true)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName2, true)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName3, true)
+				c.Assert(err, IsNil)
 
 				wg.Done()
 			}()
@@ -473,6 +479,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 
 	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
+	defer spdkCli.Close()
 
 	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
@@ -493,13 +500,19 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	}()
 
 	// check if bi.State is "ready" in 300 seconds
-	for i := 0; i < 300; i++ {
+	for i := 0; i < maxBackingImageGetRetries; i++ {
 		bi, err = spdkCli.BackingImageGet(defaultTestBackingImageName, disk.Uuid)
 		c.Assert(err, IsNil)
+
 		if bi.State == string(types.BackingImageStateReady) {
 			break
 		}
-		time.Sleep(5 * time.Second)
+
+		time.Sleep(1 * time.Second)
+
+		if i == maxBackingImageGetRetries-1 {
+			c.Assert(bi.State, Equals, string(types.BackingImageStateReady))
+		}
 	}
 
 	concurrentCount := 10
@@ -507,6 +520,10 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
 	for i := 0; i < concurrentCount; i++ {
+		spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+		c.Assert(err, IsNil)
+		defer spdkCli.Close()
+
 		volumeName := fmt.Sprintf("test-vol-%d", i)
 		engineName := fmt.Sprintf("%s-engine", volumeName)
 		replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
@@ -517,15 +534,14 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 		go func() {
 			defer func() {
 				// Do cleanup
-				// TODO: Check why there is a race here
-				// err = spdkCli.EngineDelete(engineName)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName1, true)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName2, true)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName3, true)
-				// c.Assert(err, IsNil)
+				err = spdkCli.EngineDelete(engineName)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName1, true)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName2, true)
+				c.Assert(err, IsNil)
+				err = spdkCli.ReplicaDelete(replicaName3, true)
+				c.Assert(err, IsNil)
 
 				wg.Done()
 			}()
@@ -542,6 +558,11 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
 			c.Assert(replica2.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica2.PortStart, Not(Equals), int32(0))
+
+			_, err = spdkCli.ReplicaGet(replicaName1)
+			c.Assert(err, IsNil)
+			_, err = spdkCli.ReplicaGet(replicaName2)
+			c.Assert(err, IsNil)
 
 			replicaAddressMap := map[string]string{
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
@@ -1350,6 +1371,7 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 
 	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
+	defer spdkCli.Close()
 
 	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
