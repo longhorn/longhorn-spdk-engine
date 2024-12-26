@@ -1627,8 +1627,20 @@ func (s *Server) BackingImageCreate(ctx context.Context, req *spdkrpc.BackingIma
 
 	// Don't recreate the backing image
 	backingImageSnapLvolName := GetBackingImageSnapLvolName(req.Name, req.LvsUuid)
-	if _, ok := s.backingImageMap[backingImageSnapLvolName]; ok {
-		return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "backing image %v already exists", req.Name)
+	if bi, ok := s.backingImageMap[backingImageSnapLvolName]; ok {
+		if bi.BackingImageUUID == req.BackingImageUuid {
+			return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "backing image %v already exists", req.Name)
+		}
+
+		logrus.Infof("Found backing image exists with different backing image UUID %v, deleting it", bi.BackingImageUUID)
+
+		if err := bi.Delete(s.spdkClient, s.portAllocator); err != nil {
+			return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to delete backing image %v in lvs %v with different UUID", req.Name, req.LvsUuid).Error())
+		}
+
+		s.Lock()
+		delete(s.backingImageMap, backingImageSnapLvolName)
+		s.Unlock()
 	}
 
 	bi, err := s.newBackingImage(req)
