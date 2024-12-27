@@ -7,16 +7,16 @@ toolchain go1.23.4
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
-	github.com/longhorn/backupstore v0.0.0-20241218004307-b75ee1322085
-	github.com/longhorn/go-common-libs v0.0.0-20241221040404-3f84afedcca8
-	github.com/longhorn/go-spdk-helper v0.0.0-20241227074319-6134067fca86
+	github.com/longhorn/backupstore v0.0.0-20241221053416-1143c265f7b7
+	github.com/longhorn/go-common-libs v0.0.0-20241227132452-5a6ca245288a
+	github.com/longhorn/go-spdk-helper v0.0.0-20241227145830-6187c6354129
 	github.com/longhorn/types v0.0.0-20241225162202-00d3a5fd7502
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.33.0
 	google.golang.org/grpc v1.68.1
-	google.golang.org/protobuf v1.36.0
+	google.golang.org/protobuf v1.36.1
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	k8s.io/apimachinery v0.32.0
 )
