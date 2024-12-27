@@ -518,17 +518,17 @@ func (r *Replica) validateReplicaHead(headBdevLvol *spdktypes.BdevInfo) (err err
 }
 
 func (r *Replica) IsHeadLvolAvailable(spdkClient *spdkclient.Client) (isAvailable bool, err error) {
-	bdevLvolList, err := spdkClient.BdevLvolGet(r.Alias, 0)
-	if err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return false, err
-	}
-	if len(bdevLvolList) < 1 {
+	headBdevLvol, err := spdkClient.BdevLvolGetByName(r.Alias, 0)
+	if err != nil {
+		if !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return false, err
+		}
 		return false, nil
 	}
 
-	if validateErr := r.validateReplicaHead(&bdevLvolList[0]); validateErr != nil {
-		r.log.WithError(validateErr).Warnf("Found invalid head lvol %v for replica %v, will delete it first", bdevLvolList[0].Name, r.Name)
-		if _, deleteErr := spdkClient.BdevLvolDelete(bdevLvolList[0].UUID); deleteErr != nil {
+	if validateErr := r.validateReplicaHead(&headBdevLvol); validateErr != nil {
+		r.log.WithError(validateErr).Warnf("Found invalid head lvol %v for replica %v, will delete it first", headBdevLvol.Name, r.Name)
+		if _, deleteErr := spdkClient.BdevLvolDelete(headBdevLvol.UUID); deleteErr != nil {
 			return false, deleteErr
 		}
 		return false, nil
@@ -538,15 +538,11 @@ func (r *Replica) IsHeadLvolAvailable(spdkClient *spdkclient.Client) (isAvailabl
 }
 
 func (r *Replica) updateHeadCache(spdkClient *spdkclient.Client) (err error) {
-	bdevLvolList, err := spdkClient.BdevLvolGet(r.Alias, 0)
+	headBdevLvol, err := spdkClient.BdevLvolGetByName(r.Alias, 0)
 	if err != nil {
 		return err
 	}
-	if len(bdevLvolList) < 1 {
-		return fmt.Errorf("cannot find head lvol %v for the cache update", r.Alias)
-	}
-
-	r.Head = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+	r.Head = BdevLvolInfoToServiceLvol(&headBdevLvol)
 
 	if len(r.ActiveChain) == 1 || (r.ActiveChain[len(r.ActiveChain)-1] != nil && r.ActiveChain[len(r.ActiveChain)-1].Name != r.Name) {
 		r.ActiveChain = append(r.ActiveChain, r.Head)
@@ -1037,23 +1033,17 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 		return nil, err
 	}
 
-	bdevLvolList, err := spdkClient.BdevLvolGet(snapUUID, 0)
+	snapBdevLvol, err := spdkClient.BdevLvolGetByName(snapUUID, 0)
 	if err != nil {
 		return nil, err
 	}
-	if len(bdevLvolList) != 1 {
-		return nil, fmt.Errorf("zero or multiple snap lvols with UUID %s found after lvol snapshot create", snapUUID)
-	}
-	snapSvcLvol := BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+	snapSvcLvol := BdevLvolInfoToServiceLvol(&snapBdevLvol)
 
-	bdevLvolList, err = spdkClient.BdevLvolGet(r.Head.Alias, 0)
+	headBdevLvol, err := spdkClient.BdevLvolGetByName(r.Head.UUID, 0)
 	if err != nil {
 		return nil, err
 	}
-	if len(bdevLvolList) != 1 {
-		return nil, fmt.Errorf("zero or multiple head lvols with UUID %s found after lvol snapshot create", snapUUID)
-	}
-	r.Head = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+	r.Head = BdevLvolInfoToServiceLvol(&headBdevLvol)
 	snapSvcLvol.Children[r.Head.Name] = r.Head
 
 	// Already contain a valid snapshot lvol or backing image lvol before this snapshot creation
@@ -1119,14 +1109,11 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	r.removeLvolFromSnapshotLvolMapWithoutLock(snapLvolName)
 	r.removeLvolFromActiveChainWithoutLock(snapLvolName)
 	for _, childSvcLvol := range snapSvcLvol.Children {
-		bdevLvol, err := spdkClient.BdevLvolGet(childSvcLvol.UUID, 0)
+		bdevLvol, err := spdkClient.BdevLvolGetByName(childSvcLvol.UUID, 0)
 		if err != nil {
 			return nil, err
 		}
-		if len(bdevLvol) != 1 {
-			return nil, fmt.Errorf("failed to get the bdev of the only child lvol %s after snapshot %s delete", childSvcLvol.Name, snapshotName)
-		}
-		childSvcLvol.ActualSize = bdevLvol[0].DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
+		childSvcLvol.ActualSize = bdevLvol.DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
 		childSvcLvol.SnapshotChecksum = ""
 	}
 
@@ -1315,14 +1302,11 @@ func (r *Replica) SnapshotPurge(spdkClient *spdkclient.Client) (err error) {
 		r.removeLvolFromActiveChainWithoutLock(snapshotLvolName)
 
 		for _, childSvcLvol := range snapSvcLvol.Children {
-			bdevLvol, err := spdkClient.BdevLvolGet(childSvcLvol.UUID, 0)
+			bdevLvol, err := spdkClient.BdevLvolGetByName(childSvcLvol.UUID, 0)
 			if err != nil {
 				return err
 			}
-			if len(bdevLvol) != 1 {
-				return fmt.Errorf("failed to get the bdev of the only child lvol %s after purging system snapshot %s", childSvcLvol.Name, snapshotLvolName)
-			}
-			childSvcLvol.ActualSize = bdevLvol[0].DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
+			childSvcLvol.ActualSize = bdevLvol.DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
 		}
 
 		updateRequired = true
@@ -1713,14 +1697,11 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	if err != nil {
 		return "", err
 	}
-	bdevLvolList, err := spdkClient.BdevLvolGet(headLvolUUID, 0)
+	headBdevLvol, err := spdkClient.BdevLvolGetByName(headLvolUUID, 0)
 	if err != nil {
 		return "", err
 	}
-	if len(bdevLvolList) != 1 {
-		return "", fmt.Errorf("zero or multiple head lvols with UUID %s found after rebuilding dst head %s creation", headLvolUUID, r.Name)
-	}
-	r.Head = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+	r.Head = BdevLvolInfoToServiceLvol(&headBdevLvol)
 	r.ActiveChain = append(r.ActiveChain, r.Head)
 
 	nguid := commonutils.RandomID(nvmeNguidLength)
@@ -2074,14 +2055,11 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 	}
 
 	rebuildingLvolAlias := spdktypes.GetLvolAlias(r.LvsName, rebuildingLvolName)
-	bdevLvolList, err := spdkClient.BdevLvolGet(rebuildingLvolAlias, 0)
+	rebuildingBdevLvol, err := spdkClient.BdevLvolGetByName(rebuildingLvolAlias, 0)
 	if err != nil {
 		return "", err
 	}
-	if len(bdevLvolList) != 1 {
-		return "", fmt.Errorf("zero or multiple lvols with alias %s found for dst replica %v rebuilding snapshot %s shallow copy prepare", rebuildingLvolAlias, r.Name, snapshotName)
-	}
-	r.rebuildingDstCache.rebuildingLvol = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+	r.rebuildingDstCache.rebuildingLvol = BdevLvolInfoToServiceLvol(&rebuildingBdevLvol)
 
 	if srcSnapSvcLvol.SpecSize != r.rebuildingDstCache.rebuildingLvol.SpecSize {
 		if _, err := spdkClient.BdevLvolResize(r.rebuildingDstCache.rebuildingLvol.Alias, util.BytesToMiB(srcSnapSvcLvol.SpecSize)); err != nil {
@@ -2143,13 +2121,12 @@ func (r *Replica) RebuildingDstShallowCopyStart(spdkClient *spdkclient.Client, s
 	}()
 
 	dstSnapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
-	bdevLvolList, err := spdkClient.BdevLvolGet(spdktypes.GetLvolAlias(r.LvsName, dstSnapLvolName), 0)
-	if err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return err
-	}
-
-	// Directly start a shallow copy when there is no existing snapshot lvol
-	if len(bdevLvolList) < 1 {
+	dstSnapBdevLvol, err := spdkClient.BdevLvolGetByName(spdktypes.GetLvolAlias(r.LvsName, dstSnapLvolName), 0)
+	if err != nil {
+		if !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return err
+		}
+		// Directly start a shallow copy when there is no existing snapshot lvol
 		return srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyStart(r.rebuildingDstCache.srcReplicaName, snapshotName, dstRebuildingLvolAddress)
 	}
 
@@ -2158,7 +2135,7 @@ func (r *Replica) RebuildingDstShallowCopyStart(spdkClient *spdkclient.Client, s
 
 	// Need to manually update the progress after reuse the existing snapshot lvol
 	r.rebuildingDstCache.processingState = types.ProgressStateComplete
-	r.rebuildingDstCache.processingSize = bdevLvolList[0].DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
+	r.rebuildingDstCache.processingSize = dstSnapBdevLvol.DriverSpecific.Lvol.NumAllocatedClusters * defaultClusterSize
 
 	return nil
 }
@@ -2310,12 +2287,12 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 
 	var snapSvcLvol *Lvol
 	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
-	bdevLvolList, err := spdkClient.BdevLvolGet(spdktypes.GetLvolAlias(r.LvsName, snapLvolName), 0)
+	snapBdevLvol, err := spdkClient.BdevLvolGetByName(spdktypes.GetLvolAlias(r.LvsName, snapLvolName), 0)
 	if err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return err
 	}
-	if len(bdevLvolList) > 0 { // If there is an existing snapshot lvol getting reused, check and correct its parent
-		snapSvcLvol = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+	if snapBdevLvol.UUID != "" { // If there is an existing snapshot lvol getting reused, check and correct its parent
+		snapSvcLvol = BdevLvolInfoToServiceLvol(&snapBdevLvol)
 		srcSnapSvcLvol := r.rebuildingDstCache.rebuildingSnapshotMap[snapshotName]
 		if srcSnapSvcLvol == nil {
 			return fmt.Errorf("cannot find snapshot %s in the rebuilding snapshot list during dst replica %s rebuilding snapshot creation", snapshotName, r.Name)
@@ -2359,14 +2336,11 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 			return err
 		}
 
-		bdevLvolList, err := spdkClient.BdevLvolGet(snapUUID, 0)
+		snapBdevLvol, err := spdkClient.BdevLvolGetByName(snapUUID, 0)
 		if err != nil {
 			return err
 		}
-		if len(bdevLvolList) != 1 {
-			return fmt.Errorf("zero or multiple snap lvols with UUID %s found after rebuilding dst snapshot %s creation", snapUUID, snapshotName)
-		}
-		snapSvcLvol = BdevLvolInfoToServiceLvol(&bdevLvolList[0])
+		snapSvcLvol = BdevLvolInfoToServiceLvol(&snapBdevLvol)
 
 		if r.rebuildingDstCache.rebuildingSnapshotMap[snapshotName] == nil {
 			return fmt.Errorf("cannot find snapshot %s in the rebuilding snapshot list for replica %s rebuilding snapshot creation", snapshotName, r.Name)
