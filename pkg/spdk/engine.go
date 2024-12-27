@@ -1117,7 +1117,7 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 				e.State = types.InstanceStateError
 				updateRequired = true
 			}
-			e.ErrorMsg = err.Error()
+			e.ErrorMsg = engineErr.Error()
 		} else {
 			if e.State != types.InstanceStateError {
 				e.ErrorMsg = ""
