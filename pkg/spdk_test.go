@@ -116,7 +116,7 @@ func LaunchTestSPDKTarget(c *C, execute func(envs []string, name string, args []
 			c.Assert(err, IsNil)
 		}()
 
-		for cnt := 0; cnt < 30; cnt++ {
+		for cnt := 0; cnt < 300; cnt++ {
 			if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
 				if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
 					targetReady = true
@@ -144,6 +144,10 @@ func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func
 	go func() {
 		<-ctx.Done()
 		spdkGRPCServer.Stop()
+		logrus.Info("Stopping SPDK gRPC server")
+		// Stop the SPDK tgt daemon
+		// TODO: The error "no such child process" will be emitted when the process is already stopped. Need to improve the error handling, but we can ignore it for now.
+		_ = util.ForceStopSPDKTgtDaemon(5 * time.Second)
 	}()
 	spdkrpc.RegisterSPDKServiceServer(spdkGRPCServer, srv)
 	reflection.Register(spdkGRPCServer)
