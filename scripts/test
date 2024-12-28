@@ -1,9 +1,16 @@
 #!/bin/bash
 set -e
 
+ENABLE_VALGRIND=1
+
 function start_spdk_tgt() {
     echo "Starting spdk_tgt"
-    sh -c 'spdk_tgt --logflag all > /var/log/spdk_tgt.log 2>&1 &' 
+
+    if [ $ENABLE_VALGRIND -eq 1 ]; then
+        sh -c 'valgrind --leak-check=full --track-origins=yes --trace-children=yes --show-leak-kinds=all spdk_tgt --logflag all > /var/log/spdk_tgt.log 2>&1 &' 
+    else
+       sh -c 'spdk_tgt --logflag all > /var/log/spdk_tgt.log 2>&1 &'
+    fi
 
     timeout=120  # Timeout in seconds
     interval=1  # Interval in seconds
@@ -24,8 +31,12 @@ function start_spdk_tgt() {
 }
 
 function stop_spdk_tgt() {
-    kill -9 $(pgrep -f spdk_tgt)
-    echo "spdk_tgt process killed"
+    echo "Gracefully stopping spdk_tgt"
+    /usr/src/spdk/scripts/rpc.py spdk_kill_instance SIGTERM
+
+
+    echo "Waiting for spdk_tgt and valgrind to exit"
+    sleep 30
 }
 
 cd "$(dirname $0)"/..
@@ -58,4 +69,8 @@ trap "rm -f /tmp/test-disk" EXIT
 start_spdk_tgt
 trap stop_spdk_tgt EXIT
 
-go test -v -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 40m
+# Run test on by one 
+#go test -v -p 1 -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 40m
+for PKG in ${PACKAGES}; do
+    go test -p 1 -v -race -cover ${PKG} -coverprofile=coverage.out -timeout 40m
+done

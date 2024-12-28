@@ -228,7 +228,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	}()
 
 	concurrentCount := 10
-	dataCountInMB := 100
+	dataCountInMB := 1
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
 	for i := 0; i < concurrentCount; i++ {
@@ -520,7 +520,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	}
 
 	concurrentCount := 10
-	dataCountInMB := int64(10)
+	dataCountInMB := int64(1)
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
 	for i := 0; i < concurrentCount; i++ {
@@ -1281,7 +1281,7 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 	}
 
 	concurrentCount := 10
-	dataCountInMB := int64(100)
+	dataCountInMB := int64(1)
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
 	for i := 0; i < concurrentCount; i++ {

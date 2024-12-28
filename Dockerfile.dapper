@@ -31,13 +31,18 @@ RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/syste
     zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:backports/SLE_15/devel:languages:python:backports.repo && \
     zypper --gpg-auto-import-keys ref
 
-RUN zypper -n install cmake curl wget gcc unzip tar xsltproc docbook-xsl-stylesheets python311 python311-pip fuse3 libfuse3-3 \
+RUN zypper -n install cmake curl wget gcc14 gcc14-c++ unzip tar xsltproc docbook-xsl-stylesheets python311 python311-pip fuse3 libfuse3-3 \
               e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps
+
+RUN zypper -n install valgrind
 
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin ${GOLANGCI_LINT_VERSION}
 
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 & \
     ln -sf /usr/bin/pip3.11 /usr/bin/pip3
+
+ENV CC=/usr/bin/gcc-14 \
+    CXX=/usr/bin/g++-14
 
 # Build spdk
 ENV SPDK_DIR /usr/src/spdk
