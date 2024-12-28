@@ -58,4 +58,4 @@ trap "rm -f /tmp/test-disk" EXIT
 start_spdk_tgt
 trap stop_spdk_tgt EXIT
 
-go test -v -p 1 -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 40m
+go test -v -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 40m
