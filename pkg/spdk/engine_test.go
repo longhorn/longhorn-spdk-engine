@@ -7,6 +7,8 @@ import (
 
 	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
 
+	safelog "github.com/longhorn/longhorn-spdk-engine/pkg/log"
+
 	. "gopkg.in/check.v1"
 )
 
@@ -104,7 +106,7 @@ func (s *TestSuite) TestCheckInitiatorAndTargetCreationRequirements(c *C) {
 			TargetPort:        testCase.targetPort,
 			StandbyTargetPort: testCase.standbyTargetPort,
 			Name:              "test-engine",
-			log:               logrus.New(),
+			log:               safelog.NewSafeLogger(logrus.NewEntry(logrus.New())),
 		}
 
 		initiatorCreationRequired, targetCreationRequired, err := engine.checkInitiatorAndTargetCreationRequirements(testCase.podIP, testCase.initiatorIP, testCase.targetIP)
