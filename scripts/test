@@ -6,11 +6,11 @@ ENABLE_VALGRIND=1
 function start_spdk_tgt() {
     echo "Starting spdk_tgt"
 
-    if [ $ENABLE_VALGRIND -eq 1 ]; then
+    #if [ $ENABLE_VALGRIND -eq 1 ]; then
         sh -c 'valgrind --leak-check=full --track-origins=yes --trace-children=yes --show-leak-kinds=all spdk_tgt --logflag all > /var/log/spdk_tgt.log 2>&1 &' 
-    else
-       sh -c 'spdk_tgt --logflag all > /var/log/spdk_tgt.log 2>&1 &'
-    fi
+    #else
+    #   sh -c 'spdk_tgt --logflag all > /var/log/spdk_tgt.log 2>&1 &'
+    #fi
 
     timeout=120  # Timeout in seconds
     interval=1  # Interval in seconds
