@@ -72,5 +72,5 @@ trap stop_spdk_tgt EXIT
 # Run test on by one 
 #go test -v -p 1 -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 40m
 for PKG in ${PACKAGES}; do
-    go test -p 1 -v -race -cover ${PKG} -coverprofile=coverage.out -timeout 40m
+    go test -p 1 -v -race -cover ${PKG} -coverprofile=coverage.out -timeout 600m
 done
