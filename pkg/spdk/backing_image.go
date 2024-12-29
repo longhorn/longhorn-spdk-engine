@@ -239,11 +239,13 @@ func (bi *BackingImage) ValidateAndUpdate(spdkClient *spdkclient.Client) (err er
 		return errors.Wrapf(err, "failed to get the lvs name for backing image %v with lvs uuid %v", bi.Name, bi.LvsUUID)
 	}
 
-	bi.log.UpdateLogger(logrus.Fields{
+	if errUpdateLogger := bi.log.UpdateLogger(logrus.Fields{
 		"backingImagename": bi.Name,
 		"lvsName":          bi.LvsName,
 		"lvsUUID":          bi.LvsUUID,
-	})
+	}); errUpdateLogger != nil {
+		bi.log.WithError(errUpdateLogger).Warn("Failed to update logger")
+	}
 
 	bi.LvsName = lvsName
 
@@ -491,11 +493,13 @@ func (bi *BackingImage) prepareBackingImageSnapshot(spdkClient *spdkclient.Clien
 	}
 	bi.LvsName = lvsName
 
-	bi.log.UpdateLogger(logrus.Fields{
+	if errUpdateLogger := bi.log.UpdateLogger(logrus.Fields{
 		"backingImagename": bi.Name,
 		"lvsName":          bi.LvsName,
 		"lvsUUID":          bi.LvsUUID,
-	})
+	}); errUpdateLogger != nil {
+		bi.log.WithError(errUpdateLogger).Warn("Failed to update logger")
+	}
 
 	bi.Unlock()
 

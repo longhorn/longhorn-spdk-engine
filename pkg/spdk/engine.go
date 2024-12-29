@@ -236,10 +236,12 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		e.TargetIP = targetIP
 	}
 
-	e.log.UpdateLogger(logrus.Fields{
+	if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
 		"initiatorIP": e.IP,
 		"targetIP":    e.TargetIP,
-	})
+	}); errUpdateLogger != nil {
+		e.log.WithError(errUpdateLogger).Warn("Failed to update logger with initiator and target IP during engine creation")
+	}
 
 	if targetCreationRequired {
 		_, err := spdkClient.BdevRaidGet(e.Name, 0)
@@ -273,9 +275,11 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 			}
 		}
 
-		e.log.UpdateLogger(logrus.Fields{
+		if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
 			"replicaStatusMap": e.ReplicaStatusMap,
-		})
+		}); errUpdateLogger != nil {
+			e.log.WithError(errUpdateLogger).Warn("Failed to update logger with replica status map during engine creation")
+		}
 
 		e.checkAndUpdateInfoFromReplicaNoLock()
 
@@ -317,19 +321,23 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 			}
 		}
 
-		e.log.UpdateLogger(logrus.Fields{
-			"replicaStatusMap": replicaAddressMap,
-		})
+		if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
+			"replicaStatusMap": e.ReplicaStatusMap,
+		}); errUpdateLogger != nil {
+			e.log.WithError(errUpdateLogger).Warn("Failed to update logger with replica status map during engine creation")
+		}
 
 		e.log.Infof("Connected all available replicas %+v for engine reconstruction during upgrade", e.ReplicaStatusMap)
 	}
 
-	e.log.UpdateLogger(logrus.Fields{
+	if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
 		"initiatorCreationRequired": initiatorCreationRequired,
 		"targetCreationRequired":    targetCreationRequired,
 		"initiatorAddress":          initiatorAddress,
 		"targetAddress":             targetAddress,
-	})
+	}); errUpdateLogger != nil {
+		e.log.WithError(errUpdateLogger).Warn("Failed to update logger with initiator and target creation requirements during engine creation")
+	}
 
 	e.log.Info("Handling frontend during engine creation")
 
@@ -460,11 +468,13 @@ func (e *Engine) handleFrontend(spdkClient *spdkclient.Client, superiorPortAlloc
 				e.dmDeviceIsBusy = dmDeviceIsBusy
 				e.Endpoint = initiator.GetEndpoint()
 
-				e.log.UpdateLogger(logrus.Fields{
+				if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
 					"endpoint":   e.Endpoint,
 					"port":       e.Port,
 					"targetPort": e.TargetPort,
-				})
+				}); errUpdateLogger != nil {
+					e.log.WithError(errUpdateLogger).Warn("Failed to update logger with endpoint and port during engine creation")
+				}
 			}
 
 			e.log.Infof("Finished handling frontend for engine: %+v", e)
@@ -796,9 +806,11 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		}
 	}
 
-	e.log.UpdateLogger(logrus.Fields{
+	if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
 		"replicaStatusMap": e.ReplicaStatusMap,
-	})
+	}); errUpdateLogger != nil {
+		e.log.WithError(errUpdateLogger).Warn("Failed to update logger with replica status map during engine creation")
+	}
 
 	if !containValidReplica {
 		e.State = types.InstanceStateError
@@ -1148,9 +1160,11 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 				}
 			}
 
-			e.log.UpdateLogger(logrus.Fields{
+			if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
 				"replicaStatusMap": e.ReplicaStatusMap,
-			})
+			}); errUpdateLogger != nil {
+				e.log.WithError(errUpdateLogger).Warn("Failed to update logger with replica status map during engine creation")
+			}
 
 			e.log.WithError(err).Errorf("Engine failed to start replica %s rebuilding, will mark the rebuilding replica mode from %v to ERR", dstReplicaName, prevMode)
 			updateRequired = true
@@ -1264,9 +1278,11 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	// TODO: Mark the destination replica as WO mode here does not prevent the RAID bdev from using this. May need to have a SPDK API to control the corresponding base bdev mode.
 	// Reading data from this dst replica is not a good choice as the flow will be more zigzag than reading directly from the src replica:
 	// application -> RAID1 -> this base bdev (dest replica) -> the exposed snapshot (src replica).
-	e.log.UpdateLogger(logrus.Fields{
+	if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
 		"replicaStatusMap": e.ReplicaStatusMap,
-	})
+	}); errUpdateLogger != nil {
+		e.log.WithError(errUpdateLogger).Warn("Failed to update logger with replica status map during engine creation")
+	}
 
 	e.log.Infof("Engine started to rebuild replica %s from healthy replica %s", dstReplicaName, srcReplicaName)
 
@@ -1553,9 +1569,11 @@ func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, repli
 
 	delete(e.ReplicaStatusMap, replicaName)
 
-	e.log.UpdateLogger(logrus.Fields{
+	if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
 		"replicaStatusMap": e.ReplicaStatusMap,
-	})
+	}); errUpdateLogger != nil {
+		e.log.WithError(errUpdateLogger).Warn("Failed to update logger with replica status map during engine creation")
+	}
 
 	return nil
 }
