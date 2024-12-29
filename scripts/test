@@ -1,33 +1,6 @@
 #!/bin/bash
 set -e
 
-function start_spdk_tgt() {
-    echo "Starting spdk_tgt"
-    sh -c 'spdk_tgt --logflag all > /var/log/spdk_tgt.log 2>&1 &' 
-
-    timeout=120  # Timeout in seconds
-    interval=1  # Interval in seconds
-    elapsed_time=0
-
-    while [ $elapsed_time -lt $timeout ]; do
-        if [ -S "/var/tmp/spdk.sock" ]; then
-            echo "Socket file '/var/tmp/spdk.sock' found after $elapsed_time seconds."
-            return 0  # Exit successfully if the file exists
-        fi
-
-        sleep $interval
-        elapsed_time=$((elapsed_time + interval))
-    done
-
-    echo "Timeout reached. Socket file '/var/tmp/spdk.sock' not found."
-    return 1
-}
-
-function stop_spdk_tgt() {
-    kill -9 $(pgrep -f spdk_tgt)
-    echo "spdk_tgt process killed"
-}
-
 cd "$(dirname $0)"/..
 
 echo Running unit tests
@@ -55,7 +28,4 @@ PACKAGES="$(find . -name '*.go' -print0 | xargs -0 -I{} dirname {} |  cut -f2 -d
 
 trap "rm -f /tmp/test-disk" EXIT
 
-start_spdk_tgt
-trap stop_spdk_tgt EXIT
-
-go test -v -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 40m
+go test -v -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 60m
