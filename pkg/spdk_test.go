@@ -82,13 +82,6 @@ func GetSPDKDir() string {
 }
 
 func startTarget(spdkDir string, args []string, execute func(envs []string, binary string, args []string, timeout time.Duration) (string, error)) (err error) {
-	if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
-		if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
-			logrus.Info("Detected running spdk_tgt, skipped the target starting")
-			return nil
-		}
-	}
-
 	argsInStr := ""
 	for _, arg := range args {
 		argsInStr = fmt.Sprintf("%s %s", argsInStr, arg)
@@ -98,7 +91,7 @@ func startTarget(spdkDir string, args []string, execute func(envs []string, bina
 		fmt.Sprintf("%s %s", filepath.Join(spdkDir, "build/bin/spdk_tgt"), argsInStr),
 	}
 
-	_, err = execute(nil, "sh", tgtOpts, 1*time.Minute)
+	_, err = execute(nil, "sh", tgtOpts, 10*time.Minute)
 	return err
 }
 
