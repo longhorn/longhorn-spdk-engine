@@ -803,8 +803,8 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 		return nil, err
 	}
 
-	// In case of failed replica reuse being failed by r.validateAndUpdate(), we should make sure the caches are correct.
-	if r.reconstructRequired {
+	// In case of failed replica reuse/restart being errored by r.validateAndUpdate(), we should make sure the caches are correct.
+	if r.State == types.InstanceStatePending && r.reconstructRequired {
 		bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, r.replicaLvolFilter)
 		if err != nil {
 			return nil, err
