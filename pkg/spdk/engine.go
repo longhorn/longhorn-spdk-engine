@@ -1912,7 +1912,10 @@ func (e *Engine) BackupCreate(backupName, volumeName, engineName, snapshotName, 
 	e.log.Infof("Creating backup %s", backupName)
 
 	e.Lock()
-	defer e.Unlock()
+	defer func() {
+		e.Unlock()
+		e.UpdateCh <- nil
+	}()
 
 	replicaName, replicaAddress := "", ""
 	for name, replicaStatus := range e.ReplicaStatusMap {
