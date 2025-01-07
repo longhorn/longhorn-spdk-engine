@@ -723,7 +723,7 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 	}()
 
 	if e.IsRestoring {
-		e.log.Info("Engine is restoring, will skip the validation and update")
+		e.log.Debug("Engine is restoring, will skip the validation and update")
 		return nil
 	}
 
