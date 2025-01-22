@@ -492,7 +492,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 		c.Assert(err, IsNil)
 	}()
 
-	bi, err := spdkCli.BackingImageCreate(defaultTestBackingImageName, defaultTestBackingImageUUID, disk.Uuid, defaultTestBackingImageSize, defaultTestBackingImageChecksum, defaultTestBackingImageDownloadURL, "")
+	bi, err := spdkCli.BackingImageCreate(defaultTestBackingImageName, defaultTestBackingImageUUID, disk.Uuid, defaultTestBackingImageSize, defaultTestBackingImageChecksum, defaultTestBackingImageDownloadURL, "", defaultTestBackingImageName, string(types.EncryptionTypeIgnore), nil)
 	c.Assert(err, IsNil)
 	c.Assert(bi, NotNil)
 	defer func() {
@@ -1253,7 +1253,7 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 		c.Assert(err, IsNil)
 	}()
 
-	bi, err := spdkCli.BackingImageCreate(defaultTestBackingImageName, defaultTestBackingImageUUID, disk.Uuid, defaultTestBackingImageSize, defaultTestBackingImageChecksum, defaultTestBackingImageDownloadURL, "")
+	bi, err := spdkCli.BackingImageCreate(defaultTestBackingImageName, defaultTestBackingImageUUID, disk.Uuid, defaultTestBackingImageSize, defaultTestBackingImageChecksum, defaultTestBackingImageDownloadURL, "", defaultTestBackingImageName, string(types.EncryptionTypeIgnore), nil)
 	c.Assert(err, IsNil)
 	c.Assert(bi, NotNil)
 	defer func() {
