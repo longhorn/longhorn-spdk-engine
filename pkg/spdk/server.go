@@ -1578,8 +1578,14 @@ func (s *Server) BackingImageCreate(ctx context.Context, req *spdkrpc.BackingIma
 	if req.LvsUuid == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "lvs UUID is required")
 	}
-	if req.Checksum == "" {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "checksum is required")
+	// if req.Checksum == "" {
+	// 	return nil, grpcstatus.Error(grpccodes.InvalidArgument, "checksum is required")
+	// }
+	if req.SrcBackingImageName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "source backing image name is required")
+	}
+	if req.Encryption == "" {
+		req.Encryption = string(types.EncryptionTypeIgnore)
 	}
 
 	// Don't recreate the backing image
@@ -1609,7 +1615,7 @@ func (s *Server) BackingImageCreate(ctx context.Context, req *spdkrpc.BackingIma
 	spdkClient := s.spdkClient
 	s.RUnlock()
 
-	return bi.Create(spdkClient, s.portAllocator, req.FromAddress, req.SrcLvsUuid)
+	return bi.Create(spdkClient, s.portAllocator, req.FromAddress, req.SrcLvsUuid, req.SrcBackingImageName, types.EncryptionType(req.Encryption), req.Credential)
 }
 
 func (s *Server) BackingImageDelete(ctx context.Context, req *spdkrpc.BackingImageDeleteRequest) (ret *emptypb.Empty, err error) {
