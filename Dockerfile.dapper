@@ -3,6 +3,8 @@ FROM  registry.suse.com/bci/golang:1.23
 ARG DAPPER_HOST_ARCH
 ARG http_proxy
 ARG https_proxy
+ARG SRC_BRANCH=main
+ARG SRC_TAG
 
 ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
 ENV PATH /go/bin:$PATH
@@ -11,6 +13,8 @@ ENV DAPPER_ENV TAG REPO DRONE_REPO DRONE_PULL_REQUEST DRONE_COMMIT_REF
 ENV DAPPER_OUTPUT bin coverage.out
 ENV DAPPER_RUN_ARGS --privileged --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.venv:exec --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.tox:exec -v /dev:/host/dev -v /proc:/host/proc -v /sys:/host/sys -v /tmp:/tmp
 ENV DAPPER_SOURCE /go/src/github.com/longhorn/longhorn-spdk-engine
+ENV SRC_BRANCH ${SRC_BRANCH}
+ENV SRC_TAG ${SRC_TAG}
 ENV GOLANGCI_LINT_VERSION="v1.60.3"
 
 ENV SPDK_COMMIT_ID a7421a6e59f1d099294af6f65d73ebec4afebfc5
@@ -31,64 +35,39 @@ RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/syste
     zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:backports/SLE_15/devel:languages:python:backports.repo && \
     zypper --gpg-auto-import-keys ref
 
-RUN zypper -n install cmake curl wget gcc unzip tar xsltproc docbook-xsl-stylesheets python311 python311-pip fuse3 libfuse3-3 \
-              e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps
+RUN zypper -n install cmake curl wget gcc unzip tar xsltproc docbook-xsl-stylesheets python311 python311-pip fuse3-devel \
+              e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps jq
 
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin ${GOLANGCI_LINT_VERSION}
 
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 & \
     ln -sf /usr/bin/pip3.11 /usr/bin/pip3
 
-# Build spdk
-ENV SPDK_DIR /usr/src/spdk
-RUN git clone https://github.com/longhorn/spdk.git ${SPDK_DIR} --recursive && \
-    cd ${SPDK_DIR} && \
-    git checkout ${SPDK_COMMIT_ID} && \
-    git submodule update --init && \
-    sed -i '/python3-pyelftools/d' ./scripts/pkgdep/sles.sh && \
-    sed -i 's/python3-/python311-/g' ./scripts/pkgdep/sles.sh && \
-    ./scripts/pkgdep.sh && \
-    pip3 install -r ./scripts/pkgdep/requirements.txt && \
-    if [ ${ARCH} = "amd64" ]; then \
-        ./configure --target-arch=nehalem --disable-tests --disable-unit-tests --disable-examples --without-nvme-cuse && \
-        make -j$(nproc) && \
-        make install; \
-    elif [ ${ARCH} = "arm64" ]; then \
-        ./configure --target-arch=native --disable-tests --disable-unit-tests --disable-examples --without-nvme-cuse && \
-        DPDKBUILD_FLAGS="-Dplatform=generic" make -j$(nproc) && \
-        make install; \
-    else \
-        echo "Unsupported architecture: ${ARCH}"; \
-        exit 1; \
+RUN git clone https://github.com/longhorn/dep-versions.git -b ${SRC_BRANCH} /usr/src/dep-versions && \
+    cd /usr/src/dep-versions && \
+    if [ -n "${SRC_TAG}" ] && git show-ref --tags ${SRC_TAG} > /dev/null 2>&1; then \
+        echo "Checking out tag ${SRC_TAG}"; \
+        cd /usr/src/dep-versions && git checkout tags/${SRC_TAG}; \
     fi
 
+# Build spdk
+RUN export REPO_OVERRIDE="" && \
+    export COMMIT_ID_OVERRIDE="" && \
+    bash /usr/src/dep-versions/scripts/build-spdk.sh "${REPO_OVERRIDE}" "${COMMIT_ID_OVERRIDE}" "${ARCH}"
+
 # Build libjson-c-devel
-RUN cd /usr/src && \
-    git clone https://github.com/json-c/json-c.git && \
-    cd json-c && \
-    git checkout ${LIBJSONC_COMMIT_ID} && \
-    mkdir .build && \
-    cd .build && \
-    cmake ../ && \
-    make && \
-    make install
+RUN export REPO_OVERRIDE="" && \
+    export COMMIT_ID_OVERRIDE="" && \
+    bash /usr/src/dep-versions/scripts/build-libjsonc.sh "${REPO_OVERRIDE}" "${COMMIT_ID_OVERRIDE}"
 
 # Build nvme-cli
-ENV NVME_CLI_DIR /usr/src/nvme-cli
-RUN git clone https://github.com/linux-nvme/nvme-cli.git ${NVME_CLI_DIR} && \
-    cd ${NVME_CLI_DIR} && \
-    git checkout ${NVME_CLI_COMMIT_ID} && \
-    meson setup --force-fallback-for=libnvme .build && \
-    meson compile -C .build && \
-    meson install -C .build
+RUN export REPO_OVERRIDE="" && \
+    export COMMIT_ID_OVERRIDE="" && \
+    bash /usr/src/dep-versions/scripts/build-nvme-cli.sh "${REPO_OVERRIDE}" "${COMMIT_ID_OVERRIDE}"
 
-# longhorn/go-spdk-helper binary for debugging
-ENV GO_SPDK_HELPER_DIR /usr/src/go-spdk-helper
-RUN git clone https://github.com/longhorn/go-spdk-helper.git ${GO_SPDK_HELPER_DIR} && \
-    cd ${GO_SPDK_HELPER_DIR} && \
-    git checkout ${GO_SPDK_HELPER_COMMIT_ID} && \
-    go build && \
-    install -m 755 go-spdk-helper /usr/local/bin/go-spdk-helper && \
-    rm -rf ${GO_SPDK_HELPER_DIR}
+# Build go-spdk-helper binary for debugging
+RUN export REPO_OVERRIDE="" && \
+    export COMMIT_ID_OVERRIDE="" && \
+    bash /usr/src/dep-versions/scripts/build-go-spdk-helper.sh "${REPO_OVERRIDE}" "${COMMIT_ID_OVERRIDE}"
 
 RUN ldconfig
