@@ -39,7 +39,8 @@ import (
 const (
 	restorePeriodicRefreshInterval = 2 * time.Second
 
-	checksumWaitPeriodAfterRebuilding = 10 * time.Second
+	checksumWaitPeriodAfterRebuilding       = 10 * time.Second
+	checksumWaitPeriodForRebuildingSnapshot = 1 * time.Minute
 )
 
 type Replica struct {
@@ -251,6 +252,23 @@ func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
 			}
 			if bdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotChecksum] != "" {
 				continue
+			}
+			// Avoid error "Device or resource busy" by delaying checksum calculation for all src replica snapshot lvols during rebuilding
+			// as these lvols may be operated by shallow copy calls later.
+			if r.rebuildingSrcCache.dstReplicaName != "" {
+				continue
+			}
+			// Avoid error "Device or resource busy" by delaying checksum calculation for the newly created rebuilding snapshot lvol
+			// as this lvol will be exposed to the dst replica soon.
+			if bdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.UserCreated] == "false" && bdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotTimestamp] != "" {
+				snapshotTime, err := time.Parse(time.RFC3339, bdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotTimestamp])
+				if err != nil {
+					logrus.WithError(err).Warnf("Failed to parse snapshot timestamp %v for snapshot lvol %v before registering checksum, will skip it", bdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.SnapshotTimestamp], bdevLvol.Name)
+					continue
+				}
+				if !time.Now().After(snapshotTime.Add(checksumWaitPeriodForRebuildingSnapshot)) {
+					continue
+				}
 			}
 			parentBdevLvol := bdevLvolMap[bdevLvol.DriverSpecific.Lvol.BaseSnapshot]
 			if bdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.UserCreated] == "false" || (parentBdevLvol != nil && parentBdevLvol.DriverSpecific.Lvol.Xattrs[spdkclient.UserCreated] == "false") {
