@@ -10,7 +10,7 @@ require (
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20250227220202-651bd33886fe
 	github.com/longhorn/go-common-libs v0.0.0-20250215052214-151615b29f8e
-	github.com/longhorn/go-spdk-helper v0.0.0-20250227072252-dae1360f31f6
+	github.com/longhorn/go-spdk-helper v0.0.2-0.20250227072252-dae1360f31f6
 	github.com/longhorn/types v0.0.0-20250210001806-5ef312749bee
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
