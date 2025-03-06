@@ -16,17 +16,17 @@ then
   exit 1
 fi
 
-# if /dev/hugepages  is not exist, create it (not use -d)
+mount --rbind /host/dev /dev
+mount --rbind /host/sys /sys
+
 echo "Checking /dev/hugepages"
-if [ ! -f /dev/hugepages ]; then
+if [ ! -d /dev/hugepages ]; then
   echo "Creating /dev/hugepages"
   mkdir -p /dev/hugepages
   mount -t hugetlbfs nodev /dev/hugepages
 fi
 
-mount --rbind /host/dev /dev
-mount --rbind /host/sys /sys
-trap "umount /dev && umount /sys" EXIT
+trap "umount /dev && umount /sys && umount /dev/hugepages" EXIT
 
 # Do cleanup first
 losetup -D
