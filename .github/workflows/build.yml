@@ -7,7 +7,7 @@ on:
 jobs:
   build-amd64:
     name: Build AMD64 binaries
-    runs-on: longhorn-infra-amd64-runners
+    runs-on: longhorn-infra-oracle-amd64-spdk-runners
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
 
   build-arm64:
     name: Build ARM64 binaries
-    runs-on: longhorn-infra-arm64-runners
+    runs-on: longhorn-infra-oracle-arm64-spdk-runners
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
