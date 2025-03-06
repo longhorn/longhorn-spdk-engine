@@ -16,6 +16,9 @@ then
   exit 1
 fi
 
+mount --rbind /host/dev /dev
+mount --rbind /host/sys /sys
+
 # if /dev/hugepages  is not exist, create it (not use -d)
 echo "Checking /dev/hugepages"
 if [ ! -f /dev/hugepages ]; then
@@ -24,8 +27,6 @@ if [ ! -f /dev/hugepages ]; then
   mount -t hugetlbfs nodev /dev/hugepages
 fi
 
-mount --rbind /host/dev /dev
-mount --rbind /host/sys /sys
 trap "umount /dev && umount /sys" EXIT
 
 # Do cleanup first
