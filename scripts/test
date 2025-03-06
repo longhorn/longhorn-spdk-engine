@@ -17,7 +17,9 @@ then
 fi
 
 # if /dev/hugepages  is not exist, create it (not use -d)
+echo "Checking /dev/hugepages"
 if [ ! -f /dev/hugepages ]; then
+  echo "Creating /dev/hugepages"
   mkdir -p /dev/hugepages
   mount -t hugetlbfs nodev /dev/hugepages
 fi
