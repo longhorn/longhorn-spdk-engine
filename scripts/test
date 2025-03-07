@@ -16,14 +16,17 @@ then
   exit 1
 fi
 
+mount --rbind /host/dev /dev
+mount --rbind /host/sys /sys
+
 # if /dev/hugepages  is not exist, create it (not use -d)
+echo "Checking /dev/hugepages"
 if [ ! -f /dev/hugepages ]; then
+  echo "Creating /dev/hugepages"
   mkdir -p /dev/hugepages
   mount -t hugetlbfs nodev /dev/hugepages
 fi
 
-mount --rbind /host/dev /dev
-mount --rbind /host/sys /sys
 trap "umount /dev && umount /sys" EXIT
 
 # Do cleanup first
@@ -34,4 +37,4 @@ PACKAGES="$(find . -name '*.go' -print0 | xargs -0 -I{} dirname {} |  cut -f2 -d
 
 trap "rm -f /tmp/test-disk" EXIT
 
-go test -v -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 60m
+go test -v -p 1 -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 600m

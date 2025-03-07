@@ -203,6 +203,8 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 	defer func() {
 		if err != nil {
 			e.log.WithError(err).Errorf("Failed to create engine %s", e.Name)
+			logrus.Infof("Debug ===========> Sleep 360000 seconds for troubleshooting")
+			time.Sleep(360000)
 			if e.State != types.InstanceStateError {
 				e.State = types.InstanceStateError
 			}
