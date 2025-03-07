@@ -1828,7 +1828,7 @@ func (s *Server) UpdateEngineMetrics() {
 		// Convert latency from ticks to nanoseconds
 		readLatency := calculateLatencyInNs(readLatencyDiff, readOpsDiff, s.currentBdevIostat.TickRate)
 		writeLatency := calculateLatencyInNs(writeLatencyDiff, writeOpsDiff, s.currentBdevIostat.TickRate)
-		
+
 		s.bdevMetricMap[bdev.Name] = &spdkrpc.Metrics{
 			ReadIOPS:        uint64(float64(readOpsDiff) / elapsedSeconds),
 			WriteIOPS:       uint64(float64(writeOpsDiff) / elapsedSeconds),
