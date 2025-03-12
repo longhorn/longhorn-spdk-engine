@@ -12,7 +12,7 @@ import (
 	. "gopkg.in/check.v1"
 )
 
-func (s *TestSuite) TestCheckInitiatorAndTargetCreationRequirements(c *C) {
+func (s *TestSuite) TestcheckInitiatorAndTargetCreationRequirementsForNvmeTcpFrontend(c *C) {
 	testCases := []struct {
 		name                              string
 		podIP                             string
@@ -99,14 +99,17 @@ func (s *TestSuite) TestCheckInitiatorAndTargetCreationRequirements(c *C) {
 		},
 	}
 	for testName, testCase := range testCases {
-		c.Logf("testing checkInitiatorAndTargetCreationRequirements.%v", testName)
+		c.Logf("testing checkInitiatorAndTargetCreationRequirementsForNvmeTcpFrontend.%v", testName)
 
 		engine := &Engine{
-			Port:              testCase.port,
-			TargetPort:        testCase.targetPort,
-			StandbyTargetPort: testCase.standbyTargetPort,
-			Name:              "test-engine",
-			log:               safelog.NewSafeLogger(logrus.NewEntry(logrus.New())),
+			NvmeTcpFrontend: &NvmeTcpFrontend{
+				Port:              testCase.port,
+				TargetPort:        testCase.targetPort,
+				StandbyTargetPort: testCase.standbyTargetPort,
+			},
+
+			Name: "test-engine",
+			log:  safelog.NewSafeLogger(logrus.NewEntry(logrus.New())),
 		}
 
 		initiatorCreationRequired, targetCreationRequired, err := engine.checkInitiatorAndTargetCreationRequirements(testCase.podIP, testCase.initiatorIP, testCase.targetIP)
@@ -129,36 +132,44 @@ func (s *TestSuite) TestIsNewEngine(c *C) {
 		{
 			name: "New engine with empty IP and TargetIP and StandbyTargetPort 0",
 			engine: &Engine{
-				IP:                "",
-				TargetIP:          "",
-				StandbyTargetPort: 0,
+				NvmeTcpFrontend: &NvmeTcpFrontend{
+					IP:                "",
+					TargetIP:          "",
+					StandbyTargetPort: 0,
+				},
 			},
 			expected: true,
 		},
 		{
 			name: "Engine with non-empty IP",
 			engine: &Engine{
-				IP:                "192.168.1.1",
-				TargetIP:          "",
-				StandbyTargetPort: 0,
+				NvmeTcpFrontend: &NvmeTcpFrontend{
+					IP:                "192.168.1.1",
+					TargetIP:          "",
+					StandbyTargetPort: 0,
+				},
 			},
 			expected: false,
 		},
 		{
 			name: "Engine with non-empty TargetIP",
 			engine: &Engine{
-				IP:                "",
-				TargetIP:          "192.168.1.2",
-				StandbyTargetPort: 0,
+				NvmeTcpFrontend: &NvmeTcpFrontend{
+					IP:                "",
+					TargetIP:          "192.168.1.2",
+					StandbyTargetPort: 0,
+				},
 			},
 			expected: false,
 		},
 		{
 			name: "Engine with non-zero StandbyTargetPort",
 			engine: &Engine{
-				IP:                "",
-				TargetIP:          "",
-				StandbyTargetPort: 8080,
+				NvmeTcpFrontend: &NvmeTcpFrontend{
+					IP:                "",
+					TargetIP:          "",
+					StandbyTargetPort: 8080,
+				},
 			},
 			expected: false,
 		},
@@ -166,7 +177,7 @@ func (s *TestSuite) TestIsNewEngine(c *C) {
 
 	for testName, testCase := range testCases {
 		c.Logf("testing isNewEngine.%v", testName)
-		result := testCase.engine.isNewEngine()
+		result := testCase.engine.isNewNvmeTcpFrontendEngine()
 		c.Assert(result, Equals, testCase.expected, Commentf("Test case '%s': unexpected result", testCase.name))
 	}
 }
@@ -182,8 +193,10 @@ func (s *TestSuite) TestReleaseTargetAndStandbyTargetPorts(c *C) {
 		{
 			name: "Release both target and standby target ports",
 			engine: &Engine{
-				TargetPort:        2000,
-				StandbyTargetPort: 2005,
+				NvmeTcpFrontend: &NvmeTcpFrontend{
+					TargetPort:        2000,
+					StandbyTargetPort: 2005,
+				},
 			},
 			expectedTargetPort:        0,
 			expectedStandbyTargetPort: 0,
@@ -192,8 +205,10 @@ func (s *TestSuite) TestReleaseTargetAndStandbyTargetPorts(c *C) {
 		{
 			name: "Release target port only but standby target port is not set",
 			engine: &Engine{
-				TargetPort:        2000,
-				StandbyTargetPort: 0,
+				NvmeTcpFrontend: &NvmeTcpFrontend{
+					TargetPort:        2000,
+					StandbyTargetPort: 0,
+				},
 			},
 			expectedTargetPort:        0,
 			expectedStandbyTargetPort: 0,
@@ -202,8 +217,10 @@ func (s *TestSuite) TestReleaseTargetAndStandbyTargetPorts(c *C) {
 		{
 			name: "Release target and standby ports when they are the same",
 			engine: &Engine{
-				TargetPort:        2000,
-				StandbyTargetPort: 2000,
+				NvmeTcpFrontend: &NvmeTcpFrontend{
+					TargetPort:        2000,
+					StandbyTargetPort: 2000,
+				},
 			},
 			expectedTargetPort:        0,
 			expectedStandbyTargetPort: 0,
@@ -212,8 +229,10 @@ func (s *TestSuite) TestReleaseTargetAndStandbyTargetPorts(c *C) {
 		{
 			name: "Release snapshot target port only",
 			engine: &Engine{
-				TargetPort:        0,
-				StandbyTargetPort: 2000,
+				NvmeTcpFrontend: &NvmeTcpFrontend{
+					TargetPort:        0,
+					StandbyTargetPort: 2000,
+				},
 			},
 			expectedTargetPort:        0,
 			expectedStandbyTargetPort: 0,
@@ -229,7 +248,7 @@ func (s *TestSuite) TestReleaseTargetAndStandbyTargetPorts(c *C) {
 
 		err = testCase.engine.releaseTargetAndStandbyTargetPorts(bitmap)
 		c.Assert(err, DeepEquals, testCase.expectedError, Commentf("Test case '%s': unexpected error result", testCase.name))
-		c.Assert(testCase.engine.TargetPort, Equals, testCase.expectedTargetPort, Commentf("Test case '%s': unexpected target port", testCase.name))
-		c.Assert(testCase.engine.StandbyTargetPort, Equals, testCase.expectedStandbyTargetPort, Commentf("Test case '%s': unexpected standby target port", testCase.name))
+		c.Assert(testCase.engine.NvmeTcpFrontend.TargetPort, Equals, testCase.expectedTargetPort, Commentf("Test case '%s': unexpected target port", testCase.name))
+		c.Assert(testCase.engine.NvmeTcpFrontend.StandbyTargetPort, Equals, testCase.expectedStandbyTargetPort, Commentf("Test case '%s': unexpected standby target port", testCase.name))
 	}
 }
