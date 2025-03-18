@@ -1341,6 +1341,8 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			snapshotName11 := "snap11"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName11)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName11, false)
+			c.Assert(err, IsNil)
 
 			offsetInMB = dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
@@ -1351,6 +1353,8 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			snapshotName12 := "snap12"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName12, false)
+			c.Assert(err, IsNil)
 
 			offsetInMB = 2 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
@@ -1360,6 +1364,8 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			c.Assert(cksumBefore13, Not(Equals), "")
 			snapshotName13 := "snap13"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName13)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName13, false)
 			c.Assert(err, IsNil)
 
 			// Revert for a new chain (chain 2)
@@ -1373,6 +1379,8 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			snapshotName21 := "snap21"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName21)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName21, false)
+			c.Assert(err, IsNil)
 
 			offsetInMB = 2 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
@@ -1382,6 +1390,8 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			c.Assert(cksumBefore22, Not(Equals), "")
 			snapshotName22 := "snap22"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName22)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName22, false)
 			c.Assert(err, IsNil)
 
 			// Revert for a new chain (chain 3)
@@ -1395,6 +1405,8 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			c.Assert(cksumBefore31, Not(Equals), "")
 			snapshotName31 := "snap31"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName31)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName31, false)
 			c.Assert(err, IsNil)
 
 			// Finally, write some data to the head before the rebuilding
