@@ -65,6 +65,8 @@ var (
 	defaultTestSnapChecksumWaitCount    = 60
 
 	maxBackingImageGetRetries = 300
+
+	SPDKTGTBinary = "spdk_tgt"
 )
 
 func Test(t *testing.T) { TestingT(t) }
@@ -73,22 +75,15 @@ type TestSuite struct{}
 
 var _ = Suite(&TestSuite{})
 
-func GetSPDKDir() string {
-	spdkDir := os.Getenv("SPDK_DIR")
-	if spdkDir != "" {
-		return spdkDir
-	}
-	return filepath.Join(os.Getenv("GOPATH"), "src/github.com/longhorn/spdk")
-}
-
 func startTarget(spdkDir string, args []string, execute func(envs []string, binary string, args []string, timeout time.Duration) (string, error)) (err error) {
 	argsInStr := ""
 	for _, arg := range args {
 		argsInStr = fmt.Sprintf("%s %s", argsInStr, arg)
 	}
+
 	tgtOpts := []string{
 		"-c",
-		fmt.Sprintf("%s %s", filepath.Join(spdkDir, "build/bin/spdk_tgt"), argsInStr),
+		fmt.Sprintf("%s %s", filepath.Join(spdkDir, SPDKTGTBinary), argsInStr),
 	}
 
 	_, err = execute(nil, "sh", tgtOpts, 10*time.Minute)
@@ -105,7 +100,8 @@ func LaunchTestSPDKTarget(c *C, execute func(envs []string, name string, args []
 
 	if !targetReady {
 		go func() {
-			err := startTarget(GetSPDKDir(), []string{"--logflag all", "2>&1 | tee /tmp/spdk_tgt.log"}, execute)
+			logrus.Info("Starting SPDK target")
+			err := startTarget("", []string{"--logflag all", "2>&1 | tee /tmp/spdk_tgt.log"}, execute)
 			c.Assert(err, IsNil)
 		}()
 
@@ -501,7 +497,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	}()
 
 	// check if bi.State is "ready" in 300 seconds
-	for i := 0; i < maxBackingImageGetRetries; i++ {
+	for i := range maxBackingImageGetRetries {
 		bi, err = spdkCli.BackingImageGet(defaultTestBackingImageName, disk.Uuid)
 		c.Assert(err, IsNil)
 
@@ -520,7 +516,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	dataCountInMB := int64(10)
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
-	for i := 0; i < concurrentCount; i++ {
+	for i := range concurrentCount {
 		spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 		c.Assert(err, IsNil)
 		defer spdkCli.Close()
