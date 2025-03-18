@@ -1684,6 +1684,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			snapshotName11 := "snap11"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName11)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName11, false)
+			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
 			//       nil (backing image) -> snap11 -> head
@@ -1701,6 +1703,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(cksumBefore12, Not(Equals), "")
 			snapshotName12 := "snap12"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName12, false)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -1720,6 +1724,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(cksumBefore13, Not(Equals), "")
 			snapshotName13 := "snap13"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName13)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName13, false)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -1756,6 +1762,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			snapshotName21 := "snap21"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName21)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName21, false)
+			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
 			//       nil (backing image) -> snap11 ->  snap12 -> snap13
@@ -1778,6 +1786,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(cksumBefore22, Not(Equals), "")
 			snapshotName22 := "snap22"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName22)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName22, false)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -1821,6 +1831,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(cksumBefore31, Not(Equals), "")
 			snapshotName31 := "snap31"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName31)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName31, false)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
