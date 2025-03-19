@@ -29,6 +29,7 @@ RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/syste
 
 RUN zypper -n install cmake curl wget gcc unzip tar xsltproc docbook-xsl-stylesheets python311 python311-pip fuse3-devel \
               e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps jq
+RUN zypper -n install valgrind
 
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin latest
 
@@ -43,8 +44,8 @@ RUN git clone https://github.com/longhorn/dep-versions.git -b ${SRC_BRANCH} /usr
     fi
 
 # Build spdk
-RUN export REPO_OVERRIDE="" && \
-    export COMMIT_ID_OVERRIDE="" && \
+RUN export REPO_OVERRIDE="https://github.com/derekbit/spdk.git" && \
+    export COMMIT_ID_OVERRIDE="9ef70cbbcf7913c203eae73cd1e282540b8df822" && \
     bash /usr/src/dep-versions/scripts/build-spdk.sh "${REPO_OVERRIDE}" "${COMMIT_ID_OVERRIDE}" "${ARCH}"
 
 # Build libjson-c-devel

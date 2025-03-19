@@ -29,6 +29,7 @@ fi
 ulimit -c unlimited
 echo "/home/runner/core.%h.%e.%p.%t" > /proc/sys/kernel/core_pattern
 
+rm -rf /home/runner/valgrind.log
 
 trap "umount /dev && umount /sys && umount /dev/hugepages && /home/runner" EXIT
 
@@ -40,4 +41,4 @@ PACKAGES="$(find . -name '*.go' -print0 | xargs -0 -I{} dirname {} |  cut -f2 -d
 
 trap "rm -f /tmp/test-disk" EXIT
 
-go test -v -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 60m
+go test -v -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 600m
