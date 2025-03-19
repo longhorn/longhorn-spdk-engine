@@ -26,7 +26,11 @@ if [ ! -d /dev/hugepages ]; then
   mount -t hugetlbfs nodev /dev/hugepages
 fi
 
-trap "umount /dev && umount /sys && umount /dev/hugepages" EXIT
+ulimit -c unlimited
+echo "/home/runner/core.%h.%e.%p.%t" > /proc/sys/kernel/core_pattern
+
+
+trap "umount /dev && umount /sys && umount /dev/hugepages && /home/runner" EXIT
 
 # Do cleanup first
 losetup -D
