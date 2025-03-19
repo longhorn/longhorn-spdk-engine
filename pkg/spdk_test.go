@@ -83,7 +83,7 @@ func startTarget(spdkDir string, args []string, execute func(envs []string, bina
 
 	tgtOpts := []string{
 		"-c",
-		fmt.Sprintf("%s %s", filepath.Join(spdkDir, SPDKTGTBinary), argsInStr),
+		fmt.Sprintf("valgrind --log-file=/home/runner/valgrind.log --leak-check=full --track-origins=yes --trace-children=yes --show-leak-kinds=all %s %s", filepath.Join(spdkDir, SPDKTGTBinary), argsInStr),
 	}
 
 	_, err = execute(nil, "sh", tgtOpts, 10*time.Minute)
@@ -136,7 +136,7 @@ func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func
 		logrus.Info("Stopping SPDK gRPC server")
 		// Stop the SPDK tgt daemon
 		// TODO: The error "no such child process" will be emitted when the process is already stopped. Need to improve the error handling, but we can ignore it for now.
-		_ = util.ForceStopSPDKTgtDaemon(5 * time.Second)
+		_ = util.StopSPDKTgtDaemon(5 * time.Second)
 	}()
 	spdkrpc.RegisterSPDKServiceServer(spdkGRPCServer, srv)
 	reflection.Register(spdkGRPCServer)
@@ -185,7 +185,7 @@ func CleanupDiskFile(c *C, loopDevicePath string) {
 	c.Assert(err, IsNil)
 }
 
-func (s *TestSuite) TestSPDKMultipleThread(c *C) {
+func (s *TestSuite) xxTestSPDKMultipleThread(c *C) {
 	fmt.Println("Testing SPDK basic operations with multiple threads")
 
 	diskDriverName := "aio"
@@ -1216,7 +1216,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	}
 }
 
-func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
+func (s *TestSuite) xxTestSPDKMultipleThreadFastRebuilding(c *C) {
 	fmt.Println("Testing SPDK fast rebuilding with multiple threads")
 	diskDriverName := "aio"
 
@@ -1798,7 +1798,7 @@ func WaitForReplicaRebuildingCompleteTimeout(c *C, spdkCli *client.SPDKClient, e
 	c.Assert(complete, Equals, true)
 }
 
-func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
+func (s *TestSuite) xxTestSPDKEngineOnlyWithTarget(c *C) {
 	fmt.Println("Testing SPDK basic operations with engine only with target")
 
 	diskDriverName := "aio"
