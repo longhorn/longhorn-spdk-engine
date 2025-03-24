@@ -9,15 +9,15 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20250315040513-2fb98aebc16a
-	github.com/longhorn/go-common-libs v0.0.0-20250312065002-72871a09bee0
-	github.com/longhorn/go-spdk-helper v0.0.2-0.20250317050445-36b195dfc91f
+	github.com/longhorn/go-common-libs v0.0.0-20250319033109-764d1dea35f3
+	github.com/longhorn/go-spdk-helper v0.0.2-0.20250323153743-04304276ed8b
 	github.com/longhorn/types v0.0.0-20250311092239-23a07a51e0ba
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.37.0
 	google.golang.org/grpc v1.71.0
-	google.golang.org/protobuf v1.36.5
+	google.golang.org/protobuf v1.36.6
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	k8s.io/apimachinery v0.32.3
 )
