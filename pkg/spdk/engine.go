@@ -1384,7 +1384,7 @@ func (e *Engine) replicaShallowCopy(dstReplicaServiceCli *client.SPDKClient, src
 					}
 					e.log.Infof("Shallow copied snapshot %s", shallowCopyStatus.SnapshotName)
 					finished = true
-					break
+					break // nolint: staticcheck
 				}
 			}
 		}
@@ -2124,7 +2124,11 @@ func (e *Engine) isReplicaRestoreCompleted(replicaName, replicaAddress string) (
 	if err != nil {
 		return false, errors.Wrapf(err, "failed to get replica %v service client %s", replicaName, replicaAddress)
 	}
-	defer replicaServiceCli.Close()
+	defer func() {
+		if errClose := replicaServiceCli.Close(); errClose != nil {
+			log.WithError(errClose).Errorf("Failed to close replica %s client with address %s during check restore status", replicaName, replicaAddress)
+		}
+	}()
 
 	status, err := replicaServiceCli.ReplicaRestoreStatus(replicaName)
 	if err != nil {
