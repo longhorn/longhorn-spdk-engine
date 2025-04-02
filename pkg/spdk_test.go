@@ -349,6 +349,14 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName1)
 			c.Assert(err, IsNil)
 
+			// checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
+			// 	map[string][]string{
+			// 		snapshotName2: {types.VolumeHead},
+			// 	},
+			// 	map[string]api.SnapshotOptions{
+			// 		snapshotName2: {UserCreated: true},
+			// 	})
+
 			// Detach and re-attach the volume
 			err = spdkCli.EngineDelete(engineName)
 			c.Assert(err, IsNil)
@@ -425,6 +433,10 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW})
 
+			// for _, replicaName := range []string{replicaName1} {
+			// 	waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			// }
+
 			// Start testing online rebuilding
 			// Launch a new replica then ask the engine to rebuild it
 			replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
@@ -442,6 +454,35 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(err, IsNil)
 
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
+
+			snapshotNameRebuild := ""
+			for replicaName := range replicaAddressMap {
+				replica, err := spdkCli.ReplicaGet(replicaName)
+				c.Assert(err, IsNil)
+				for snapName, snapLvol := range replica.Snapshots {
+					if strings.HasPrefix(snapName, server.RebuildingSnapshotNamePrefix) {
+						c.Assert(snapLvol.Children[types.VolumeHead], Equals, true)
+						if snapshotNameRebuild == "" {
+							snapshotNameRebuild = snapName
+						} else {
+							c.Assert(snapName, Equals, snapshotNameRebuild)
+						}
+						break
+					}
+				}
+			}
+			c.Assert(snapshotNameRebuild, Not(Equals), "")
+
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName3},
+				map[string][]string{
+					snapshotName2:       {snapshotNameRebuild},
+					snapshotNameRebuild: {types.VolumeHead},
+				},
+				nil)
+
+			for _, replicaName := range []string{replicaName1, replicaName3} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
 
 			// Verify the rebuilding result
 			replicaAddressMap = map[string]string{
@@ -464,6 +505,10 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			cksumAfterRebuilding2, err := util.GetFileChunkChecksum(endpoint, 200*helpertypes.MiB, 100*helpertypes.MiB)
 			c.Assert(err, IsNil)
 			c.Assert(cksumAfterRebuilding2, Equals, cksumBefore2)
+
+			for _, replicaName := range []string{replicaName1, replicaName3} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
 		}()
 	}
 
@@ -483,8 +528,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	}
 }
 
-func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
-	fmt.Println("Testing SPDK snapshot operations with multiple threads")
+func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBackingImage bool) {
 	diskDriverName := "aio"
 
 	ip, err := commonnet.GetAnyExternalIP()
@@ -527,27 +571,30 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 		c.Assert(err, IsNil)
 	}()
 
-	bi, err := spdkCli.BackingImageCreate(defaultTestBackingImageName, defaultTestBackingImageUUID, disk.Uuid, defaultTestBackingImageSize, defaultTestBackingImageChecksum, defaultTestBackingImageDownloadURL, "")
-	c.Assert(err, IsNil)
-	c.Assert(bi, NotNil)
-	defer func() {
-		err := spdkCli.BackingImageDelete(defaultTestBackingImageName, disk.Uuid)
+	var bi *api.BackingImage
+	if withBackingImage {
+		bi, err = spdkCli.BackingImageCreate(defaultTestBackingImageName, defaultTestBackingImageUUID, disk.Uuid, defaultTestBackingImageSize, defaultTestBackingImageChecksum, defaultTestBackingImageDownloadURL, "")
 		c.Assert(err, IsNil)
-	}()
+		c.Assert(bi, NotNil)
+		defer func() {
+			err := spdkCli.BackingImageDelete(defaultTestBackingImageName, disk.Uuid)
+			c.Assert(err, IsNil)
+		}()
 
-	// check if bi.State is "ready" in 300 seconds
-	for i := range maxBackingImageGetRetries {
-		bi, err = spdkCli.BackingImageGet(defaultTestBackingImageName, disk.Uuid)
-		c.Assert(err, IsNil)
+		// check if bi.State is "ready" in 300 seconds
+		for i := range maxBackingImageGetRetries {
+			bi, err = spdkCli.BackingImageGet(defaultTestBackingImageName, disk.Uuid)
+			c.Assert(err, IsNil)
 
-		if bi.State == string(types.BackingImageStateReady) {
-			break
-		}
+			if bi.State == string(types.BackingImageStateReady) {
+				break
+			}
 
-		time.Sleep(1 * time.Second)
+			time.Sleep(1 * time.Second)
 
-		if i == maxBackingImageGetRetries-1 {
-			c.Assert(bi.State, Equals, string(types.BackingImageStateReady))
+			if i == maxBackingImageGetRetries-1 {
+				c.Assert(bi.State, Equals, string(types.BackingImageStateReady))
+			}
 		}
 	}
 
@@ -586,14 +633,19 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 				wg.Done()
 			}()
 
-			replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, bi.Name)
+			backingImageName := ""
+			if withBackingImage {
+				backingImageName = bi.Name
+			}
+			replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, backingImageName)
+
 			c.Assert(err, IsNil)
 			c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
 			c.Assert(replica1.ErrorMsg, Equals, "")
 			c.Assert(replica1.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica1.PortStart, Not(Equals), int32(0))
-			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, bi.Name)
+			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, backingImageName)
 			c.Assert(err, IsNil)
 			c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
@@ -696,6 +748,16 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 
 			// Revert for a new chain (chain 2)
 			revertSnapshot(c, spdkCli, snapshotName13, volumeName, engineName, replicaAddressMap)
+
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
+				map[string][]string{
+					snapshotName11: {snapshotName12},
+					snapshotName12: {snapshotName13},
+					snapshotName13: {snapshotName14, types.VolumeHead},
+					snapshotName14: {snapshotName15},
+					snapshotName15: {},
+				},
+				nil)
 
 			// Only the data of snap11, snap12, and snap13 keeps intact after the snapshot deletion and volume re-attachment
 			offsetInMB = 0
@@ -825,6 +887,15 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			// Revert for a new chain (chain 3)
 			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, replicaAddressMap)
 
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
+				map[string][]string{
+					snapshotName11: {snapshotName13},
+					snapshotName13: {snapshotName15, snapshotName23},
+					snapshotName15: {},
+					snapshotName23: {},
+				},
+				nil)
+
 			// Create and delete some snapshots for the new chain (chain 3)
 			offsetInMB = dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
@@ -836,6 +907,16 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName31)
 			c.Assert(err, IsNil)
 
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
+				map[string][]string{
+					snapshotName11: {snapshotName13, snapshotName31},
+					snapshotName13: {snapshotName15, snapshotName23},
+					snapshotName15: {},
+					snapshotName23: {},
+					snapshotName31: {types.VolumeHead},
+				},
+				nil)
+
 			offsetInMB = 2 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
@@ -846,8 +927,29 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName32)
 			c.Assert(err, IsNil)
 
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
+				map[string][]string{
+					snapshotName11: {snapshotName13, snapshotName31},
+					snapshotName13: {snapshotName15, snapshotName23},
+					snapshotName15: {},
+					snapshotName23: {},
+					snapshotName31: {snapshotName32},
+					snapshotName32: {types.VolumeHead},
+				},
+				nil)
+
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName31)
 			c.Assert(err, IsNil)
+
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
+				map[string][]string{
+					snapshotName11: {snapshotName13, snapshotName32},
+					snapshotName13: {snapshotName15, snapshotName23},
+					snapshotName15: {},
+					snapshotName23: {},
+					snapshotName32: {types.VolumeHead},
+				},
+				nil)
 
 			// Current snapshot tree (with backing image):
 			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50]
@@ -883,6 +985,16 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			// Revert for a new chain (chain 4)
 			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, replicaAddressMap)
 
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
+				map[string][]string{
+					snapshotName11: {snapshotName13, snapshotName32, types.VolumeHead},
+					snapshotName13: {snapshotName15, snapshotName23},
+					snapshotName15: {},
+					snapshotName23: {},
+					snapshotName32: {},
+				},
+				nil)
+
 			// Create some snapshots for the new chain (chain 4)
 			offsetInMB = dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
@@ -893,6 +1005,18 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			snapshotName41 := "snap41"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName41)
 			c.Assert(err, IsNil)
+
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
+				map[string][]string{
+					snapshotName11: {snapshotName13, snapshotName32, snapshotName41},
+					snapshotName13: {snapshotName15, snapshotName23},
+					snapshotName15: {},
+					snapshotName23: {},
+					snapshotName32: {},
+					snapshotName41: {types.VolumeHead},
+				},
+				nil)
+
 			offsetInMB = 2 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
@@ -932,6 +1056,18 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			// Revert back to chain 1
 			revertSnapshot(c, spdkCli, snapshotName15, volumeName, engineName, replicaAddressMap)
 
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
+				map[string][]string{
+					snapshotName11: {snapshotName13, snapshotName32, snapshotName41},
+					snapshotName13: {snapshotName15, snapshotName23},
+					snapshotName15: {types.VolumeHead},
+					snapshotName23: {},
+					snapshotName32: {},
+					snapshotName41: {snapshotName42},
+					snapshotName42: {},
+				},
+				nil)
+
 			// Test online rebuilding twice
 
 			// Write some data to the head before the 1st rebuilding
@@ -956,7 +1092,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName2: types.ModeRW})
 			// Launch the 1st rebuilding replica as the replacement of the crashed replica1
-			replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, bi.Name)
+			replica3, err := spdkCli.ReplicaCreate(replicaName3, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, backingImageName)
 			c.Assert(err, IsNil)
 			c.Assert(replica3.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica3.LvsUUID, Equals, disk.Uuid)
@@ -1050,7 +1186,7 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName3: types.ModeRW})
 			// Launch the 2nd rebuilding replica as the replacement of the crashed replica2
-			replica4, err := spdkCli.ReplicaCreate(replicaName4, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, bi.Name)
+			replica4, err := spdkCli.ReplicaCreate(replicaName4, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, backingImageName)
 			c.Assert(err, IsNil)
 			c.Assert(replica4.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica4.LvsUUID, Equals, disk.Uuid)
@@ -1191,6 +1327,9 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(cksumAfterRebuild12, Equals, cksumBeforeRebuild12)
 			// Verify chain2
 			revertSnapshot(c, spdkCli, snapshotName23, volumeName, engineName, replicaAddressMap)
+			for _, replicaName := range []string{replicaName3, replicaName4} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
 			offsetInMB = 0
 			cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1217,6 +1356,9 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(cksumAfter23, Equals, cksumBefore23)
 			// Verify chain3
 			revertSnapshot(c, spdkCli, snapshotName32, volumeName, engineName, replicaAddressMap)
+			for _, replicaName := range []string{replicaName3, replicaName4} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
 			offsetInMB = 0
 			cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1231,6 +1373,9 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 			c.Assert(cksumAfter32, Equals, cksumBefore32)
 			// Verify chain4
 			revertSnapshot(c, spdkCli, snapshotName42, volumeName, engineName, replicaAddressMap)
+			for _, replicaName := range []string{replicaName3, replicaName4} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
 			offsetInMB = 0
 			cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1262,8 +1407,17 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	}
 }
 
-func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
-	fmt.Println("Testing SPDK fast rebuilding with multiple threads")
+func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuildingWithoutBackingImage(c *C) {
+	fmt.Println("Testing SPDK snapshot operations with multiple threads without backing image")
+	s.spdkMultipleThreadSnapshotOpsAndRebuilding(c, false)
+}
+
+func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuildingWithBackingImage(c *C) {
+	fmt.Println("Testing SPDK snapshot operations with multiple threads with backing image")
+	s.spdkMultipleThreadSnapshotOpsAndRebuilding(c, true)
+}
+
+func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool) {
 	diskDriverName := "aio"
 
 	ip, err := commonnet.GetAnyExternalIP()
@@ -1301,28 +1455,36 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 		c.Assert(err, IsNil)
 	}()
 
-	bi, err := spdkCli.BackingImageCreate(defaultTestBackingImageName, defaultTestBackingImageUUID, disk.Uuid, defaultTestBackingImageSize, defaultTestBackingImageChecksum, defaultTestBackingImageDownloadURL, "")
-	c.Assert(err, IsNil)
-	c.Assert(bi, NotNil)
-	defer func() {
-		err := spdkCli.BackingImageDelete(defaultTestBackingImageName, disk.Uuid)
+	var bi *api.BackingImage
+	if withBackingImage {
+		bi, err = spdkCli.BackingImageCreate(defaultTestBackingImageName, defaultTestBackingImageUUID, disk.Uuid, defaultTestBackingImageSize, defaultTestBackingImageChecksum, defaultTestBackingImageDownloadURL, "")
 		c.Assert(err, IsNil)
-	}()
+		c.Assert(bi, NotNil)
+		defer func() {
+			err := spdkCli.BackingImageDelete(defaultTestBackingImageName, disk.Uuid)
+			c.Assert(err, IsNil)
+		}()
 
-	// check if bi.State is "ready" in 300 seconds
-	for i := 0; i < maxBackingImageGetRetries; i++ {
-		bi, err = spdkCli.BackingImageGet(defaultTestBackingImageName, disk.Uuid)
-		c.Assert(err, IsNil)
+		// check if bi.State is "ready" in 300 seconds
+		for i := 0; i < maxBackingImageGetRetries; i++ {
+			bi, err = spdkCli.BackingImageGet(defaultTestBackingImageName, disk.Uuid)
+			c.Assert(err, IsNil)
 
-		if bi.State == string(types.BackingImageStateReady) {
-			break
+			if bi.State == string(types.BackingImageStateReady) {
+				break
+			}
+
+			time.Sleep(1 * time.Second)
+
+			if i == maxBackingImageGetRetries-1 {
+				c.Assert(bi.State, Equals, string(types.BackingImageStateReady))
+			}
 		}
+	}
 
-		time.Sleep(1 * time.Second)
-
-		if i == maxBackingImageGetRetries-1 {
-			c.Assert(bi.State, Equals, string(types.BackingImageStateReady))
-		}
+	backingImageName := ""
+	if withBackingImage {
+		backingImageName = bi.Name
 	}
 
 	concurrentCount := 10
@@ -1351,14 +1513,14 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 				wg.Done()
 			}()
 
-			replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, bi.Name)
+			replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
 			c.Assert(err, IsNil)
 			c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
 			c.Assert(replica1.ErrorMsg, Equals, "")
 			c.Assert(replica1.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica1.PortStart, Not(Equals), int32(0))
-			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, bi.Name)
+			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
 			c.Assert(err, IsNil)
 			c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
@@ -1418,6 +1580,10 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 
 			// Revert for a new chain (chain 2)
 			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, replicaAddressMap)
+			for _, replicaName := range []string{replica1.Name, replica2.Name} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
+
 			offsetInMB = 1 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
@@ -1440,6 +1606,9 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 
 			// Revert for a new chain (chain 3)
 			revertSnapshot(c, spdkCli, snapshotName21, volumeName, engineName, replicaAddressMap)
+			for _, replicaName := range []string{replica1.Name, replica2.Name} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
 
 			offsetInMB = 2 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
@@ -1476,9 +1645,6 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 				},
 				nil)
 
-			waitReplicaSnapshotChecksum(c, spdkCli, replicaName1, "")
-			waitReplicaSnapshotChecksum(c, spdkCli, replicaName2, "")
-
 			// Test online rebuilding
 
 			// Crash replica1
@@ -1493,6 +1659,10 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			//c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			//c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeERR, replicaName2: types.ModeRW})
 
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
+
 			delete(replicaAddressMap, replicaName1)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))))
 			c.Assert(err, IsNil)
@@ -1504,7 +1674,7 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName2: types.ModeRW})
 
-			replica1, err = spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, bi.Name)
+			replica1, err = spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
 			c.Assert(err, IsNil)
 			c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
 			c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
@@ -1515,6 +1685,11 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			replicaTmpAddressMap := map[string]string{
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
 			}
+
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
+
 			err = spdkCli.EngineDelete(engineName)
 			c.Assert(err, IsNil)
 			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaTmpAddressMap, 1, ip, ip, false)
@@ -1527,10 +1702,15 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 
 			// Mess up snapshots in chain 1 by re-creating snap12 with other random data
 			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, replicaTmpAddressMap)
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
+
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName13)
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName12)
 			c.Assert(err, IsNil)
+
 			// Write 2 * dataCountInMB data to the invalid snap12
 			offsetInMB = 1 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", 2*dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
@@ -1547,6 +1727,11 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			offsetInMB = 4 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
+
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
+
 			err = spdkCli.EngineDelete(engineName)
 			c.Assert(err, IsNil)
 
@@ -1563,7 +1748,12 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			err = spdkCli.EngineReplicaAdd(engineName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))))
 			c.Assert(err, IsNil)
 			// The rebuilding should be pretty fast since all existing snapshots and the previous head are there
-			WaitForReplicaRebuildingCompleteTimeout(c, spdkCli, engineName, replicaName1, 30)
+			WaitForReplicaRebuildingCompleteTimeout(c, spdkCli, engineName, replicaName1, 300)
+
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
+
 			// Figure out the 1st rebuilding snapshot name
 			replicaAddressMap[replica1.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart)))
 			snapshotNameRebuild1 := ""
@@ -1634,6 +1824,9 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			c.Assert(cksumAfter31, Equals, cksumBefore31)
 			// Verify chain2
 			revertSnapshot(c, spdkCli, snapshotName22, volumeName, engineName, replicaAddressMap)
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
 			offsetInMB = 0
 			cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1648,6 +1841,9 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 			c.Assert(cksumAfter22, Equals, cksumBefore22)
 			// Verify chain1
 			revertSnapshot(c, spdkCli, snapshotName13, volumeName, engineName, replicaAddressMap)
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+			}
 			offsetInMB = 0
 			cksumAfter11, err = util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1679,9 +1875,23 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 	}
 }
 
+func (s *TestSuite) TestSPDKMultipleThreadFastRebuildingWithoutBackingImage(c *C) {
+	fmt.Println("Testing SPDK fast rebuilding with multiple threads with backing image")
+	s.spdkMultipleThreadFastRebuilding(c, false)
+}
+
+func (s *TestSuite) TestSPDKMultipleThreadFastRebuildingWithBackingImage(c *C) {
+	fmt.Println("Testing SPDK fast rebuilding with multiple threads without backing image")
+	s.spdkMultipleThreadFastRebuilding(c, true)
+}
+
 func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, replicaList []string, snapshotMap map[string][]string, snapshotOpts map[string]api.SnapshotOptions) {
 	engine, err := spdkCli.EngineGet(engineName)
 	c.Assert(err, IsNil)
+
+	for _, replicaName := range replicaList {
+		waitReplicaSnapshotChecksum(c, spdkCli, replicaName, "")
+	}
 
 	for _, replicaName := range replicaList {
 		replica, err := spdkCli.ReplicaGet(replicaName)
@@ -1709,7 +1919,6 @@ func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, 
 			c.Assert(snap, NotNil)
 			c.Assert(engine.Snapshots[snapName].UserCreated, Equals, opts.UserCreated)
 		}
-
 	}
 }
 
