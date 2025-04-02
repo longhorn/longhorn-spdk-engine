@@ -102,13 +102,14 @@ func StopSPDKTgtDaemon(timeout time.Duration) error {
 }
 
 func stopSPDKTgtDaemon(timeout time.Duration, signal syscall.Signal) error {
-	processes, err := proc.FindProcessByCmdline("spdk_tgt")
+	processes, err := proc.FindProcessByCmdline("valgrind")
 	if err != nil {
 		return errors.Wrap(err, "failed to find spdk_tgt")
 	}
 
 	var errs error
 	for _, process := range processes {
+		logrus.Infof("Debug =====> send signal %v to spdk_tgt %v", signal, process.Pid)
 		if err := process.Signal(signal); err != nil {
 			errs = multierr.Append(errs, errors.Wrapf(err, "failed to send signal %v to spdk_tgt %v", signal, process.Pid))
 		} else {
