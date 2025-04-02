@@ -1875,7 +1875,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 	}
 }
 
-func (s *TestSuite) xxTestSPDKMultipleThreadFastRebuildingWithoutBackingImage(c *C) {
+func (s *TestSuite) TestSPDKMultipleThreadFastRebuildingWithoutBackingImage(c *C) {
 	fmt.Println("Testing SPDK fast rebuilding with multiple threads with backing image")
 	s.spdkMultipleThreadFastRebuilding(c, false)
 }
