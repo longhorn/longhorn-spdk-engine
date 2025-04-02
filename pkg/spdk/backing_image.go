@@ -557,10 +557,12 @@ func (bi *BackingImage) prepareBackingImageSnapshot(spdkClient *spdkclient.Clien
 	headFh, err := os.OpenFile(headInitiator.Endpoint, os.O_RDWR, 0666)
 	defer func() {
 		// Stop the initiator
-		headFh.Close()
+		if errClose := headFh.Close(); errClose != nil {
+			bi.log.WithError(errClose).Error("Failed to close the backing image")
+		}
 		bi.log.Info("Stopping NVMe initiator")
 		if _, opErr := headInitiator.Stop(true, true, false); opErr != nil {
-			bi.log.WithError(opErr).Errorf("Failed to stop the backing image head NVMe initiator")
+			bi.log.WithError(opErr).Error("Failed to stop the backing image head NVMe initiator")
 		}
 	}()
 	if err != nil {
@@ -683,7 +685,11 @@ func (bi *BackingImage) prepareFromSync(targetFh *os.File, fromAddress, srcLvsUU
 	if err != nil {
 		return errors.Wrapf(err, "failed to init the source backing image spdk service client")
 	}
-	defer srcBackingImageServiceCli.Close()
+	defer func() {
+		if errClose := srcBackingImageServiceCli.Close(); errClose != nil {
+			bi.log.WithError(errClose).Error("Failed to close the source backing image spdk service client")
+		}
+	}()
 	exposedSnapshotLvolAddress, err := srcBackingImageServiceCli.BackingImageExpose(bi.Name, srcLvsUUID)
 	if err != nil {
 		return errors.Wrapf(err, "failed to expose the source backing image %v", bi.Name)
@@ -717,7 +723,9 @@ func (bi *BackingImage) prepareFromSync(targetFh *os.File, fromAddress, srcLvsUU
 	bi.log.Infof("Opening NVMe device %v", initiator.Endpoint)
 	srcFh, err := os.OpenFile(initiator.Endpoint, os.O_RDWR, 0666)
 	defer func() {
-		srcFh.Close()
+		if errClose := srcFh.Close(); errClose != nil {
+			bi.log.WithError(errClose).Error("Failed to close the source backing image")
+		}
 		// Stop the source initiator
 		bi.log.Info("Stopping NVMe initiator")
 		if _, err := initiator.Stop(true, true, false); err != nil {

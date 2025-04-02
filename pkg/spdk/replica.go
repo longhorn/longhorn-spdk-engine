@@ -1509,7 +1509,7 @@ func (r *Replica) RebuildingSrcShallowCopyStart(spdkClient *spdkclient.Client, s
 				case <-timer.C:
 					r.log.Errorf("Timeout waiting for the src replica %s shallow copy %v complete before detaching the rebuilding lvol of the dst replica %s, will give up", r.Name, shallowCopyOpID, r.rebuildingSrcCache.dstReplicaName)
 					stopWaiting = true
-					break
+					break // nolint: staticcheck
 				case <-ticker.C:
 					r.Lock()
 					if r.rebuildingSrcCache.shallowCopyOpID != shallowCopyOpID || r.rebuildingSrcCache.shallowCopySnapshotName != snapshotName {
@@ -1532,7 +1532,7 @@ func (r *Replica) RebuildingSrcShallowCopyStart(spdkClient *spdkclient.Client, s
 					continuousRetryCount = 0
 					if status.State == types.ProgressStateError || status.State == types.ProgressStateComplete {
 						stopWaiting = true
-						break
+						break // nolint: staticcheck
 					}
 				}
 			}

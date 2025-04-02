@@ -144,7 +144,11 @@ func GetFileChunkChecksum(filePath string, start, size int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		if errClose := f.Close(); errClose != nil {
+			logrus.WithError(errClose).Errorf("Failed to close file %s", filePath)
+		}
+	}()
 
 	if _, err = f.Seek(start, 0); err != nil {
 		return "", err
@@ -266,7 +270,11 @@ func GetFileChecksum(filePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		if errClose := f.Close(); errClose != nil {
+			logrus.WithError(errClose).Errorf("Failed to close file %s", filePath)
+		}
+	}()
 
 	h := sha512.New()
 	if _, err := io.Copy(h, f); err != nil {

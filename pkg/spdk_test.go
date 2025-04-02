@@ -192,7 +192,8 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonnet.EnvPodIP, ip)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -208,7 +209,11 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
-	defer spdkCli.Close()
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
 
 	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
@@ -227,7 +232,11 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	for i := 0; i < concurrentCount; i++ {
 		spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 		c.Assert(err, IsNil)
-		defer spdkCli.Close()
+		defer func() {
+			if errClose := spdkCli.Close(); errClose != nil {
+				logrus.WithError(errClose).Error("Failed to close SPDK client")
+			}
+		}()
 
 		volumeName := fmt.Sprintf("test-vol-%d", i)
 		engineName := fmt.Sprintf("%s-engine", volumeName)
@@ -460,7 +469,8 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 
 	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonnet.EnvPodIP, ip)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -476,7 +486,11 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 
 	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
-	defer spdkCli.Close()
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
 
 	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
@@ -519,7 +533,11 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	for i := range concurrentCount {
 		spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 		c.Assert(err, IsNil)
-		defer spdkCli.Close()
+		defer func() {
+			if errClose := spdkCli.Close(); errClose != nil {
+				logrus.WithError(errClose).Error("Failed to close SPDK client")
+			}
+		}()
 
 		volumeName := fmt.Sprintf("test-vol-%d", i)
 		engineName := fmt.Sprintf("%s-engine", volumeName)
@@ -1222,7 +1240,8 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 
 	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonnet.EnvPodIP, ip)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1701,7 +1720,8 @@ func waitReplicaSnapshotChecksumTimeout(c *C, spdkCli *client.SPDKClient, replic
 func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, engineName string, replicaAddressMap map[string]string) {
 	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonnet.EnvPodIP, ip)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
 
 	engine, err := spdkCli.EngineGet(engineName)
 	c.Assert(err, IsNil)
@@ -1805,7 +1825,8 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 
 	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
-	os.Setenv(commonnet.EnvPodIP, ip)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1821,7 +1842,11 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 
 	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
-	defer spdkCli.Close()
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			c.Assert(errClose, IsNil)
+		}
+	}()
 
 	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
