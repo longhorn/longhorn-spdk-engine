@@ -1027,7 +1027,7 @@ func (s *Server) EngineDeleteTarget(ctx context.Context, req *spdkrpc.EngineDele
 			s.Lock()
 			// Only delete the engine if both initiator (e.Port) and target (e.TargetPort) are not exists.
 			if e.Port == 0 && e.TargetPort == 0 {
-				e.log.Info("Deleting engine %s", req.Name)
+				e.log.Infof("Deleting engine %s", req.Name)
 				delete(s.engineMap, req.Name)
 			}
 			s.Unlock()
