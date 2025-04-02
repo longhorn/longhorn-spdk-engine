@@ -516,7 +516,7 @@ func (bi *BackingImage) prepareBackingImageSnapshot(spdkClient *spdkclient.Clien
 	if len(bdevLvolList) < 1 {
 		return fmt.Errorf("cannot find lvol %v after creation", backingImageTempHeadName)
 	}
-	bi.log.Info("Created a head lvol %v for the new backing image", backingImageTempHeadName)
+	bi.log.Infof("Created a head lvol %v for the new backing image", backingImageTempHeadName)
 
 	podIP, err := commonnet.GetIPForPod()
 	if err != nil {
@@ -552,7 +552,7 @@ func (bi *BackingImage) prepareBackingImageSnapshot(spdkClient *spdkclient.Clien
 	if _, err := headInitiator.Start(podIP, strconv.Itoa(int(port)), true); err != nil {
 		return errors.Wrapf(err, "failed to start NVMe initiator for head lvol %v", backingImageTempHeadName)
 	}
-	bi.log.Info("Created NVMe initiator for head lvol %v", backingImageTempHeadName)
+	bi.log.Infof("Created NVMe initiator for head lvol %v", backingImageTempHeadName)
 
 	headFh, err := os.OpenFile(headInitiator.Endpoint, os.O_RDWR, 0666)
 	defer func() {
@@ -705,7 +705,7 @@ func (bi *BackingImage) prepareFromSync(targetFh *os.File, fromAddress, srcLvsUU
 		return errors.Wrapf(err, "failed to connect to NVMe target for source backing image %v in lvsUUID %v with address %v", bi.Name, srcLvsUUID, exposedSnapshotLvolAddress)
 	}
 
-	bi.log.Info("Creating NVMe initiator for source backing image %v", bi.Name)
+	bi.log.Infof("Creating NVMe initiator for source backing image %v", bi.Name)
 	initiator, err := nvme.NewInitiator(externalSnapshotLvolName, helpertypes.GetNQN(externalSnapshotLvolName), nvme.HostProc)
 	if err != nil {
 		return errors.Wrapf(err, "failed to create NVMe initiator for source backing image %v in lvsUUID %v with address %v", bi.Name, srcLvsUUID, exposedSnapshotLvolAddress)
