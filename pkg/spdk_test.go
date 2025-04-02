@@ -121,7 +121,7 @@ func LaunchTestSPDKTarget(c *C, execute func(envs []string, name string, args []
 	c.Assert(targetReady, Equals, true)
 }
 
-func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error)) {
+func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error), wg *sync.WaitGroup) {
 	LaunchTestSPDKTarget(c, execute)
 	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort)
 	c.Assert(err, IsNil)
@@ -132,13 +132,17 @@ func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func
 		MinTime:             10 * time.Second,
 		PermitWithoutStream: true,
 	}))
+
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+
 		<-ctx.Done()
 		spdkGRPCServer.Stop()
 		logrus.Info("Stopping SPDK gRPC server")
-		// Stop the SPDK tgt daemon
-		// TODO: The error "no such child process" will be emitted when the process is already stopped. Need to improve the error handling, but we can ignore it for now.
-		_ = util.ForceStopSPDKTgtDaemon(5 * time.Second)
+		// TODO: The error "no such child process" will be emitted when the process is already stopped.
+		// Need to improve the error handling, but we can ignore it for now.
+		_ = util.ForceStopSPDKTgtDaemon(120 * time.Second)
 	}()
 	spdkrpc.RegisterSPDKServiceServer(spdkGRPCServer, srv)
 	reflection.Register(spdkGRPCServer)
@@ -198,11 +202,16 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	c.Assert(err, IsNil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	var spdkWg sync.WaitGroup
+
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
 
 	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
@@ -475,11 +484,16 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuilding(c *C) {
 	c.Assert(err, IsNil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	var spdkWg sync.WaitGroup
+
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
 
 	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
@@ -1246,11 +1260,16 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuilding(c *C) {
 	c.Assert(err, IsNil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	var spdkWg sync.WaitGroup
+
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
 
 	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
@@ -1831,11 +1850,16 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 	c.Assert(err, IsNil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	var spdkWg sync.WaitGroup
+
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
 
 	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
 
 	loopDevicePath := PrepareDiskFile(c)
 	defer func() {
