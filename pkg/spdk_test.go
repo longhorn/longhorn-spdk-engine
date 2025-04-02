@@ -57,7 +57,8 @@ var (
 	defaultTestEndPort          = int32(30000)
 	defaultTestReplicaPortCount = int32(5)
 
-	defaultTestExecuteTimeout = 10 * time.Second
+	// Use a larger timeout for the test to avoid timeout issues while enabling debugger such as valgrind.
+	defaultTestExecuteTimeout = 120 * time.Second
 
 	defaultTestRebuildingWaitInterval   = 3 * time.Second
 	defaultTestRebuildingWaitCount      = 60
@@ -86,7 +87,8 @@ func startTarget(spdkDir string, args []string, execute func(envs []string, bina
 		fmt.Sprintf("%s %s", filepath.Join(spdkDir, SPDKTGTBinary), argsInStr),
 	}
 
-	_, err = execute(nil, "sh", tgtOpts, 10*time.Minute)
+	// Use a larger timeout for the test to avoid timeout issues while enabling debugger such as valgrind.
+	_, err = execute(nil, "sh", tgtOpts, 30*time.Minute)
 	return err
 }
 
