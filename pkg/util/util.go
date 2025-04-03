@@ -109,6 +109,7 @@ func stopSPDKTgtDaemon(timeout time.Duration, signal syscall.Signal) error {
 
 	var errs error
 	for _, process := range processes {
+		logrus.Infof("Sending signal %v to spdk_tgt %v", signal, process.Pid)
 		if err := process.Signal(signal); err != nil {
 			errs = multierr.Append(errs, errors.Wrapf(err, "failed to send signal %v to spdk_tgt %v", signal, process.Pid))
 		} else {

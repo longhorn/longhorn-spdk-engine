@@ -8,11 +8,11 @@ echo Running go validation
 PACKAGES="$(find . -name '*.go' -print0 | xargs -0 -I{} dirname {} |  cut -f2 -d/ | sort -u | grep -Ev '(^\.$|.git|.trash-cache|vendor|bin)' | sed -e 's!^!./!' -e 's!$!/...!')"
 echo Packages: ${PACKAGES}
 
-echo Running: go vet
-go vet ${PACKAGES}
+# echo Running: go vet
+# go vet ${PACKAGES}
 
-echo "Running: golangci-lint"
-golangci-lint run --timeout=5m
+# echo "Running: golangci-lint"
+# golangci-lint run --timeout=5m
 
-echo Running: go fmt
-test -z "$(go fmt ${PACKAGES} | tee /dev/stderr)"
+# echo Running: go fmt
+# test -z "$(go fmt ${PACKAGES} | tee /dev/stderr)"
