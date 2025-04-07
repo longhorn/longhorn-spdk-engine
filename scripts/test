@@ -1,6 +1,19 @@
 #!/bin/bash
 set -e
 
+LOCK_FILE="/tmp/longhorn-spdk.lock"
+MAX_WAIT=36000  # seconds
+
+# Try to acquire exclusive lock on $LOCK_FILE using file descriptor 200
+# If the lock is held by another process, wait and retry
+# Try to acquire exclusive lock on $LOCK_FILE using file descriptor 200
+# Wait up to $MAX_WAIT seconds
+exec 200>"$LOCK_FILE"
+if ! flock -w "$MAX_WAIT" 200; then
+  echo "Failed to acquire lock on $LOCK_FILE after $MAX_WAIT seconds. Exiting."
+  exit 1
+fi
+
 cd "$(dirname $0)"/..
 
 echo Running unit tests
