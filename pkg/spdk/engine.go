@@ -1649,11 +1649,14 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 			if err = e.initiator.Suspend(false, false); err != nil {
 				return "", errors.Wrapf(err, "failed to suspend NVMe initiator before the creation of snapshot %s", snapshotName)
 			}
+			e.log.Infof("Engine suspended initiator before the creation of snapshot %s", snapshotName)
+
 			defer func() {
 				if resumeErr := e.initiator.Resume(); resumeErr != nil {
-					e.log.Errorf("Error resuming initiator after the creation of snapshot %s", snapshotName)
+					e.log.Errorf("Failed to resume initiator after the creation of snapshot %s", snapshotName)
 					return
 				}
+				e.log.Infof("Engine resumed initiator after the creation of snapshot %s", snapshotName)
 			}()
 		}
 	}
