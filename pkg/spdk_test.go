@@ -92,7 +92,7 @@ func startTarget(spdkDir string, args []string, execute func(envs []string, bina
 	}
 
 	// Use a larger timeout for the test to avoid timeout issues while enabling debugger such as valgrind.
-	_, err = execute(nil, "sh", tgtOpts, 120*time.Minute)
+	_, err = execute(nil, "sh", tgtOpts, 180*time.Minute)
 	return err
 }
 
