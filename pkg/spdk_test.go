@@ -326,7 +326,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(cksumBefore1, Not(Equals), "")
 
 			snapshotName1 := "snap1"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName1)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName1, nil)
 			c.Assert(err, IsNil)
 
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), "seek=200", "status=none"}, defaultTestExecuteTimeout)
@@ -336,7 +336,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(cksumBefore2, Not(Equals), "")
 
 			snapshotName2 := "snap2"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName2)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName2, nil)
 			c.Assert(err, IsNil)
 
 			// Check both replica snapshot map after the snapshot operations
@@ -671,7 +671,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore11, Not(Equals), "")
 			snapshotName11 := "snap11"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName11)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName11, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -689,7 +689,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore12, Not(Equals), "")
 			snapshotName12 := "snap12"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -708,7 +708,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore13, Not(Equals), "")
 			snapshotName13 := "snap13"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName13)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName13, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -728,7 +728,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore14, Not(Equals), "")
 			snapshotName14 := "snap14"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName14)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName14, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -749,7 +749,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore15, Not(Equals), "")
 			snapshotName15 := "snap15"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName15)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName15, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -827,7 +827,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore21, Not(Equals), "")
 			snapshotName21 := "snap21"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName21)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName21, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -852,7 +852,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore22, Not(Equals), "")
 			snapshotName22 := "snap22"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName22)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName22, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -878,7 +878,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore23, Not(Equals), "")
 			snapshotName23 := "snap23"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName23)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName23, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -977,7 +977,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore31, Not(Equals), "")
 			snapshotName31 := "snap31"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName31)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName31, nil)
 			c.Assert(err, IsNil)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
@@ -997,7 +997,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore32, Not(Equals), "")
 			snapshotName32 := "snap32"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName32)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName32, nil)
 			c.Assert(err, IsNil)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
@@ -1076,7 +1076,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore41, Not(Equals), "")
 			snapshotName41 := "snap41"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName41)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName41, nil)
 			c.Assert(err, IsNil)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
@@ -1097,7 +1097,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore42, Not(Equals), "")
 			snapshotName42 := "snap42"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName42)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName42, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -1682,7 +1682,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore11, Not(Equals), "")
 			snapshotName11 := "snap11"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName11)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName11, nil)
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotHash(engineName, snapshotName11, false)
 			c.Assert(err, IsNil)
@@ -1702,7 +1702,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore12, Not(Equals), "")
 			snapshotName12 := "snap12"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12, nil)
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotHash(engineName, snapshotName12, false)
 			c.Assert(err, IsNil)
@@ -1723,7 +1723,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore13, Not(Equals), "")
 			snapshotName13 := "snap13"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName13)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName13, nil)
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotHash(engineName, snapshotName13, false)
 			c.Assert(err, IsNil)
@@ -1760,7 +1760,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore21, Not(Equals), "")
 			snapshotName21 := "snap21"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName21)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName21, nil)
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotHash(engineName, snapshotName21, false)
 			c.Assert(err, IsNil)
@@ -1785,7 +1785,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore22, Not(Equals), "")
 			snapshotName22 := "snap22"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName22)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName22, nil)
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotHash(engineName, snapshotName22, false)
 			c.Assert(err, IsNil)
@@ -1830,7 +1830,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 			c.Assert(cksumBefore31, Not(Equals), "")
 			snapshotName31 := "snap31"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName31)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName31, nil)
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotHash(engineName, snapshotName31, false)
 			c.Assert(err, IsNil)
@@ -1987,7 +1987,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			offsetInMB = 1 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", 2*dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12, nil)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -2012,7 +2012,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			snapshotName14 := "snap14"
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName14)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName14, nil)
 			c.Assert(err, IsNil)
 			offsetInMB = 4 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)

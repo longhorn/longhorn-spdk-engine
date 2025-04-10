@@ -138,7 +138,7 @@ func (c *SPDKClient) ReplicaWatch(ctx context.Context) (*api.ReplicaStream, erro
 	return api.NewReplicaStream(stream), nil
 }
 
-func (c *SPDKClient) ReplicaSnapshotCreate(name, snapshotName string, opts *api.SnapshotOptions) error {
+func (c *SPDKClient) ReplicaSnapshotCreate(name, snapshotName string, opts *api.SnapshotOptions, labels map[string]string) error {
 	if name == "" || snapshotName == "" || opts == nil {
 		return fmt.Errorf("failed to create SPDK replica snapshot: missing required parameter name, snapshot name or opts")
 	}
@@ -152,6 +152,7 @@ func (c *SPDKClient) ReplicaSnapshotCreate(name, snapshotName string, opts *api.
 		SnapshotName:      snapshotName,
 		UserCreated:       opts.UserCreated,
 		SnapshotTimestamp: opts.Timestamp,
+		Labels:            labels,
 	}
 
 	_, err := client.ReplicaSnapshotCreate(ctx, &snapshotRequest)
@@ -608,7 +609,7 @@ func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error)
 	return api.NewEngineStream(stream), nil
 }
 
-func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) (string, error) {
+func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string, labels map[string]string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("failed to create SPDK engine snapshot: missing required parameter name")
 	}
@@ -620,6 +621,7 @@ func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) (string, er
 	resp, err := client.EngineSnapshotCreate(ctx, &spdkrpc.SnapshotRequest{
 		Name:         name,
 		SnapshotName: snapshotName,
+		Labels:       labels,
 	})
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to create SPDK engine %s snapshot %s", name, snapshotName)

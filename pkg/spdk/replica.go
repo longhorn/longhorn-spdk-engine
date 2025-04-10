@@ -992,7 +992,7 @@ func (r *Replica) Get() (pReplica *spdkrpc.Replica) {
 	return ServiceReplicaToProtoReplica(r)
 }
 
-func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string, opts *api.SnapshotOptions) (pReplica *spdkrpc.Replica, err error) {
+func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string, opts *api.SnapshotOptions, labels map[string]string) (pReplica *spdkrpc.Replica, err error) {
 	updateRequired := false
 
 	r.Lock()
@@ -1044,6 +1044,14 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 			Value: opts.Timestamp,
 		}
 		xattrs = append(xattrs, snapshotTimestamp)
+	}
+
+	for name, value := range labels {
+		xattr := spdkclient.Xattr{
+			Name:  name,
+			Value: value,
+		}
+		xattrs = append(xattrs, xattr)
 	}
 
 	snapUUID, err := spdkClient.BdevLvolSnapshot(r.Head.UUID, snapLvolName, xattrs)
@@ -2772,7 +2780,7 @@ func (r *Replica) postIncrementalRestoreOperations(spdkClient *spdkclient.Client
 		UserCreated: false,
 		Timestamp:   util.Now(),
 	}
-	_, err = r.SnapshotCreate(spdkClient, restore.SnapshotName, opts)
+	_, err = r.SnapshotCreate(spdkClient, restore.SnapshotName, opts, nil)
 	if err != nil {
 		r.log.WithError(err).Error("Failed to take snapshot of the restored volume")
 		return errors.Wrapf(err, "failed to take snapshot of the restored volume")
@@ -2803,7 +2811,7 @@ func (r *Replica) postFullRestoreOperations(spdkClient *spdkclient.Client, resto
 		UserCreated: false,
 		Timestamp:   util.Now(),
 	}
-	_, err := r.SnapshotCreate(spdkClient, restore.SnapshotName, opts)
+	_, err := r.SnapshotCreate(spdkClient, restore.SnapshotName, opts, nil)
 	if err != nil {
 		r.log.WithError(err).Error("Failed to take snapshot of the restored volume")
 		return errors.Wrapf(err, "failed to take snapshot of the restored volume")
