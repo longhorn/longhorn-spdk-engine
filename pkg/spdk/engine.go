@@ -1235,7 +1235,7 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	opts := &api.SnapshotOptions{
 		Timestamp: util.Now(),
 	}
-	updateRequired, replicasErr, engineErr := e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, SnapshotOperationCreate, opts)
+	updateRequired, replicasErr, engineErr := e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, SnapshotOperationCreate, opts, nil)
 	if replicasErr != nil {
 		return replicasErr
 	}
@@ -1587,7 +1587,7 @@ const (
 	SnapshotOperationHash   = SnapshotOperationType("snapshot-hash")
 )
 
-func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName string) (snapshotName string, err error) {
+func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName string, labels map[string]string) (snapshotName string, err error) {
 	e.log.Infof("Creating snapshot %s", inputSnapshotName)
 
 	opts := &api.SnapshotOptions{
@@ -1595,38 +1595,38 @@ func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName
 		Timestamp:   util.Now(),
 	}
 
-	return e.snapshotOperation(spdkClient, inputSnapshotName, SnapshotOperationCreate, opts)
+	return e.snapshotOperation(spdkClient, inputSnapshotName, SnapshotOperationCreate, opts, labels)
 }
 
 func (e *Engine) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) (err error) {
 	e.log.Infof("Deleting snapshot %s", snapshotName)
 
-	_, err = e.snapshotOperation(spdkClient, snapshotName, SnapshotOperationDelete, nil)
+	_, err = e.snapshotOperation(spdkClient, snapshotName, SnapshotOperationDelete, nil, nil)
 	return err
 }
 
 func (e *Engine) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName string) (err error) {
 	e.log.Infof("Reverting snapshot %s", snapshotName)
 
-	_, err = e.snapshotOperation(spdkClient, snapshotName, SnapshotOperationRevert, nil)
+	_, err = e.snapshotOperation(spdkClient, snapshotName, SnapshotOperationRevert, nil, nil)
 	return err
 }
 
 func (e *Engine) SnapshotPurge(spdkClient *spdkclient.Client) (err error) {
 	e.log.Infof("Purging snapshots")
 
-	_, err = e.snapshotOperation(spdkClient, "", SnapshotOperationPurge, nil)
+	_, err = e.snapshotOperation(spdkClient, "", SnapshotOperationPurge, nil, nil)
 	return err
 }
 
 func (e *Engine) SnapshotHash(spdkClient *spdkclient.Client, snapshotName string, rehash bool) (err error) {
 	e.log.Infof("Hashing snapshot")
 
-	_, err = e.snapshotOperation(spdkClient, snapshotName, SnapshotOperationHash, rehash)
+	_, err = e.snapshotOperation(spdkClient, snapshotName, SnapshotOperationHash, rehash, nil)
 	return err
 }
 
-func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotName string, snapshotOp SnapshotOperationType, opts any) (snapshotName string, err error) {
+func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotName string, snapshotOp SnapshotOperationType, opts any, labels map[string]string) (snapshotName string, err error) {
 	updateRequired := false
 
 	e.Lock()
@@ -1688,7 +1688,7 @@ func (e *Engine) snapshotOperation(spdkClient *spdkclient.Client, inputSnapshotN
 		}
 	}
 
-	updateRequired, replicasErr, engineErr = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, snapshotOp, opts)
+	updateRequired, replicasErr, engineErr = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, snapshotOp, opts, labels)
 	if replicasErr != nil {
 		return "", replicasErr
 	}
@@ -1795,7 +1795,7 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 	return snapshotName, nil
 }
 
-func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, replicaClients map[string]*client.SPDKClient, snapshotName string, snapshotOp SnapshotOperationType, opts any) (updated bool, replicasErr error, engineErr error) {
+func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, replicaClients map[string]*client.SPDKClient, snapshotName string, snapshotOp SnapshotOperationType, opts any, labels map[string]string) (updated bool, replicasErr error, engineErr error) {
 	if snapshotOp == SnapshotOperationRevert {
 		if _, err := spdkClient.BdevRaidDelete(e.Name); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			e.log.WithError(err).Errorf("Failed to delete RAID after snapshot %s revert", snapshotName)
@@ -1809,7 +1809,7 @@ func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, rep
 		if replicaStatus == nil {
 			return false, fmt.Errorf("cannot find replica %s in the engine %s replica status map during snapshot %s operation", replicaName, e.Name, snapshotName), nil
 		}
-		if err := e.replicaSnapshotOperation(spdkClient, replicaClients[replicaName], replicaName, snapshotName, snapshotOp, opts); err != nil && replicaStatus.Mode != types.ModeERR {
+		if err := e.replicaSnapshotOperation(spdkClient, replicaClients[replicaName], replicaName, snapshotName, snapshotOp, opts, labels); err != nil && replicaStatus.Mode != types.ModeERR {
 			replicaErrorList = append(replicaErrorList, err)
 			if snapshotOp != SnapshotOperationHash {
 				e.log.WithError(err).Errorf("Engine failed to issue operation %s for replica %s snapshot %s, will mark the replica mode from %v to ERR", snapshotOp, replicaName, snapshotName, replicaStatus.Mode)
@@ -1839,7 +1839,7 @@ func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, rep
 	return updated, replicasErr, engineErr
 }
 
-func (e *Engine) replicaSnapshotOperation(spdkClient *spdkclient.Client, replicaClient *client.SPDKClient, replicaName, snapshotName string, snapshotOp SnapshotOperationType, opts any) error {
+func (e *Engine) replicaSnapshotOperation(spdkClient *spdkclient.Client, replicaClient *client.SPDKClient, replicaName, snapshotName string, snapshotOp SnapshotOperationType, opts any, labels map[string]string) error {
 	switch snapshotOp {
 	case SnapshotOperationCreate:
 		// TODO: execute `sync` for the NVMe initiator before snapshot start
@@ -1847,7 +1847,7 @@ func (e *Engine) replicaSnapshotOperation(spdkClient *spdkclient.Client, replica
 		if !ok {
 			return fmt.Errorf("invalid opts types %+v for snapshot create operation", opts)
 		}
-		return replicaClient.ReplicaSnapshotCreate(replicaName, snapshotName, optsPtr)
+		return replicaClient.ReplicaSnapshotCreate(replicaName, snapshotName, optsPtr, labels)
 	case SnapshotOperationDelete:
 		return replicaClient.ReplicaSnapshotDelete(replicaName, snapshotName)
 	case SnapshotOperationRevert:
