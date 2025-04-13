@@ -8,7 +8,7 @@ require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20250407080310-40d9920751dd
+	github.com/longhorn/backupstore v0.0.0-20250413092739-f882c9e5606b
 	github.com/longhorn/go-common-libs v0.0.0-20250412054242-0dd2ad39fd02
 	github.com/longhorn/go-spdk-helper v0.0.2-0.20250413065740-52d1caf5f7a7
 	github.com/longhorn/types v0.0.0-20250410134731-b46ad9302858
