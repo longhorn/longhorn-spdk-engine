@@ -8,10 +8,10 @@ require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20250331142654-de3610ff9c89
-	github.com/longhorn/go-common-libs v0.0.0-20250401013213-15c69217876e
-	github.com/longhorn/go-spdk-helper v0.0.2-0.20250402013425-f54098d7face
-	github.com/longhorn/types v0.0.0-20250407153258-74fbf95c1346
+	github.com/longhorn/backupstore v0.0.0-20250407080310-40d9920751dd
+	github.com/longhorn/go-common-libs v0.0.0-20250412054242-0dd2ad39fd02
+	github.com/longhorn/go-spdk-helper v0.0.2-0.20250413065740-52d1caf5f7a7
+	github.com/longhorn/types v0.0.0-20250410134731-b46ad9302858
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
@@ -55,7 +55,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
+	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/text v0.23.0 // indirect; sindirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250115164207-1a7da9e5054f // indirect
