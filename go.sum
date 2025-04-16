@@ -55,10 +55,10 @@ github.com/longhorn/backupstore v0.0.0-20250413092739-f882c9e5606b h1:kYTcP8xt8G
 github.com/longhorn/backupstore v0.0.0-20250413092739-f882c9e5606b/go.mod h1:30kdmIw5AnhcrJ46Up7yXj5KPTeIWK1mKIFJPXoSvVQ=
 github.com/longhorn/go-common-libs v0.0.0-20250412054242-0dd2ad39fd02 h1:WMiKgxZDOX02/sBfyWz6rfFy9jAcs4X37fNeQ1XENqs=
 github.com/longhorn/go-common-libs v0.0.0-20250412054242-0dd2ad39fd02/go.mod h1:zUt3YlXyj5wI5SC/jI0ayT42NYlVUXJd2is9Azo0DTw=
-github.com/longhorn/go-spdk-helper v0.0.2-0.20250415000716-f22355d4e0fa h1:Toubcr6ADUkjIANoupTcv7ILpxcVE2u5dHPpoSeXix4=
-github.com/longhorn/go-spdk-helper v0.0.2-0.20250415000716-f22355d4e0fa/go.mod h1:k1MUTmyAIXuabuyviT3shOnN618449WqmamtCJlsh4c=
-github.com/longhorn/types v0.0.0-20250410134731-b46ad9302858 h1:1Qe0hwY5i5NMipBg91O2ON4lp3OLO0V1AW7ynQdBtjY=
-github.com/longhorn/types v0.0.0-20250410134731-b46ad9302858/go.mod h1:3jHuVDtpkXQzpnp4prguDBskVRric2kmF8aSPkRJ4jw=
+github.com/longhorn/go-spdk-helper v0.0.0-20250416235331-b97c02bd0b57 h1:57jJiOMqRVIoFSY2DO9DYHnI4H4uwaUGFGpFqcVDLns=
+github.com/longhorn/go-spdk-helper v0.0.0-20250416235331-b97c02bd0b57/go.mod h1:k1MUTmyAIXuabuyviT3shOnN618449WqmamtCJlsh4c=
+github.com/longhorn/types v0.0.0-20250416235128-0c407ad2b792 h1:+KWYQQKGCBnoy7Our2ryJ9HtUksKf3OPaLVMfsxPzMk=
+github.com/longhorn/types v0.0.0-20250416235128-0c407ad2b792/go.mod h1:3jHuVDtpkXQzpnp4prguDBskVRric2kmF8aSPkRJ4jw=
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
 github.com/mitchellh/go-ps v1.0.0 h1:i6ampVEEF4wQFF+bkYfwYgY+F/uYJDktmvLPf7qIgjc=
 github.com/mitchellh/go-ps v1.0.0/go.mod h1:J4lOc8z8yJs6vUwklHw2XEIiT4z4C40KtWVN3nvg8Pg=
