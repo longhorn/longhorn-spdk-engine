@@ -1733,10 +1733,7 @@ func (r *Replica) RebuildingSrcShallowCopyCheck(snapshotName string) (status spd
 	r.RUnlock()
 
 	if snapshotName != recordedSnapshotName {
-		status = spdktypes.ShallowCopyStatus{
-			State: types.ProgressStateError,
-			Error: fmt.Sprintf("found mismatching between the required snapshot name %v and the recorded snapshotName %v for src replica %s shallow copy check", snapshotName, recordedSnapshotName, r.Name),
-		}
+		return status, fmt.Errorf("found mismatching between the required snapshot name %v and the recorded snapshotName %v for src replica %s shallow copy check", snapshotName, recordedSnapshotName, r.Name)
 	}
 
 	return status, nil
@@ -2367,7 +2364,7 @@ func (r *Replica) RebuildingDstShallowCopyCheck(spdkClient *spdkclient.Client) (
 
 		state, copiedClusters, totalClusters, errorMsg, err := srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyCheck(r.rebuildingDstCache.srcReplicaName, r.Name, r.rebuildingDstCache.processingSnapshotName)
 		if err != nil {
-			errorMsg = errors.Wrapf(err, "dst replica %s failed to check the shallow copy status from src replica %s for snapshot %s", r.Name, r.rebuildingDstCache.srcReplicaName, r.rebuildingDstCache.processingSnapshotName).Error()
+			return nil, err
 		}
 		if errorMsg == "" && snapApiLvol.ActualSize != totalClusters*defaultClusterSize {
 			errorMsg = fmt.Errorf("rebuilding dst snapshot %s recorded actual size %d does not match the shallow copy reported total size %d", r.rebuildingDstCache.processingSnapshotName, snapApiLvol.ActualSize, totalClusters*defaultClusterSize).Error()
