@@ -258,7 +258,7 @@ func (r *Replica) stopSnapshotHash(spdkClient *spdkclient.Client, parentLvol *Lv
 		return nil
 	}
 	if hashStatus.State == types.ProgressStateInProgress {
-		if _, err := spdkClient.BdevLvolStopSnapshotChecksum(parentLvol.Alias); err != nil && jsonrpc.IsJSONRPCRespErrorNoSuchProcess(err) {
+		if _, err := spdkClient.BdevLvolStopSnapshotChecksum(parentLvol.Alias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchProcess(err) {
 			return err
 		}
 		r.SnapshotLvolHashStatusMap.Delete(parentLvol.Name)
