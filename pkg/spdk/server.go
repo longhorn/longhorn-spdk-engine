@@ -926,6 +926,33 @@ func (s *Server) ReplicaRebuildingDstSnapshotCreate(ctx context.Context, req *sp
 	return &emptypb.Empty{}, nil
 }
 
+func (s *Server) ReplicaRebuildingDstSetQosLimit(
+	ctx context.Context,
+	req *spdkrpc.ReplicaRebuildingDstSetQosLimitRequest,
+) (*emptypb.Empty, error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+	if req.QosLimitMbps < 0 {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "QoS limit must not be negative, got %d", req.QosLimitMbps)
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	spdkClient := s.spdkClient
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s for QoS setting", req.Name)
+	}
+
+	if err := r.RebuildingDstSetQos(spdkClient, req.QosLimitMbps); err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to set QoS limit on replica %s: %v", req.Name, err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequest) (ret *spdkrpc.Engine, err error) {
 	if req.Name == "" || req.VolumeName == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name and volume name are required")

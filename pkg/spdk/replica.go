@@ -85,6 +85,9 @@ type Replica struct {
 	rebuildingDstCache RebuildingDstCache
 	lastRebuildingAt   time.Time
 
+	// QoS limit in MB/s for rebuilding operations
+	rebuildingQosLimitMbps int64
+
 	// The rebuilding source replica should cache this info
 	rebuildingSrcCache RebuildingSrcCache
 
@@ -2275,6 +2278,14 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 		r.rebuildingDstCache.rebuildingLvol.SpecSize = srcSnapSvcLvol.SpecSize
 	}
 
+	// Apply QoS limit if set
+	if r.rebuildingQosLimitMbps > 0 {
+		if err := spdkClient.BdevSetQosLimit(r.rebuildingDstCache.rebuildingLvol.UUID, 0, 0, 0, r.rebuildingQosLimitMbps); err != nil {
+			return "", err
+		}
+		r.log.Infof("Applied QoS limit %d MB/s to new rebuilding lvol %s for replica %s", r.rebuildingQosLimitMbps, r.rebuildingDstCache.rebuildingLvol.UUID, r.Name)
+	}
+
 	dstRebuildingLvolAddress = r.rebuildingDstCache.rebuildingLvol.Alias
 	if r.rebuildingDstCache.rebuildingPort != 0 {
 		nguid := commonutils.RandomID(nvmeNguidLength)
@@ -2592,6 +2603,39 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 	r.rebuildingDstCache.processingSize = 0
 	updateRequired = true
 
+	return nil
+}
+
+// RebuildingDstSetQos sets a write bandwidth QoS limit on the rebuilding Lvol
+// for the destination replica during the shallow copy process.
+func (r *Replica) RebuildingDstSetQos(spdkClient *spdkclient.Client, qosLimitMbps int64) error {
+	r.Lock()
+	defer r.Unlock()
+
+	// Store the QoS limit that will be applied to each rebuilding lvol
+	r.rebuildingQosLimitMbps = qosLimitMbps
+
+	if r.State != types.InstanceStateRunning {
+		return fmt.Errorf("invalid state %v for dst replica %s to set QoS", r.State, r.Name)
+	}
+	if !r.isRebuilding {
+		return fmt.Errorf("replica %s is not in rebuilding, cannot apply QoS", r.Name)
+	}
+	if r.rebuildingDstCache.rebuildingLvol == nil {
+		return fmt.Errorf("rebuilding lvol does not exist for replica %s", r.Name)
+	}
+
+	lvolUUID := r.rebuildingDstCache.rebuildingLvol.UUID
+	if lvolUUID == "" {
+		return fmt.Errorf("rebuilding lvol UUID is empty for replica %s", r.Name)
+	}
+
+	// Apply write bandwidth QoS (MB/s)
+	if err := spdkClient.BdevSetQosLimit(lvolUUID, 0, 0, 0, qosLimitMbps); err != nil {
+		return fmt.Errorf("failed to set QoS limit %d MB/s on replica %s lvol %s: %v", qosLimitMbps, r.Name, lvolUUID, err)
+	}
+
+	r.log.Infof("Applied QoS limit %d MB/s to replica %s (lvol %s)", qosLimitMbps, r.Name, lvolUUID)
 	return nil
 }
 
