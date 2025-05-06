@@ -330,6 +330,34 @@ func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyStart(srcReplicaName, snapsh
 	return nil
 }
 
+// ReplicaRebuildingSrcRangeShallowCopyStart asks the src replica to start a range/delta shallow copy from the specified clusters of its snapshot lvol to the dst rebuilding lvol.
+func (c *SPDKClient) ReplicaRebuildingSrcRangeShallowCopyStart(srcReplicaName, snapshotName, dstRebuildingLvolAddress string, mismatchingClusterList []uint64) error {
+	if srcReplicaName == "" || snapshotName == "" {
+		return fmt.Errorf("failed to start rebuilding src replica range shallow copy: missing required parameter replica name or snapshot name")
+	}
+	if dstRebuildingLvolAddress == "" {
+		return fmt.Errorf("failed to start rebuilding src replica range shallow copy: missing required parameter dst rebuilding lvol address")
+	}
+	if len(mismatchingClusterList) == 0 {
+		return fmt.Errorf("failed to start rebuilding src replica range shallow copy: missing required parameter mismatching cluster list")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceMedTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaRebuildingSrcRangeShallowCopyStart(ctx, &spdkrpc.ReplicaRebuildingSrcRangeShallowCopyStartRequest{
+		Name:                     srcReplicaName,
+		SnapshotName:             snapshotName,
+		DstRebuildingLvolAddress: dstRebuildingLvolAddress,
+		MismatchingClusterList:   mismatchingClusterList,
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to start rebuilding src replica %v range shallow copy snapshot %v", srcReplicaName, snapshotName)
+	}
+	return nil
+}
+
 // ReplicaRebuildingSrcShallowCopyCheck asks the src replica to check the shallow copy progress and status via the snapshot name
 func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyCheck(srcReplicaName, dstReplicaName, snapshotName string) (state string, handledClusters, totalClusters uint64, errorMsg string, err error) {
 	if srcReplicaName == "" || dstReplicaName == "" {
