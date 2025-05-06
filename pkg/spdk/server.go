@@ -798,6 +798,36 @@ func (s *Server) ReplicaRebuildingSrcShallowCopyStart(ctx context.Context, req *
 	return &emptypb.Empty{}, nil
 }
 
+func (s *Server) ReplicaRebuildingSrcRangeShallowCopyStart(ctx context.Context, req *spdkrpc.ReplicaRebuildingSrcRangeShallowCopyStartRequest) (ret *emptypb.Empty, err error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+	if req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica snapshot name is required")
+	}
+	if req.DstRebuildingLvolAddress == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "dst rebuilding lvol address is required")
+	}
+	if len(req.MismatchingClusterList) < 1 {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "mismatching cluster list is required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	spdkClient := s.spdkClient
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding src snapshot %s range shallow copy start", req.Name, req.SnapshotName)
+	}
+
+	if err := r.RebuildingSrcRangeShallowCopyStart(spdkClient, req.SnapshotName, req.DstRebuildingLvolAddress, req.MismatchingClusterList); err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 func (s *Server) ReplicaRebuildingSrcShallowCopyCheck(ctx context.Context, req *spdkrpc.ReplicaRebuildingSrcShallowCopyCheckRequest) (ret *spdkrpc.ReplicaRebuildingSrcShallowCopyCheckResponse, err error) {
 	if req.Name == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
