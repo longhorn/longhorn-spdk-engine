@@ -76,7 +76,7 @@ github.com/longhorn/go-spdk-helper/pkg/spdk/setup
 github.com/longhorn/go-spdk-helper/pkg/spdk/types
 github.com/longhorn/go-spdk-helper/pkg/types
 github.com/longhorn/go-spdk-helper/pkg/util
-# github.com/longhorn/types v0.0.0-20250519005747-57ce2e5a3ee5
+# github.com/longhorn/types v0.0.0-20250519005747-57ce2e5a3ee5 => github.com/shuo-wu/types v0.0.0-20250606215338-3d5ead429408
 ## explicit; go 1.22.7
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/mitchellh/go-ps v1.0.0
@@ -317,3 +317,4 @@ k8s.io/utils/internal/third_party/forked/golang/net
 k8s.io/utils/io
 k8s.io/utils/keymutex
 k8s.io/utils/net
+# github.com/longhorn/types => github.com/shuo-wu/types v0.0.0-20250606215338-3d5ead429408
