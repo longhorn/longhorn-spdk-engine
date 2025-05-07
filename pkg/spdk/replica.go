@@ -2598,6 +2598,36 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 	return nil
 }
 
+// RebuildingDstSetQos sets a write bandwidth QoS limit on the rebuilding Lvol
+// for the destination replica during the shallow copy process.
+func (r *Replica) RebuildingDstSetQos(spdkClient *spdkclient.Client, qosLimitMbps int64) error {
+	r.Lock()
+	defer r.Unlock()
+
+	if r.State != types.InstanceStateRunning {
+		return fmt.Errorf("invalid state %v for dst replica %s to set QoS", r.State, r.Name)
+	}
+	if !r.isRebuilding {
+		return fmt.Errorf("replica %s is not in rebuilding, cannot apply QoS", r.Name)
+	}
+	if r.rebuildingDstCache.rebuildingLvol == nil {
+		return fmt.Errorf("rebuilding lvol does not exist for replica %s", r.Name)
+	}
+
+	lvolUUID := r.rebuildingDstCache.rebuildingLvol.UUID
+	if lvolUUID == "" {
+		return fmt.Errorf("rebuilding lvol UUID is empty for replica %s", r.Name)
+	}
+
+	// Apply write bandwidth QoS (MB/s)
+	if err := spdkClient.BdevSetQosLimit(lvolUUID, 0, 0, 0, qosLimitMbps); err != nil {
+		return fmt.Errorf("failed to set QoS limit %d MB/s on replica %s lvol %s: %v", qosLimitMbps, r.Name, lvolUUID, err)
+	}
+
+	r.log.Infof("Applied QoS limit %d MB/s to replica %s (lvol %s)", qosLimitMbps, r.Name, lvolUUID)
+	return nil
+}
+
 func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapshotName string, credential map[string]string, concurrentLimit int32) (err error) {
 	r.Lock()
 	defer r.Unlock()
