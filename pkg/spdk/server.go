@@ -701,6 +701,26 @@ func (s *Server) ReplicaSnapshotHashStatus(ctx context.Context, req *spdkrpc.Sna
 	}, err
 }
 
+func (s *Server) ReplicaSnapshotRangeHashGet(ctx context.Context, req *spdkrpc.ReplicaSnapshotRangeHashGetRequest) (ret *spdkrpc.ReplicaSnapshotRangeHashGetResponse, err error) {
+	if req.Name == "" || req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and snapshot name are required")
+	}
+
+	s.RLock()
+	r := s.replicaMap[req.Name]
+	spdkClient := s.spdkClient
+	s.RUnlock()
+
+	if r == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s for snapshot range hash get", req.Name)
+	}
+
+	rangeHashMap, err := r.SnapshotRangeHashGet(spdkClient, req.SnapshotName, req.ClusterStartIndex, req.ClusterCount)
+	return &spdkrpc.ReplicaSnapshotRangeHashGetResponse{
+		RangeHashMap: rangeHashMap,
+	}, err
+}
+
 func (s *Server) ReplicaRebuildingSrcStart(ctx context.Context, req *spdkrpc.ReplicaRebuildingSrcStartRequest) (ret *spdkrpc.ReplicaRebuildingSrcStartResponse, err error) {
 	if req.Name == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
