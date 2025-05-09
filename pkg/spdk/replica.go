@@ -1496,6 +1496,30 @@ func (r *Replica) SnapshotHashStatus(snapshotName string) (state, checksum, errM
 	return hashStatus.State, hashStatus.Checksum, hashStatus.Error, silentlyCorrupted, nil
 }
 
+// SnapshotRangeHashGet asks the replica snapshot lvol get the checksums for a specific range of clusters
+func (r *Replica) SnapshotRangeHashGet(spdkClient *spdkclient.Client, snapshotName string, clusterStartIndex, clusterCount uint64) (rangeHashMap map[uint64]uint64, err error) {
+	r.Lock()
+	defer func() {
+		r.Unlock()
+
+		if err != nil && r.State != types.InstanceStateError {
+			r.log.WithError(err).Warnf("Replica failed to get snapshot %s range [%d, %d) hash map", snapshotName, clusterStartIndex, clusterStartIndex+clusterCount)
+		}
+	}()
+
+	if len(r.ActiveChain) < 2 {
+		return nil, fmt.Errorf("invalid chain length %d for replica %s snapshot %s range [%d, %d) hash map get", len(r.ActiveChain), r.Name, snapshotName, clusterStartIndex, clusterStartIndex+clusterCount)
+	}
+
+	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
+	snapSvcLvol := r.SnapshotLvolMap[snapLvolName]
+	if snapSvcLvol == nil {
+		return nil, fmt.Errorf("cannot find snapshot %s(%s) for replica %s snapshot range [%d, %d) hash map get", snapshotName, snapLvolName, r.Name, clusterStartIndex, clusterStartIndex+clusterCount)
+	}
+
+	return spdkClient.BdevLvolGetRangeChecksums(spdktypes.GetLvolAlias(r.LvsName, snapLvolName), clusterStartIndex, clusterCount)
+}
+
 // RebuildingSrcStart asks the source replica to check the parent snapshot of the head and expose it as a NVMf bdev if necessary.
 // If the source replica and the destination replicas have different IPs, the API will expose the snapshot lvol as a NVMf bdev and return the address <IP>:<Port>.
 // Otherwise, the API will directly return the snapshot lvol alias.

@@ -238,6 +238,23 @@ func (c *SPDKClient) ReplicaSnapshotHashStatus(name, snapshotName string) (*spdk
 	})
 }
 
+func (c *SPDKClient) ReplicaSnapshotRangeHashGet(name, snapshotName string, clusterStartIndex, clusterCount uint64) (*spdkrpc.ReplicaSnapshotRangeHashGetResponse, error) {
+	if name == "" || snapshotName == "" {
+		return nil, fmt.Errorf("failed to get range hash for SPDK replica snapshot: missing required parameter name or snapshot name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	return client.ReplicaSnapshotRangeHashGet(ctx, &spdkrpc.ReplicaSnapshotRangeHashGetRequest{
+		Name:              name,
+		SnapshotName:      snapshotName,
+		ClusterStartIndex: clusterStartIndex,
+		ClusterCount:      clusterCount,
+	})
+}
+
 // ReplicaRebuildingSrcStart asks the source replica to check the parent snapshot of the head and expose it as a NVMf bdev if necessary.
 // If the source replica and the destination replica have different IPs, the API will expose the snapshot lvol as a NVMf bdev and return the address <IP>:<Port>.
 // Otherwise, the API will directly return the snapshot lvol alias.
