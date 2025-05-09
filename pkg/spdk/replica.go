@@ -126,9 +126,10 @@ type RebuildingDstCache struct {
 	processedSnapshotList  []string
 	processedSnapshotsSize uint64
 
-	processingSnapshotName string
-	processingState        string
-	processingSize         uint64
+	processingSnapshotName      string
+	processingState             string
+	processingSize              uint64
+	snapshotTotalRebuildingSize uint64
 }
 
 type RebuildingSrcCache struct {
@@ -141,7 +142,19 @@ type RebuildingSrcCache struct {
 
 	shallowCopySnapshotName string
 	shallowCopyOpID         uint32
-	shallowCopyStatus       spdktypes.ShallowCopyStatus
+	shallowCopyStatus       ShallowCopyStatus
+	isRangeShallowCopy      bool
+}
+
+type ShallowCopyStatus struct {
+	State           string `json:"state"`
+	Error           string `json:"error,omitempty"`
+	HandledClusters uint64 `json:"handled_clusters"`
+	TotalClusters   uint64 `json:"total_clusters"`
+	// HandledRangeClusters is the number of clusters all finished range shallow copies handled for this snapshot.
+	HandledRangeClusters uint64 `json:"handled_range_clusters"`
+	// CurrentRangeState is the state of the current range shallow copy.
+	CurrentRangeState string `json:"current_range_state"`
 }
 
 func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
@@ -1609,7 +1622,7 @@ func (r *Replica) RebuildingSrcFinish(spdkClient *spdkclient.Client, dstReplicaN
 func (r *Replica) doCleanupForRebuildingSrc(spdkClient *spdkclient.Client) {
 	r.rebuildingSrcCache.shallowCopySnapshotName = ""
 	r.rebuildingSrcCache.shallowCopyOpID = 0
-	r.rebuildingSrcCache.shallowCopyStatus = spdktypes.ShallowCopyStatus{}
+	r.rebuildingSrcCache.shallowCopyStatus = ShallowCopyStatus{}
 
 	if r.rebuildingSrcCache.dstRebuildingBdevName != "" {
 		if err := disconnectNVMfBdev(spdkClient, r.rebuildingSrcCache.dstRebuildingBdevName); err != nil {
@@ -1749,7 +1762,8 @@ func (r *Replica) RebuildingSrcShallowCopyStart(spdkClient *spdkclient.Client, s
 	}
 	r.rebuildingSrcCache.shallowCopySnapshotName = snapshotName
 	r.rebuildingSrcCache.shallowCopyOpID = shallowCopyOpID
-	r.rebuildingSrcCache.shallowCopyStatus = spdktypes.ShallowCopyStatus{}
+	r.rebuildingSrcCache.shallowCopyStatus = ShallowCopyStatus{}
+	r.rebuildingSrcCache.isRangeShallowCopy = false
 
 	if _, err = r.rebuildingSrcShallowCopyStatusUpdateAndHandlingNoLock(spdkClient); err != nil {
 		return err
@@ -1758,55 +1772,88 @@ func (r *Replica) RebuildingSrcShallowCopyStart(spdkClient *spdkclient.Client, s
 	return
 }
 
-func (r *Replica) rebuildingSrcShallowCopyStatusUpdateAndHandlingNoLock(spdkClient *spdkclient.Client) (status *spdktypes.ShallowCopyStatus, err error) {
+func (r *Replica) rebuildingSrcShallowCopyStatusUpdateAndHandlingNoLock(spdkClient *spdkclient.Client) (status ShallowCopyStatus, err error) {
 	if r.rebuildingSrcCache.shallowCopyOpID == 0 {
-		return &spdktypes.ShallowCopyStatus{}, nil
+		return ShallowCopyStatus{}, nil
 	}
 	// For a complete or errored shallow copy, spdk_tgt will clean up its status after the first check returns.
 	// Hence we need to directly use the cached status here.
-	if r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateError || r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateComplete {
-		return &spdktypes.ShallowCopyStatus{
-			State:          r.rebuildingSrcCache.shallowCopyStatus.State,
-			CopiedClusters: r.rebuildingSrcCache.shallowCopyStatus.CopiedClusters,
-			TotalClusters:  r.rebuildingSrcCache.shallowCopyStatus.TotalClusters,
-			Error:          r.rebuildingSrcCache.shallowCopyStatus.Error,
-		}, nil
+	// Similar logic applies to the range shallow copy, we need to check the cached status first.
+	if r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateError || r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateComplete ||
+		(r.rebuildingSrcCache.shallowCopyStatus.CurrentRangeState == types.ProgressStateComplete && r.rebuildingSrcCache.isRangeShallowCopy) {
+		return r.rebuildingSrcCache.shallowCopyStatus, nil
 	}
 
-	status, err = spdkClient.BdevLvolCheckShallowCopy(r.rebuildingSrcCache.shallowCopyOpID)
+	currentShallowCopyStatus, err := spdkClient.BdevLvolCheckShallowCopy(r.rebuildingSrcCache.shallowCopyOpID)
 	if err != nil {
-		return nil, err
+		return ShallowCopyStatus{}, err
 	}
-	if status.State == types.SPDKShallowCopyStateInProgress {
-		status.State = types.ProgressStateInProgress
+	if currentShallowCopyStatus.State == types.SPDKShallowCopyStateInProgress {
+		currentShallowCopyStatus.State = types.ProgressStateInProgress
 	}
 
-	r.rebuildingSrcCache.shallowCopyStatus = *status
+	r.rebuildingSrcCache.shallowCopyStatus.Error = currentShallowCopyStatus.Error
+	if !r.rebuildingSrcCache.isRangeShallowCopy {
+		r.rebuildingSrcCache.shallowCopyStatus.State = currentShallowCopyStatus.State
+		r.rebuildingSrcCache.shallowCopyStatus.HandledClusters = currentShallowCopyStatus.CopiedClusters + currentShallowCopyStatus.UnmappedClusters
+		r.rebuildingSrcCache.shallowCopyStatus.TotalClusters = currentShallowCopyStatus.TotalClusters
+		// r.rebuildingSrcCache.shallowCopyStatus.CurrentRangeState and r.rebuildingSrcCache.shallowCopyStatus.HandledRangeClusters are not used for the full shallow copy
+	} else {
+		// For range shallow copy, the status returned from SPDK API involves the specific range of clusters only. We need to do calculation for the total progress.
+		r.rebuildingSrcCache.shallowCopyStatus.HandledClusters = r.rebuildingSrcCache.shallowCopyStatus.HandledRangeClusters + currentShallowCopyStatus.CopiedClusters + currentShallowCopyStatus.UnmappedClusters
+		r.rebuildingSrcCache.shallowCopyStatus.CurrentRangeState = currentShallowCopyStatus.State
+		switch currentShallowCopyStatus.State {
+		case types.ProgressStateError:
+			r.rebuildingSrcCache.shallowCopyStatus.State = types.ProgressStateError
+			r.rebuildingSrcCache.shallowCopyStatus.Error = currentShallowCopyStatus.Error
+		case types.ProgressStateComplete:
+			r.rebuildingSrcCache.shallowCopyStatus.HandledRangeClusters += currentShallowCopyStatus.TotalClusters
+			if r.rebuildingSrcCache.shallowCopyStatus.HandledRangeClusters == r.rebuildingSrcCache.shallowCopyStatus.TotalClusters {
+				r.rebuildingSrcCache.shallowCopyStatus.State = types.ProgressStateComplete
+			} else {
+				// The current range shallow copy completes while the whole snapshot copy is not done, the src replica should go to the next range
+				r.rebuildingSrcCache.shallowCopyStatus.State = types.ProgressStateInProgress
+			}
+		case types.ProgressStateInProgress:
+			r.rebuildingSrcCache.shallowCopyStatus.State = types.ProgressStateInProgress
+		case types.ProgressStateStarting:
+			if r.rebuildingSrcCache.shallowCopyStatus.HandledRangeClusters == 0 {
+				r.rebuildingSrcCache.shallowCopyStatus.State = types.ProgressStateStarting
+			}
+		default:
+			return ShallowCopyStatus{}, fmt.Errorf("found unknown shallow copy state %s for src replica %s shallow copy %v", currentShallowCopyStatus.State, r.Name, r.rebuildingSrcCache.shallowCopyOpID)
+		}
+	}
 
 	// The status update and the detachment should be done atomically
 	// Otherwise, the next shallow copy will be started before this detachment complete. In other words, the next shallow copy will be failed by this detachment.
-	if status.State == types.ProgressStateError || status.State == types.ProgressStateComplete {
+	if r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateError || r.rebuildingSrcCache.shallowCopyStatus.State == types.ProgressStateComplete {
 		err = r.rebuildingSrcDetachNoLock(spdkClient)
 		if err != nil {
 			r.log.WithError(err).Errorf("Failed to detach the rebuilding lvol of the dst replica %s after src replica %s shallow copy %v from snapshot %s finish, will continue", r.rebuildingSrcCache.dstReplicaName, r.Name, r.rebuildingSrcCache.shallowCopyOpID, r.rebuildingSrcCache.shallowCopySnapshotName)
 		}
 	}
 
-	return status, nil
+	return r.rebuildingSrcCache.shallowCopyStatus, nil
 }
 
 // RebuildingSrcShallowCopyCheck asks the src replica to check the shallow copy progress and status via the snapshot name.
-func (r *Replica) RebuildingSrcShallowCopyCheck(snapshotName string) (status spdktypes.ShallowCopyStatus, err error) {
+func (r *Replica) RebuildingSrcShallowCopyCheck(snapshotName string) (status *spdkrpc.ReplicaRebuildingSrcShallowCopyCheckResponse, err error) {
 	r.RLock()
 	recordedSnapshotName := r.rebuildingSrcCache.shallowCopySnapshotName
-	status = r.rebuildingSrcCache.shallowCopyStatus
+	recordedShallowCopyStatus := r.rebuildingSrcCache.shallowCopyStatus
 	r.RUnlock()
 
 	if snapshotName != recordedSnapshotName {
-		return status, fmt.Errorf("found mismatching between the required snapshot name %v and the recorded snapshotName %v for src replica %s shallow copy check", snapshotName, recordedSnapshotName, r.Name)
+		return nil, fmt.Errorf("found mismatching between the required snapshot name %v and the recorded snapshotName %v for src replica %s shallow copy check", snapshotName, recordedSnapshotName, r.Name)
 	}
 
-	return status, nil
+	return &spdkrpc.ReplicaRebuildingSrcShallowCopyCheckResponse{
+		State:           recordedShallowCopyStatus.State,
+		HandledClusters: recordedShallowCopyStatus.HandledClusters,
+		TotalClusters:   recordedShallowCopyStatus.TotalClusters,
+		ErrorMsg:        recordedShallowCopyStatus.Error,
+	}, nil
 }
 
 // RebuildingDstStart asks the dst replica to create a new head lvol based on the external snapshot of the src replica and blindly expose it as a NVMf bdev.
@@ -2241,7 +2288,7 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 			r.log.Infof("Replica found an intact snapshot lvol %s before the shallow copy", dstSnapSvcLvol.Alias)
 			rebuildingLvolCreated = true
 		}
-	} else { // Then check if there is an expired lvol available
+	} else {                                               // Then check if there is an expired lvol available
 		if bdevLvolMap[dstSnapshotParentLvolName] != nil { // For non-ancestor snapshot, check if dstSnapshotParentLvol has an expired lvol as child
 			for _, childLvolName := range bdevLvolMap[dstSnapshotParentLvolName].DriverSpecific.Lvol.Clones {
 				if IsReplicaExpiredLvol(r.Name, childLvolName) {
@@ -2340,6 +2387,7 @@ func (r *Replica) RebuildingDstShallowCopyStart(spdkClient *spdkclient.Client, s
 	r.rebuildingDstCache.processingSnapshotName = snapshotName
 	r.rebuildingDstCache.processingSize = 0
 	r.rebuildingDstCache.processingState = types.ProgressStateInProgress
+	r.rebuildingDstCache.snapshotTotalRebuildingSize = srcSnapSvcLvol.ActualSize
 
 	srcReplicaServiceCli, err := GetServiceClient(r.rebuildingDstCache.srcReplicaAddress)
 	if err != nil {
@@ -2427,12 +2475,9 @@ func (r *Replica) RebuildingDstShallowCopyCheck(spdkClient *spdkclient.Client) (
 			}
 		}()
 
-		state, copiedClusters, totalClusters, errorMsg, err := srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyCheck(r.rebuildingDstCache.srcReplicaName, r.Name, r.rebuildingDstCache.processingSnapshotName)
+		state, handledClusters, totalClusters, errorMsg, err := srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyCheck(r.rebuildingDstCache.srcReplicaName, r.Name, r.rebuildingDstCache.processingSnapshotName)
 		if err != nil {
 			return nil, err
-		}
-		if errorMsg == "" && snapApiLvol.ActualSize != totalClusters*defaultClusterSize {
-			errorMsg = fmt.Errorf("rebuilding dst snapshot %s recorded actual size %d does not match the shallow copy reported total size %d", r.rebuildingDstCache.processingSnapshotName, snapApiLvol.ActualSize, totalClusters*defaultClusterSize).Error()
 		}
 		if errorMsg != "" {
 			if r.rebuildingDstCache.rebuildingError == "" {
@@ -2442,17 +2487,24 @@ func (r *Replica) RebuildingDstShallowCopyCheck(spdkClient *spdkclient.Client) (
 			r.rebuildingDstCache.processingState = types.ProgressStateError
 		} else {
 			r.rebuildingDstCache.processingState = state
-			r.rebuildingDstCache.processingSize = copiedClusters * defaultClusterSize
+			r.rebuildingDstCache.processingSize = handledClusters * defaultClusterSize
+			// After introducing range shallow copy, `totalClusters * defaultClusterSize` may be different from `snapApiLvol.ActualSize`
+			// In this case, we need to correct `r.rebuildingDstCache.rebuildingSize`
+			if r.rebuildingDstCache.snapshotTotalRebuildingSize != totalClusters*defaultClusterSize {
+				r.rebuildingDstCache.snapshotTotalRebuildingSize = totalClusters * defaultClusterSize
+				r.rebuildingDstCache.rebuildingSize = r.rebuildingDstCache.rebuildingSize - snapApiLvol.ActualSize + r.rebuildingDstCache.snapshotTotalRebuildingSize
+				r.log.Infof("Rebuilding dst replica %s snapshot %s shallow copy total size %d is different from the actual size %d, which typically means a range shallow copy", r.Name, r.rebuildingDstCache.processingSnapshotName, r.rebuildingDstCache.snapshotTotalRebuildingSize, snapApiLvol.ActualSize)
+			}
 		}
 	}
 
 	if r.rebuildingDstCache.rebuildingError == "" {
 		ret.State = r.rebuildingDstCache.processingState
 		ret.TotalState = types.ProgressStateInProgress
-		if snapApiLvol.ActualSize == 0 {
+		if r.rebuildingDstCache.snapshotTotalRebuildingSize == 0 {
 			ret.Progress = 100
 		} else {
-			ret.Progress = uint32(float64(r.rebuildingDstCache.processingSize) / float64(snapApiLvol.ActualSize) * 100)
+			ret.Progress = uint32(float64(r.rebuildingDstCache.processingSize) / float64(r.rebuildingDstCache.snapshotTotalRebuildingSize) * 100)
 		}
 		if r.rebuildingDstCache.rebuildingSize == 0 {
 			ret.TotalProgress = 100
@@ -2464,10 +2516,10 @@ func (r *Replica) RebuildingDstShallowCopyCheck(spdkClient *spdkclient.Client) (
 		ret.Error = r.rebuildingDstCache.rebuildingError
 		ret.State = types.InstanceStateError
 		ret.TotalState = types.ProgressStateError
-		if snapApiLvol == nil || snapApiLvol.ActualSize == 0 {
+		if snapApiLvol == nil || snapApiLvol.ActualSize == 0 || r.rebuildingDstCache.snapshotTotalRebuildingSize == 0 {
 			ret.Progress = 0
 		} else {
-			ret.Progress = uint32(float64(r.rebuildingDstCache.processingSize) / float64(snapApiLvol.ActualSize) * 100)
+			ret.Progress = uint32(float64(r.rebuildingDstCache.processingSize) / float64(r.rebuildingDstCache.snapshotTotalRebuildingSize) * 100)
 		}
 		if r.rebuildingDstCache.rebuildingSize == 0 {
 			ret.TotalProgress = 0
