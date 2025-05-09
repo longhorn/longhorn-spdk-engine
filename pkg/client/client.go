@@ -331,7 +331,7 @@ func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyStart(srcReplicaName, snapsh
 }
 
 // ReplicaRebuildingSrcShallowCopyCheck asks the src replica to check the shallow copy progress and status via the snapshot name
-func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyCheck(srcReplicaName, dstReplicaName, snapshotName string) (state string, copiedClusters, totalClusters uint64, errorMsg string, err error) {
+func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyCheck(srcReplicaName, dstReplicaName, snapshotName string) (state string, handledClusters, totalClusters uint64, errorMsg string, err error) {
 	if srcReplicaName == "" || dstReplicaName == "" {
 		return "", 0, 0, "", fmt.Errorf("failed to check rebuilding src replica shallow copy: missing required parameter src replica name or dst replica name")
 	}
@@ -351,7 +351,7 @@ func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyCheck(srcReplicaName, dstRep
 	if err != nil {
 		return "", 0, 0, "", errors.Wrapf(err, "failed to check rebuilding src replica %v shallow copy snapshot %v for dst replica %s", srcReplicaName, snapshotName, dstReplicaName)
 	}
-	return resp.State, resp.CopiedClusters, resp.TotalClusters, resp.ErrorMsg, nil
+	return resp.State, resp.HandledClusters, resp.TotalClusters, resp.ErrorMsg, nil
 }
 
 // ReplicaRebuildingDstStart asks the dst replica to create a new head lvol based on the external snapshot of the src replica and blindly expose it as a NVMf bdev.

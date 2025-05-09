@@ -814,17 +814,7 @@ func (s *Server) ReplicaRebuildingSrcShallowCopyCheck(ctx context.Context, req *
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %s during rebuilding src snapshot %s shallow copy check", req.Name, req.SnapshotName)
 	}
 
-	status, err := r.RebuildingSrcShallowCopyCheck(req.SnapshotName)
-	if err != nil {
-		return nil, err
-	}
-
-	return &spdkrpc.ReplicaRebuildingSrcShallowCopyCheckResponse{
-		State:          status.State,
-		CopiedClusters: status.CopiedClusters,
-		TotalClusters:  status.TotalClusters,
-		ErrorMsg:       status.Error,
-	}, nil
+	return r.RebuildingSrcShallowCopyCheck(req.SnapshotName)
 }
 
 func (s *Server) ReplicaRebuildingDstStart(ctx context.Context, req *spdkrpc.ReplicaRebuildingDstStartRequest) (ret *spdkrpc.ReplicaRebuildingDstStartResponse, err error) {
