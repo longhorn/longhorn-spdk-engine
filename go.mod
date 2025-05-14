@@ -11,7 +11,7 @@ require (
 	github.com/longhorn/backupstore v0.0.0-20250513044119-966fecd6b927
 	github.com/longhorn/go-common-libs v0.0.0-20250510103049-801acb30430c
 	github.com/longhorn/go-spdk-helper v0.0.0-20250513010708-f55efaeb7369
-	github.com/longhorn/types v0.0.0-20250416235128-0c407ad2b792
+	github.com/longhorn/types v0.0.0-20250519005747-57ce2e5a3ee5
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
