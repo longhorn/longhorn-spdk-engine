@@ -1450,12 +1450,12 @@ func (r *Replica) SnapshotHash(spdkClient *spdkclient.Client, snapshotName strin
 	r.SnapshotLvolHashStatusMap.Store(snapLvolName, hashStatus)
 
 	go func() {
-		_, err := spdkClient.BdevLvolRegisterSnapshotChecksum(snapSvcLvol.Alias)
+		_, err := spdkClient.BdevLvolRegisterRangeChecksums(snapSvcLvol.Alias)
 		if err != nil {
 			hashStatus.State = types.ProgressStateError
 			hashStatus.Error = err.Error()
 			r.SnapshotLvolHashStatusMap.Store(snapLvolName, hashStatus)
-			logrus.Errorf("Replica %v failed to register checksum for snapshot %s(%s)(%s): %v", r.Name, snapshotName, snapLvolName, snapSvcLvol.UUID, err)
+			logrus.Errorf("Replica %v failed to register range checksum for snapshot %s(%s)(%s): %v", r.Name, snapshotName, snapLvolName, snapSvcLvol.UUID, err)
 			return
 		}
 	}()
