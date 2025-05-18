@@ -8,7 +8,7 @@ require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20250421031654-0ef762b84472
+	github.com/longhorn/backupstore v0.0.0-20250513044119-966fecd6b927
 	github.com/longhorn/go-common-libs v0.0.0-20250510103049-801acb30430c
 	github.com/longhorn/go-spdk-helper v0.0.0-20250513010708-f55efaeb7369
 	github.com/longhorn/types v0.0.0-20250416235128-0c407ad2b792
@@ -16,10 +16,10 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.40.0
-	google.golang.org/grpc v1.72.0
+	google.golang.org/grpc v1.72.1
 	google.golang.org/protobuf v1.36.6
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
-	k8s.io/apimachinery v0.33.0
+	k8s.io/apimachinery v0.33.1
 )
 
 require (
