@@ -99,6 +99,7 @@ func ProtoReplicaToReplica(r *spdkrpc.Replica) *Replica {
 		State:      r.State,
 		ErrorMsg:   r.ErrorMsg,
 		Rebuilding: r.Rebuilding,
+		UUID:       r.Uuid,
 	}
 	for snapName, snapProtoLvol := range r.Snapshots {
 		res.Snapshots[snapName] = ProtoLvolToLvol(snapProtoLvol)
@@ -131,6 +132,7 @@ func ReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 		Rebuilding: r.Rebuilding,
 		State:      r.State,
 		ErrorMsg:   r.ErrorMsg,
+		Uuid:       r.UUID,
 	}
 
 	if r.BackingImageName != "" {
@@ -181,6 +183,7 @@ func ProtoEngineToEngine(e *spdkrpc.Engine) *Engine {
 		State:             e.State,
 		ErrorMsg:          e.ErrorMsg,
 		UblkID:            e.UblkId,
+		UUID:              e.Uuid,
 	}
 	for rName, mode := range e.ReplicaModeMap {
 		res.ReplicaModeMap[rName] = types.GRPCReplicaModeToReplicaMode(mode)
