@@ -447,6 +447,32 @@ func (c *SPDKClient) ReplicaRebuildingDstSnapshotCreate(name, snapshotName strin
 	return errors.Wrapf(err, "failed to create dst SPDK replica %s rebuilding snapshot %s", name, snapshotName)
 }
 
+// ReplicaRebuildingDstSetQosLimit sets a QoS limit (in MB/s) on the destination replica
+// during the shallow copy (rebuilding) process. The limit controls write throughput to reduce rebuild impact.
+// A QoS limit of 0 disables throttling (i.e., unlimited bandwidth).
+func (c *SPDKClient) ReplicaRebuildingDstSetQosLimit(replicaName string, qosLimitMbps int64) error {
+	if replicaName == "" {
+		return fmt.Errorf("failed to set QoS on replica: missing replica name")
+	}
+	if qosLimitMbps < 0 {
+		return fmt.Errorf("invalid QoS limit: must not be negative, got %d", qosLimitMbps)
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceMedTimeout)
+	defer cancel()
+
+	_, err := client.ReplicaRebuildingDstSetQosLimit(ctx, &spdkrpc.ReplicaRebuildingDstSetQosLimitRequest{
+		Name:         replicaName,
+		QosLimitMbps: qosLimitMbps,
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to set QoS limit %d MB/s on replica %s", qosLimitMbps, replicaName)
+	}
+
+	return nil
+}
+
 func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32,
 	initiatorAddress, targetAddress string, salvageRequested bool) (*api.Engine, error) {
 	if name == "" || volumeName == "" || len(replicaAddressMap) == 0 {
