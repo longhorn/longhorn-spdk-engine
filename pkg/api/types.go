@@ -28,6 +28,7 @@ type Replica struct {
 	ErrorMsg         string           `json:"error_msg"`
 	Rebuilding       bool             `json:"rebuilding"`
 	BackingImageName string           `json:"backing_image_name"`
+	UUID             string           `json:"uuid"`
 }
 
 type Lvol struct {
@@ -157,6 +158,7 @@ type Engine struct {
 	State             string                `json:"state"`
 	ErrorMsg          string                `json:"error_msg"`
 	UblkID            int32                 `json:"ublk_id"`
+	UUID              string                `json:"uuid"`
 }
 
 func ProtoEngineToEngine(e *spdkrpc.Engine) *Engine {
