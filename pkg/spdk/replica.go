@@ -2560,6 +2560,7 @@ func (r *Replica) rebuildingDstRangeShallowCopy(spdkClient *spdkclient.Client, s
 	offset, count := uint64(0), lvolRangeShallowCopyLength
 	dstSnapshotLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)
 	dstSnapshotLvolAlias := spdktypes.GetLvolAlias(r.LvsName, dstSnapshotLvolName)
+	rebuildingLvolName := GetReplicaRebuildingLvolName(r.Name)
 
 	r.log.Debugf("Replica is starting rebuilding dst range shallow copy for snapshot %s from src replica %s to dst replica %s with rebuilding lvol address %s", snapshotName, r.rebuildingDstCache.srcReplicaName, r.Name, dstRebuildingLvolAddress)
 
@@ -2591,7 +2592,7 @@ func (r *Replica) rebuildingDstRangeShallowCopy(spdkClient *spdkclient.Client, s
 		return errors.Wrapf(err, "failed to delete the corrupted or outdated snapshot lvol %s for rebuilding dst replica %v snapshot %s range shallow copy", dstSnapshotLvolAlias, r.Name, snapshotName)
 	}
 
-	rebuildingBdevLvol, err := spdkClient.BdevLvolGetByName(r.rebuildingDstCache.rebuildingLvol.Alias, 0)
+	rebuildingBdevLvol, err := spdkClient.BdevLvolGetByName(spdktypes.GetLvolAlias(r.LvsName, rebuildingLvolName), 0)
 	if err != nil {
 		return errors.Wrapf(err, "failed to get the rebuilding lvol %s for rebuilding dst replica %v snapshot %s range shallow copy", r.rebuildingDstCache.rebuildingLvol.Alias, r.Name, snapshotName)
 	} else {
