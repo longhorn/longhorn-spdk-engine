@@ -465,6 +465,9 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			}
 			c.Assert(snapshotNameRebuild, Not(Equals), "")
 
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName2, false)
+			c.Assert(err, IsNil)
+
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName3},
 				map[string][]string{
 					snapshotName2:       {snapshotNameRebuild},
@@ -1235,6 +1238,16 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				snapshotOpts[snapName] = api.SnapshotOptions{UserCreated: true}
 			}
 			snapshotOpts[snapshotNameRebuild1] = api.SnapshotOptions{UserCreated: false}
+
+			for snapName := range snapshotMap {
+				err = spdkCli.EngineSnapshotHash(engineName, snapName, false)
+				if snapName == snapshotNameRebuild1 {
+					c.Assert(err, NotNil) // This snapshot is system created, so it should not be hashed
+				} else {
+					c.Assert(err, IsNil)
+				}
+			}
+
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName2, replicaName3}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Write more data to the head before the 2nd rebuilding
@@ -1329,6 +1342,16 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				snapshotName42:       {},
 			}
 			snapshotOpts[snapshotNameRebuild2] = api.SnapshotOptions{UserCreated: false}
+
+			for snapName := range snapshotMap {
+				err = spdkCli.EngineSnapshotHash(engineName, snapName, false)
+				if snapName == snapshotNameRebuild1 || snapName == snapshotNameRebuild2 {
+					c.Assert(err, NotNil) // This snapshot is system created, so it should not be hashed
+				} else {
+					c.Assert(err, IsNil)
+				}
+			}
+
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Purging snapshots would lead to rebuild11 cleanup
@@ -2128,6 +2151,16 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				snapshotOpts[snapName] = api.SnapshotOptions{UserCreated: true}
 			}
 			snapshotOpts[snapshotNameRebuild1] = api.SnapshotOptions{UserCreated: false}
+
+			for snapName := range snapshotMap {
+				err = spdkCli.EngineSnapshotHash(engineName, snapName, false)
+				if snapName == snapshotNameRebuild1 {
+					c.Assert(err, NotNil) // This snapshot is system created, so it should not be hashed
+				} else {
+					c.Assert(err, IsNil)
+				}
+			}
+
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// The newly rebuilt replicas should contain correct/unchanged data
