@@ -328,6 +328,11 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			snapshotName1 := "snap1"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName1)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName1, false)
+			c.Assert(err, IsNil)
+			for replicaName := range replicaAddressMap {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, snapshotName1)
+			}
 
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), "seek=200", "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
@@ -337,6 +342,8 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 			snapshotName2 := "snap2"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName2)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName2, false)
 			c.Assert(err, IsNil)
 
 			// Check both replica snapshot map after the snapshot operations
@@ -352,6 +359,11 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName1)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName2, false)
+			c.Assert(err, IsNil)
+			for replicaName := range replicaAddressMap {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, snapshotName2)
+			}
 
 			// Detach and re-attach the volume
 			err = spdkCli.EngineDelete(engineName)
@@ -464,6 +476,9 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				}
 			}
 			c.Assert(snapshotNameRebuild, Not(Equals), "")
+
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName2, false)
+			c.Assert(err, IsNil)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName3},
 				map[string][]string{
@@ -673,6 +688,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			snapshotName11 := "snap11"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName11)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName11, false)
+			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
 			//       nil (backing image) -> snap11 -> head
@@ -690,6 +707,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(cksumBefore12, Not(Equals), "")
 			snapshotName12 := "snap12"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName12, false)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -709,6 +728,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(cksumBefore13, Not(Equals), "")
 			snapshotName13 := "snap13"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName13)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName13, false)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -730,6 +751,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			snapshotName14 := "snap14"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName14)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName14, false)
+			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
 			//       nil (backing image) -> snap11 -> snap12 -> snap13 -> snap14 -> head
@@ -750,6 +773,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(cksumBefore15, Not(Equals), "")
 			snapshotName15 := "snap15"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName15)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName15, false)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -829,6 +854,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			snapshotName21 := "snap21"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName21)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName21, false)
+			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
 			// 	 nil (backing image) -> snap11[0,10] -> snap12[10,20] -> snap13[20,30] -> snap14[30,40] -> snap15[40,50]
@@ -853,6 +880,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(cksumBefore22, Not(Equals), "")
 			snapshotName22 := "snap22"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName22)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName22, false)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -880,6 +909,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			snapshotName23 := "snap23"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName23)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName23, false)
+			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
 			// 	 nil (backing image) -> snap11[0,10] -> snap12[10,20] -> snap13[20,30] -> snap14[30,40] -> snap15[40,50]
@@ -906,11 +937,26 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName23)
 			c.Assert(strings.Contains(err.Error(), "since it is the parent of volume head"), Equals, true)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName23, false)
+			c.Assert(err, IsNil)
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, snapshotName23)
+			}
 
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName12)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName13, false)
+			c.Assert(err, IsNil)
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, snapshotName13)
+			}
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName14)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName15, false)
+			c.Assert(err, IsNil)
+			for _, replicaName := range []string{replicaName1, replicaName2} {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, snapshotName15)
+			}
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName13)
 			c.Assert(strings.Contains(err.Error(), "since it contains multiple children"), Equals, true)
 
@@ -979,6 +1025,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			snapshotName31 := "snap31"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName31)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName31, false)
+			c.Assert(err, IsNil)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
@@ -999,6 +1047,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			snapshotName32 := "snap32"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName32)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName32, false)
+			c.Assert(err, IsNil)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
@@ -1012,6 +1062,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName31)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName32, false)
 			c.Assert(err, IsNil)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
@@ -1078,6 +1130,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			snapshotName41 := "snap41"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName41)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName41, false)
+			c.Assert(err, IsNil)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
@@ -1098,6 +1152,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(cksumBefore42, Not(Equals), "")
 			snapshotName42 := "snap42"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName42)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName42, false)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
@@ -1235,6 +1291,16 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				snapshotOpts[snapName] = api.SnapshotOptions{UserCreated: true}
 			}
 			snapshotOpts[snapshotNameRebuild1] = api.SnapshotOptions{UserCreated: false}
+
+			for snapName := range snapshotMap {
+				err = spdkCli.EngineSnapshotHash(engineName, snapName, false)
+				if snapName == snapshotNameRebuild1 {
+					c.Assert(err, NotNil) // This snapshot is system created, so it should not be hashed
+				} else {
+					c.Assert(err, IsNil)
+				}
+			}
+
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName2, replicaName3}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Write more data to the head before the 2nd rebuilding
@@ -1329,6 +1395,16 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				snapshotName42:       {},
 			}
 			snapshotOpts[snapshotNameRebuild2] = api.SnapshotOptions{UserCreated: false}
+
+			for snapName := range snapshotMap {
+				err = spdkCli.EngineSnapshotHash(engineName, snapName, false)
+				if snapName == snapshotNameRebuild1 || snapName == snapshotNameRebuild2 {
+					c.Assert(err, NotNil) // This snapshot is system created, so it should not be hashed
+				} else {
+					c.Assert(err, IsNil)
+				}
+			}
+
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Purging snapshots would lead to rebuild11 cleanup
@@ -1688,7 +1764,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11 -> head
+			//       BackingImage -> snap11 -> head
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {types.VolumeHead},
@@ -1708,7 +1784,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11 -> snap12 -> head
+			//       BackingImage -> snap11 -> snap12 -> head
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12},
@@ -1729,7 +1805,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11 -> snap12 -> snap13 -> head
+			//       BackingImage -> snap11 -> snap12 -> snap13 -> head
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12},
@@ -1742,9 +1818,9 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, replicaAddressMap)
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11 ->  snap12 -> snap13
-			//                              \
-			//                                -> head
+			//       BackingImage -> snap11 ->  snap12 -> snap13
+			//                          \
+			//                           -> head
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12, types.VolumeHead},
@@ -1766,9 +1842,9 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11 ->  snap12 -> snap13
-			//                              \
-			//                                -> snap21 -> head
+			//       BackingImage -> snap11 ->  snap12 -> snap13
+			//                          \
+			//                           -> snap21 -> head
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12, snapshotName21},
@@ -1791,9 +1867,9 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11 ->  snap12 -> snap13
-			//                              \
-			//                                -> snap21 -> snap22 -> head
+			//       BackingImage -> snap11 ->  snap12 -> snap13
+			//                          \
+			//                           -> snap21 -> snap22 -> head
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12, snapshotName21},
@@ -1808,11 +1884,11 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			revertSnapshot(c, spdkCli, snapshotName21, volumeName, engineName, replicaAddressMap)
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11 ->  snap12 -> snap13
-			//                              \
-			//                                -> snap21 -> snap22
-			//                                      \
-			//                                        -> head
+			//       BackingImage -> snap11 ->  snap12 -> snap13
+			//                          \
+			//                           -> snap21 -> snap22
+			//                                 \
+			//                                  -> head
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12, snapshotName21},
@@ -1836,11 +1912,11 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11 ->  snap12 -> snap13
-			//                              \
-			//                                -> snap21 -> snap22
-			//                                      \
-			//                                        -> snap31 -> head
+			//       BackingImage -> snap11 ->  snap12 -> snap13
+			//                          \
+			//                           -> snap21 -> snap22
+			//                                 \
+			//                                  -> snap31 -> head
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12, snapshotName21},
@@ -1861,11 +1937,11 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(cksumBeforeRebuild11, Not(Equals), "")
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] -> snap13[2*DATA,3*DATA]
-			//                                            \
-			//                                             -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
-			//                                                                \
-			//                                                                 -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
+			//       BackingImage -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] -> snap13[2*DATA,3*DATA]
+			//                          \
+			//                           -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
+			//                                 \
+			//                                  -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12, snapshotName21},
@@ -1925,11 +2001,11 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(engine.Endpoint, Equals, endpoint)
 
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] -> snap13[2*DATA,3*DATA]
-			//                                            \
-			//                                             -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
-			//                                                                \
-			//                                                                 -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
+			//       BackingImage -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] -> snap13[2*DATA,3*DATA]
+			//                          \
+			//                           -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
+			//                                 \
+			//                                  -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName2},
 				map[string][]string{
 					snapshotName11: {snapshotName12, snapshotName21},
@@ -1941,20 +2017,21 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				},
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
-			// Mess up snapshots in chain 1 by re-creating snap12 with other random data
-			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, replicaTmpAddressMap)
+			// Mess up snapshots in chain 1 by corrupting data for snap12 and introducing more invalid snapshots/head for the crashed replica1
+			revertSnapshot(c, spdkCli, snapshotName12, volumeName, engineName, replicaTmpAddressMap)
 
-			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] -> snap13[2*DATA,3*DATA]
-			//                                \          \
-			//                                 \          -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
-			//                                  \                            \
-			//                                   \                            -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
-			//                                 -> head
+			// Current snapshot tree of the crashed replica1 (with backing image):
+			//                                               -> head[,]
+			//                                              /
+			//       BackingImage -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] -> snap13[2*DATA,3*DATA]
+			//                          \
+			//                           -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
+			//                                 \
+			//                                  -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1},
 				map[string][]string{
-					snapshotName11: {snapshotName12, snapshotName21, types.VolumeHead},
-					snapshotName12: {snapshotName13},
+					snapshotName11: {snapshotName12, snapshotName21},
+					snapshotName12: {snapshotName13, types.VolumeHead},
 					snapshotName13: {},
 					snapshotName21: {snapshotName22, snapshotName31},
 					snapshotName22: {},
@@ -1964,39 +2041,15 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName13)
 			c.Assert(err, IsNil)
-			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName12)
-			c.Assert(err, IsNil)
 
-			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11[0,1*DATA]
-			//                                \          \
-			//                                 \          -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
-			//                                  \                            \
-			//                                   \                            -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
-			//                                 -> head
-			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1},
-				map[string][]string{
-					snapshotName11: {snapshotName21, types.VolumeHead},
-					snapshotName21: {snapshotName22, snapshotName31},
-					snapshotName22: {},
-					snapshotName31: {},
-				},
-				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
-
-			// Write 2 * dataCountInMB data to the invalid snap12
-			offsetInMB = 1 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", 2*dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
-			c.Assert(err, IsNil)
-			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12)
-			c.Assert(err, IsNil)
-
-			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11[0,1*DATA]
-			//                                \          \
-			//                                 \          -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
-			//                                  \                            \
-			//                                   \                            -> snap31[2*DATA,3*DATA]
-			//                                 -> snap21 -> head
+			// Current snapshot tree of the crashed replica1 (with backing image):
+			//                                               -> head[,]
+			//                                              /
+			//       BackingImage -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA]
+			//                          \
+			//                           -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
+			//                                 \
+			//                                  -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1},
 				map[string][]string{
 					snapshotName11: {snapshotName21, snapshotName12},
@@ -2007,28 +2060,74 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				},
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
-			// Then create an extra snapshot and leave an invalid head
+			// Try to write invalid data into the snap12 for replica1
+			offsetInMB = 2 * dataCountInMB
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			c.Assert(err, IsNil)
+			// Since we cannot modify or even delete the snap12 now, we need to put the invalid data to the new snap12-tmp
+			snapshotName12Tmp := "snap12-tmp"
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12Tmp)
+			c.Assert(err, IsNil)
+			// Then deleting snap12 will make ll data be merged into snap12-tmp
+			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName12)
+			c.Assert(err, IsNil)
+			// Now we can recreate the snap12 and delete the snap12-tmp
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName12)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName12Tmp)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName12, false)
+			c.Assert(err, IsNil)
+
+			// Current snapshot tree of the crashed replica1 (with backing image):
+			//       BackingImage -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA][2*INVALID_DATA, 3*INVALID_DATA] -> head[,]
+			//                          \
+			//                           -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
+			//                                 \
+			//                                  -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
+			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1},
+				map[string][]string{
+					snapshotName11: {snapshotName21, snapshotName12},
+					snapshotName12: {types.VolumeHead},
+					snapshotName21: {snapshotName22, snapshotName31},
+					snapshotName22: {},
+					snapshotName31: {},
+				},
+				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
+
+			// Then create the invalid snapshot13
+			offsetInMB = 2 * dataCountInMB
+			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			c.Assert(err, IsNil)
+			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName13)
+			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName13, false)
+			c.Assert(err, IsNil)
+
+			// Finally, create an extra snapshot14 and leave an invalid head
 			offsetInMB = 3 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 			snapshotName14 := "snap14"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName14)
 			c.Assert(err, IsNil)
+			err = spdkCli.EngineSnapshotHash(engineName, snapshotName14, false)
+			c.Assert(err, IsNil)
 			offsetInMB = 4 * dataCountInMB
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 
-			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11[0,1*DATA]
-			//                                \          \
-			//                                 \          -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
-			//                                  \                            \
-			//                                   \                            -> snap31[2*DATA,3*DATA]
-			//                                 -> snap21 -> snap14 -> head
+			// Current snapshot tree of the crashed replica1 (with backing image):
+			//       BackingImage -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA][2*INVALID_DATA, 3*INVALID_DATA] -> snap13[2*INVALID_DATA, 3*INVALID_DATA] -> snap14[3*INVALID_DATA, 4*INVALID_DATA] -> head[4*INVALID_DATA, 5*INVALID_DATA]
+			//                          \
+			//                           -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
+			//                                 \
+			//                                  -> snap31[2*DATA,3*DATA] -> head[3*DATA,4*DATA]
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1},
 				map[string][]string{
 					snapshotName11: {snapshotName21, snapshotName12},
-					snapshotName12: {snapshotName14},
+					snapshotName12: {snapshotName13},
+					snapshotName13: {snapshotName14},
 					snapshotName14: {types.VolumeHead},
 					snapshotName21: {snapshotName22, snapshotName31},
 					snapshotName22: {},
@@ -2084,14 +2183,13 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW, replicaName2: types.ModeRW})
 
-			// Rebuilding once leads to 1 snapshot creations (with random name)
+			// Rebuilding once leads to snap12 and snap13 reuse (which involve range shallow copy) as well as invalid snap14 deletion
 			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] (messed up in replica1, which has invalid data [1*DATA,3*DATA]) (-> replica1 snap14[3*DATA,4*DATA] -> replica 1 invalid head[4*DATA,5*DATA])
-			//                                            \
-			//                                             -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
-			//                                                                \
-			//                                                                 -> snap31[2*DATA,3*DATA] -> rebuild11[3*DATA,4*DATA] -> head[4*DATA,4*DATA]
-
+			//       BackingImage -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] -> snap13[2*DATA,3*DATA]
+			//                          \
+			//                           -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
+			//                                 \
+			//                                  -> snap31[2*DATA,3*DATA] -> rebuild11[3*DATA,4*DATA] -> head[4*DATA,4*DATA]
 			snapshotMap := map[string][]string{
 				snapshotName11:       {snapshotName12, snapshotName21},
 				snapshotName12:       {snapshotName13},
@@ -2106,6 +2204,16 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				snapshotOpts[snapName] = api.SnapshotOptions{UserCreated: true}
 			}
 			snapshotOpts[snapshotNameRebuild1] = api.SnapshotOptions{UserCreated: false}
+
+			for snapName := range snapshotMap {
+				err = spdkCli.EngineSnapshotHash(engineName, snapName, false)
+				if snapName == snapshotNameRebuild1 {
+					c.Assert(err, NotNil) // This snapshot is system created, so it should not be hashed
+				} else {
+					c.Assert(err, IsNil)
+				}
+			}
+
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// The newly rebuilt replicas should contain correct/unchanged data
@@ -2123,18 +2231,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 			c.Assert(cksumAfter31, Equals, cksumBefore31)
 
-			// Verify chain2
+			// Verify chain2, the volume head will be reverted to the snapshot22
 			revertSnapshot(c, spdkCli, snapshotName22, volumeName, engineName, replicaAddressMap)
-
-			// Rebuilding once leads to 1 snapshot creations (with random name)
-			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] (messed up in replica1, which has invalid data [1*DATA,3*DATA]) (-> replica1 snap14[3*DATA,4*DATA] -> replica 1 invalid head[4*DATA,5*DATA])
-			//                                            \
-			//                                             -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA] -> head
-			//                                                                \
-			//                                                             \
-			//                                                                  -> snap31[2*DATA,3*DATA] -> rebuild11[3*DATA,4*DATA]
-
 			for snapName := range snapshotMap {
 				snapshotOpts[snapName] = api.SnapshotOptions{UserCreated: true}
 			}
@@ -2164,17 +2262,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 			c.Assert(cksumAfter22, Equals, cksumBefore22)
 
-			// Verify chain1
+			// Verify chain1, the volume head will be reverted to the snapshot13
 			revertSnapshot(c, spdkCli, snapshotName13, volumeName, engineName, replicaAddressMap)
-
-			// Rebuilding once leads to 1 snapshot creations (with random name)
-			// Current snapshot tree (with backing image):
-			//       nil (backing image) -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] -> snap13 -> head
-			//                                            \
-			//                                             -> snap21[1*DATA,2*DATA] -> snap22[2*DATA,3*DATA]
-			//                                                                \
-			//                                                             \
-			//                                                                  -> snap31[2*DATA,3*DATA] -> rebuild11[3*DATA,4*DATA]
 			for snapName := range snapshotMap {
 				snapshotOpts[snapName] = api.SnapshotOptions{UserCreated: true}
 			}
@@ -2338,17 +2427,20 @@ func waitReplicaSnapshotChecksumTimeout(c *C, spdkCli *client.SPDKClient, replic
 
 	hasChecksum := true
 	for {
-		hasChecksum = true
 		select {
 		case <-timer.C:
 			c.Assert(hasChecksum, Equals, true)
 			return
 		case <-ticker.C:
+			hasChecksum = true
 			replica, err := spdkCli.ReplicaGet(replicaName)
 			c.Assert(err, IsNil)
 			if targetSnapName == "" || replica.Snapshots[targetSnapName] != nil {
 				for snapName, snap := range replica.Snapshots {
 					if targetSnapName == "" || snapName == targetSnapName {
+						if !snap.UserCreated {
+							continue
+						}
 						if snap.SnapshotChecksum == "" {
 							hasChecksum = false
 							break
