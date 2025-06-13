@@ -43,8 +43,7 @@ RUN echo "Cloning longhorn/dep-versions SRC_BRANCH=${SRC_BRANCH} SRC_TAG=${SRC_T
         echo "Checking out tag ${SRC_TAG}"; \
         cd /usr/src/dep-versions && git checkout tags/${SRC_TAG}; \
     fi && \
-    echo "dep-versions commit: $(git rev-parse HEAD)" && \
-    sleep 10
+    echo "dep-versions commit: $(git rev-parse HEAD)"
 
 # Build spdk
 RUN export REPO_OVERRIDE="" && \
