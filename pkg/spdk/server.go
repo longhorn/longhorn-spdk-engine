@@ -307,12 +307,13 @@ func (s *Server) verify() (err error) {
 			backingImage.State = types.BackingImageStatePending
 			backingImageMapForSync[lvolName] = backingImage
 			backingImageMap[lvolName] = backingImage
-		} else {
+		} else if IsProbablyReplicaName(lvolName) {
 			lvsUUID := bdevLvol.DriverSpecific.Lvol.LvolStoreUUID
 			specSize := bdevLvol.NumBlocks * uint64(bdevLvol.BlockSize)
 			actualSize := bdevLvol.DriverSpecific.Lvol.NumAllocatedClusters * uint64(defaultClusterSize)
 			replicaMap[lvolName] = NewReplica(s.ctx, lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, actualSize, s.updateChs[types.InstanceTypeReplica])
 			replicaMapForSync[lvolName] = replicaMap[lvolName]
+			logrus.Infof("Detected one possible existing replica %s(%s) with disk %s(%s), spec size %d, actual size %d", bdevLvol.Aliases[0], bdevLvol.UUID, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, actualSize)
 		}
 	}
 	for replicaName, r := range replicaMap {
