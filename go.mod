@@ -24,8 +24,12 @@ require (
 
 require (
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
+	gopkg.in/inf.v0 v0.9.1 // indirect
 )
 
 require (
@@ -63,3 +67,7 @@ require (
 	k8s.io/mount-utils v0.31.3 // indirect
 	k8s.io/utils v0.0.0-20241210054802-24370beab758 // indirect
 )
+
+replace github.com/longhorn/go-common-libs => github.com/COLDTURNIP/longhorn-go-common-libs v0.0.0-20250718014604-aa4c0c7ca10d
+
+replace github.com/longhorn/backupstore => github.com/COLDTURNIP/longhorn-backupstore v0.0.0-20250718065324-849563782471
