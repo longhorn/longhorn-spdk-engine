@@ -127,7 +127,7 @@ func LaunchTestSPDKTarget(c *C, execute func(envs []string, name string, args []
 
 func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error), wg *sync.WaitGroup) {
 	LaunchTestSPDKTarget(c, execute)
-	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort)
+	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort, false)
 	c.Assert(err, IsNil)
 
 	spdkGRPCListener, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
