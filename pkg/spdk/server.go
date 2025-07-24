@@ -1126,6 +1126,10 @@ func (s *Server) EngineExpand(ctx context.Context, req *spdkrpc.EngineExpandRequ
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for resumption", req.Name)
 	}
 
+	if types.IsUblkFrontend(e.Frontend) {
+		return nil, grpcstatus.Errorf(grpccodes.Unimplemented, "cannot expand ublk frontend engine %v", req.Name)
+	}
+
 	err = e.Expand(s.spdkClient, req.Size)
 	if err != nil {
 		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to expand engine %v", req.Name).Error())
