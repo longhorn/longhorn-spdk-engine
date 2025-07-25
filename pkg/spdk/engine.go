@@ -1367,42 +1367,18 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (err error) 
 		return errors.New("expansion failed: no healthy replica or at least one replica is under rebuilding")
 	}
 
-	// check if bdev raid exist
-	bdevRaidUUID := ""
-	bdevRaid, err := spdkClient.BdevRaidGet(e.Name, 0)
-	if err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return errors.Wrap(err, "failed to get bdev raid")
-	} else if err == nil && len(bdevRaid) != 0 {
-		bdevRaidUUID = bdevRaid[0].UUID
+	// prepareRaidForExpansion checks if RAID exists, suspends frontend if needed, and deletes the RAID bdev.
+	isSusupend, bdevRaidUUID, err := e.prepareRaidForExpansion(spdkClient)
+	if err != nil {
+		return errors.Wrap(err, "prepare raid for expansion failed")
 	}
-
-	// if raid is deleted sometimes, no need for suspend and raid delete
-	// after expansion, will create raid and reconnect again
-	if bdevRaidUUID != "" {
-		// suspend IO
-		if e.Endpoint != "" && e.initiator != nil {
-			if err := e.initiator.Suspend(true, true); err != nil {
-				return err
+	if isSusupend {
+		defer func() {
+			if frontendErr := e.initiator.Resume(); frontendErr != nil {
+				frontendErr = errors.Wrapf(frontendErr, "failed to resume NVMe initiator during engine %s", e.Name)
+				engineErr = frontendErr
 			}
-			defer func() {
-				if frontendErr := e.initiator.Resume(); frontendErr != nil {
-					frontendErr = errors.Wrapf(frontendErr, "failed to resume NVMe initiator during engine %s", e.Name)
-					engineErr = frontendErr
-				}
-			}()
-		}
-
-		// delete raid bdev if still exist
-		deleted, err := spdkClient.BdevRaidDelete(e.Name)
-		if err != nil {
-			if jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-				e.log.WithField("engineName", e.Name).Info("RAID bdev already deleted")
-			} else {
-				return err
-			}
-		} else if !deleted {
-			return fmt.Errorf("engine %s raid delete failed", e.Name)
-		}
+		}()
 	}
 
 	// expand replicas
@@ -1497,6 +1473,45 @@ func (e *Engine) isAnyReplicaUnderRebuilding(replicaClients map[string]*client.S
 		}
 	}
 	return false
+}
+
+func (e *Engine) prepareRaidForExpansion(spdkClient *spdkclient.Client) (suspendFrontend bool, bdevUUID string, err error) {
+	bdevRaidUUID := ""
+
+	// check if bdev raid exist
+	bdevRaid, err := spdkClient.BdevRaidGet(e.Name, 0)
+	if err != nil {
+		if jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return false, "", nil // RAID does not exist, nothing to do
+		}
+		return false, "", errors.Wrap(err, "failed to get bdev raid")
+	}
+	if len(bdevRaid) == 0 {
+		return false, "", nil // RAID already deleted
+	}
+	bdevUUID = bdevRaid[0].UUID
+
+	// Suspend IO if frontend is active
+	if e.Endpoint != "" && e.initiator != nil {
+		if err := e.initiator.Suspend(true, true); err != nil {
+			return false, "", errors.Wrapf(err, "failed to suspend initiator for engine %s", e.Name)
+		}
+		suspendFrontend = true
+	}
+
+	// delete raid bdev if still exist
+	deleted, err := spdkClient.BdevRaidDelete(e.Name)
+	if err != nil {
+		if jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			e.log.WithField("engineName", e.Name).Info("RAID bdev already deleted")
+		} else {
+			return false, bdevRaidUUID, err
+		}
+	} else if !deleted {
+		return false, bdevRaidUUID, fmt.Errorf("engine %s raid delete failed", e.Name)
+	}
+
+	return suspendFrontend, bdevUUID, nil
 }
 
 func (e *Engine) expandReplicas(replicaClients map[string]*client.SPDKClient, spdkClient *spdkclient.Client, size uint64) (expansionSuccess bool) {
