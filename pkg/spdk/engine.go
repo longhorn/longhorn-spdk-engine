@@ -929,8 +929,8 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 
 		// If the volume is not attached and do the expand
 		// At first, we create and attach the engine with new size, but not yet to expand
-		// it will cause inifinite loop for size mismatching
-		// loop to destory and create engine
+		// it will cause infinite loop for size mismatching
+		// loop to destroy and create engine
 		// and there is no chance to execute EngineExpand()
 
 		// wait the lh-manager to reconcile engine CR and call EngineExpand()
@@ -1321,26 +1321,13 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (err error) 
 		"newSize":    size,
 	}).Info("Expanding engine")
 
-	// todo, support ublk expansion in the future
-	if types.IsUblkFrontend(e.Frontend) {
-		return errors.New("ublk frontend not support expansion")
-	}
-
 	if err := e.startExpansion(size); err != nil {
-		e.log.WithFields(logrus.Fields{
-			"engineName": e.Name,
-			"volumeName": e.VolumeName,
-			"frontend":   e.Frontend,
-			"specSize":   e.SpecSize,
-			"newSize":    size,
-			"err":        err,
-		}).Error("Engine failed to start expansion")
-		return fmt.Errorf("startExpansion failed: %w", err)
+		return errors.Wrap(err, "startExpansion failed")
 	}
 
 	var (
-		expanded  bool  = false
-		engineErr error = nil
+		expanded  = false
+		engineErr error
 	)
 
 	// engineErr will be set when the engine failed to do any non-recoverable operations.
@@ -1376,16 +1363,8 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (err error) 
 		return err
 	}
 	defer e.closeRplicaClients(replicaClients)
-	if len(replicaClients) == 0 {
-		e.log.WithFields(logrus.Fields{
-			"engineName": e.Name,
-			"volumeName": e.VolumeName,
-		}).Error("Expanding engine; no healthy replica")
-		e.State = types.InstanceStateError
-		return errors.New("Expanding engine; no healthy replica")
-	}
-	if e.isAnyReplicaUnderRebuilding(replicaClients) {
-		return errors.New("Expanding engine; at least one of replica is under rebuilding")
+	if len(replicaClients) == 0 || e.isAnyReplicaUnderRebuilding(replicaClients) {
+		return errors.New("expansion failed: no healthy replica or at least one replica is under rebuilding")
 	}
 
 	// check if bdev raid exist
@@ -1427,24 +1406,16 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (err error) 
 	}
 
 	// expand replicas
-	expansionSuccess := e.expandReplicas(replicaClients, spdkClient, size)
+	expansionSucceeded := e.expandReplicas(replicaClients, spdkClient, size)
 
-	// create raid bdev with the same UUID
-	if err := e.recreateBdevRaid(spdkClient, bdevRaidUUID); err != nil {
+	// recreate RAID and reconnect frontend
+	if err := e.reconnectFrontend(spdkClient, bdevRaidUUID); err != nil {
 		e.log.WithFields(logrus.Fields{
 			"engineName": e.Name,
 			"volumeName": e.VolumeName,
 			"error":      err,
-		}).Error("recreate raid bdev failed")
+		}).Error("reconnectFrontend failed")
 		return err
-	}
-
-	// reconnect
-	if e.Frontend == types.FrontendSPDKTCPBlockdev && e.Endpoint != "" {
-		if err := e.reconnectNvmeTcpFrontend(spdkClient); err != nil {
-			e.log.WithError(err).Errorf("failed to reconnect nvme tcp frontend during engine %s expansion", e.Name)
-			return err
-		}
 	}
 
 	e.log.WithFields(logrus.Fields{
@@ -1455,7 +1426,7 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (err error) 
 		"newSize":    size,
 	}).Info("Expanding engine complete")
 
-	expanded = expansionSuccess // which could be true even in partial success
+	expanded = expansionSucceeded // which could be true even in partial success
 	return nil
 }
 
@@ -1466,6 +1437,10 @@ func (e *Engine) startExpansion(size uint64) (err error) {
 
 	if e.IsRestoring {
 		return fmt.Errorf("restoring is in progress")
+	}
+
+	if types.IsUblkFrontend(e.Frontend) {
+		return errors.New("ublk frontend not support expansion")
 	}
 
 	defer func() {
@@ -1606,12 +1581,12 @@ func (e *Engine) expandReplicas(replicaClients map[string]*client.SPDKClient, sp
 	}
 }
 
-func (e *Engine) recreateBdevRaid(spdkClient *spdkclient.Client, bdevRaidUUID string) (err error) {
+func (e *Engine) reconnectFrontend(spdkClient *spdkclient.Client, bdevRaidUUID string) (err error) {
 	e.log.WithFields(logrus.Fields{
 		"engineName": e.Name,
 		"volumeName": e.VolumeName,
 		"frontend":   e.Frontend,
-	}).Info("recreate raid")
+	}).Info("reconnectFrontend")
 
 	var (
 		attempts           = 10
@@ -1646,10 +1621,22 @@ func (e *Engine) recreateBdevRaid(spdkClient *spdkclient.Client, bdevRaidUUID st
 	}
 
 	// wait the raid bdev is created
-	return util.BackoffRetry(attempts, baseDelay, maxDelay, exponentialBackoff, func() error {
+	if err := util.BackoffRetry(attempts, baseDelay, maxDelay, exponentialBackoff, func() error {
 		_, err := spdkClient.BdevRaidGet(e.Name, 0)
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+
+	// reconnect
+	if e.Frontend == types.FrontendSPDKTCPBlockdev && e.Endpoint != "" {
+		if err := e.reconnectNvmeTcpFrontend(spdkClient); err != nil {
+			e.log.WithError(err).Errorf("failed to reconnect nvme tcp frontend during engine %s expansion", e.Name)
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string) (err error) {
