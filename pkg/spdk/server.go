@@ -35,8 +35,6 @@ const (
 	MonitorInterval = 3 * time.Second
 )
 
-// var _ spdkrpc.SPDKServiceServer = (*Server)(nil)
-
 type Server struct {
 	spdkrpc.UnimplementedSPDKServiceServer
 	sync.RWMutex

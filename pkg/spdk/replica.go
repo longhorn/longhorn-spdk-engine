@@ -1088,7 +1088,7 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 		head := BdevLvolInfoToServiceLvol(&headBdevLvol)
 
 		if head.SpecSize != size {
-			return errors.New("lvol expand complete but the lvol is still")
+			return fmt.Errorf("lvol expand complete but lvol reported size %d != expected %d", head.SpecSize, size)
 		}
 
 		return nil
