@@ -1527,6 +1527,11 @@ func (e *Engine) expandReplicas(replicaClients map[string]*client.SPDKClient, sp
 
 		go func(replicaName string, replicaClient *client.SPDKClient) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					e.log.WithField("replica", replicaName).Errorf("Panic during replica expansion: %v", r)
+				}
+			}()
 
 			replicaStatus, ok := e.ReplicaStatusMap[replicaName]
 			if !ok {
@@ -1564,6 +1569,33 @@ func (e *Engine) expandReplicas(replicaClients map[string]*client.SPDKClient, sp
 	}
 
 	wg.Wait()
+
+	// Some replicas may have returned an error during expansion due to unexpected issues
+	// (e.g. temporary network glitch, internal error, timeout).
+	// To avoid mistakenly marking those as failed, we perform a single follow-up check
+	// to verify if the replica was actually expanded.
+	//
+	// If ReplicaGet shows the desired size, we consider the expansion successful
+	// and remove it from the failed list.
+	for replicaName := range failedReplica {
+		client := replicaClients[replicaName]
+
+		replica, err := client.ReplicaGet(replicaName)
+		if err != nil {
+			e.log.WithError(err).WithField("replica", replicaName).
+				Warn("Could not verify replica expansion after failure")
+			continue
+		}
+
+		if replica.SpecSize == size {
+			e.log.WithField("replica", replicaName).
+				Info("Replica expansion succeeded despite earlier error, removing from failure list")
+
+			errorLock.Lock()
+			delete(failedReplica, replicaName)
+			errorLock.Unlock()
+		}
+	}
 
 	switch {
 	case len(failedReplica) == 0:
