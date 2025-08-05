@@ -10,7 +10,7 @@ require (
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20250804022317-794abf817297
 	github.com/longhorn/go-common-libs v0.0.0-20250725014231-2c0bac610814
-	github.com/longhorn/go-spdk-helper v0.0.3-0.20250712161648-42d38592f838
+	github.com/longhorn/go-spdk-helper v0.0.3-0.20250728015531-59051d40ad88
 	github.com/longhorn/types v0.0.0-20250710112743-e3a1e9e2a9c1
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
@@ -19,7 +19,7 @@ require (
 	google.golang.org/grpc v1.74.2
 	google.golang.org/protobuf v1.36.6
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
-	k8s.io/apimachinery v0.33.2
+	k8s.io/apimachinery v0.33.3
 )
 
 require (

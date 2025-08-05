@@ -73,7 +73,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.0.3-0.20250712161648-42d38592f838
+# github.com/longhorn/go-spdk-helper v0.0.3-0.20250728015531-59051d40ad88
 ## explicit; go 1.23.0
 github.com/longhorn/go-spdk-helper/pkg/initiator
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
@@ -301,7 +301,7 @@ gopkg.in/check.v1
 # gopkg.in/inf.v0 v0.9.1
 ## explicit
 gopkg.in/inf.v0
-# k8s.io/apimachinery v0.33.2
+# k8s.io/apimachinery v0.33.3
 ## explicit; go 1.24.0
 k8s.io/apimachinery/pkg/api/resource
 k8s.io/apimachinery/pkg/runtime/serializer/cbor/direct
