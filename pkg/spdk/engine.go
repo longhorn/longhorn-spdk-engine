@@ -880,6 +880,11 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		return nil
 	}
 
+	if e.isExpanding {
+		e.log.Debug("Engine is expandind, will skip the validation and update")
+		return nil
+	}
+
 	// Syncing with the SPDK TGT server only when the engine is running.
 	if e.State != types.InstanceStateRunning {
 		return nil
@@ -1460,8 +1465,6 @@ func (e *Engine) isAnyReplicaUnderRebuilding(replicaClients map[string]*client.S
 }
 
 func (e *Engine) prepareRaidForExpansion(spdkClient *spdkclient.Client) (suspendFrontend bool, bdevUUID string, err error) {
-	bdevRaidUUID := ""
-
 	// check if bdev raid exist
 	bdevRaid, err := spdkClient.BdevRaidGet(e.Name, 0)
 	if err != nil {
@@ -1477,7 +1480,7 @@ func (e *Engine) prepareRaidForExpansion(spdkClient *spdkclient.Client) (suspend
 
 	// Suspend IO if frontend is active
 	if e.Frontend == types.FrontendSPDKTCPBlockdev && e.Endpoint != "" {
-		if err := e.initiator.Suspend(true, true); err != nil {
+		if err := e.initiator.Suspend(false, false); err != nil {
 			return false, "", errors.Wrapf(err, "failed to suspend initiator for engine %s", e.Name)
 		}
 		suspendFrontend = true
@@ -1489,16 +1492,18 @@ func (e *Engine) prepareRaidForExpansion(spdkClient *spdkclient.Client) (suspend
 		if jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			e.log.WithField("engineName", e.Name).Info("RAID bdev already deleted")
 		} else {
-			return false, bdevRaidUUID, err
+			return false, bdevUUID, err
 		}
 	} else if !deleted {
-		return false, bdevRaidUUID, fmt.Errorf("engine %s raid delete failed", e.Name)
+		return false, bdevUUID, fmt.Errorf("engine %s raid delete failed", e.Name)
 	}
 
 	return suspendFrontend, bdevUUID, nil
 }
 
 func (e *Engine) expandReplicas(replicaClients map[string]*client.SPDKClient, spdkClient *spdkclient.Client, size uint64) (err error) {
+	e.log.Info("Expand replicas")
+
 	var (
 		errorLock sync.Mutex
 		wg        sync.WaitGroup
@@ -1669,6 +1674,9 @@ func (e *Engine) reconnectFrontend(spdkClient *spdkclient.Client, bdevRaidUUID s
 			e.log.WithError(err).Errorf("failed to reconnect nvme tcp frontend during engine %s expansion", e.Name)
 			return err
 		}
+	} else {
+		// place holder for ublk frontend
+		return errors.New("ublk frontend is not supported for expansion")
 	}
 
 	return nil
