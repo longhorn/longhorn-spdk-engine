@@ -1066,7 +1066,7 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 		return nil
 	}
 
-	// double check if size is already be expaneded
+	// double check if size is already be expanded
 	headBdevLvol, err := spdkClient.BdevLvolGetByName(r.Alias, 0)
 	if err != nil {
 		r.log.Errorf("Get replica %s failed, %v", r.Name, err)
