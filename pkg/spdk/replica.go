@@ -1056,17 +1056,17 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 
 	roundedSize := util.RoundUp(size, clusterSize)
 	if roundedSize != size {
-		return fmt.Errorf("replica %s rounded up spec size from %v to %v since the spec size should be multiple of MiB", r.Name, size, roundedSize)
+		return fmt.Errorf("replica %s rounded up spec size from %v to %v since the spec size should be a multiple of MiB", r.Name, size, roundedSize)
 	}
 
 	if r.SpecSize > roundedSize {
-		return fmt.Errorf("cannot expand replica %s to a smaller size %v, current spec size %v", r.Name, size, r.SpecSize)
+		return fmt.Errorf("cannot expand replica %s to a smaller size %v; current spec size is %v", r.Name, size, r.SpecSize)
 	} else if r.SpecSize == roundedSize {
-		r.log.Infof("Replica %s had been expanded to size %v", r.Name, size)
+		r.log.Infof("Replica %s has already been expanded to size %v", r.Name, size)
 		return nil
 	}
 
-	// double check if size is already be expaneded
+	// double check if size has already been expanded
 	headBdevLvol, err := spdkClient.BdevLvolGetByName(r.Alias, 0)
 	if err != nil {
 		r.log.Errorf("Get replica %s failed, %v", r.Name, err)
@@ -1074,14 +1074,14 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 	}
 	bdevLvol := BdevLvolInfoToServiceLvol(&headBdevLvol)
 
-	// resize it if not equal
+	// Resize it if not equal
 	if bdevLvol.SpecSize != size {
 		resized, err := spdkClient.BdevLvolResize(r.Alias, util.BytesToMiB(size))
 		if err != nil {
 			r.log.Errorf("Resize replica %s failed, %v", r.Name, err)
 			return errors.Wrapf(err, "bdev lvol resize error")
 		} else if !resized {
-			return fmt.Errorf("no error, but replica %s not resized", r.Name)
+			return fmt.Errorf("no error, but replica %s was not resized", r.Name)
 		}
 	}
 
@@ -1097,7 +1097,7 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 		return err
 	}
 
-	r.log.Info("Expanding replica complete")
+	r.log.Info("Replica expansion complete")
 	r.SpecSize = size
 	return nil
 }
