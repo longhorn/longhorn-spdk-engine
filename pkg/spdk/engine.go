@@ -2042,6 +2042,40 @@ func (e *Engine) SnapshotHashStatus(snapshotName string) (*spdkrpc.EngineSnapsho
 	return resp, nil
 }
 
+func (e *Engine) SnapshotClone(snapshotName, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string, cloneMode spdkrpc.CloneMode) error {
+	e.Lock()
+	defer e.Unlock()
+
+	e.log.Infof("Engine is starting cloning snapshot %s", snapshotName)
+
+	if len(e.ReplicaStatusMap) > 1 {
+		return fmt.Errorf("destiantion engine must only have 1 replica when doing snapshot clone. Current "+
+			"replica count is %v", len(e.ReplicaStatusMap))
+	}
+
+	replicaStatus := e.ReplicaStatusMap[dstReplicaName]
+	if replicaStatus == nil {
+		return fmt.Errorf("cannot find destination replica %v in e.ReplicaStatusMap", dstReplicaName)
+	}
+	if replicaStatus.Mode != types.ModeRW {
+		return fmt.Errorf("destination replica %v has mode %v but expected mode %v", dstReplicaName, replicaStatus.Mode, types.ModeRW)
+	}
+	if replicaStatus.Address != dstReplicaAddress {
+		return fmt.Errorf("destination replica %v has missmatch address: current address %v but expected address %v", dstReplicaName, replicaStatus.Address, dstReplicaAddress)
+	}
+	dstReplicaServiceCli, err := GetServiceClient(dstReplicaAddress)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if errClose := dstReplicaServiceCli.Close(); errClose != nil {
+			e.log.WithError(errClose).Errorf("Engine %s failed to close dest replica %s client with address %s during snapshot clone", e.Name, dstReplicaName, dstReplicaAddress)
+		}
+	}()
+
+	return dstReplicaServiceCli.ReplicaSnapshotCloneDstStart(dstReplicaName, snapshotName, srcReplicaName, srcReplicaAddress, cloneMode)
+}
+
 func (e *Engine) getReplicaSnapshotHashStatus(replicaName, replicaAddress, snapshotName string) (*spdkrpc.ReplicaSnapshotHashStatusResponse, error) {
 	replicaServiceCli, err := GetServiceClient(replicaAddress)
 	if err != nil {
