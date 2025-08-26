@@ -1629,6 +1629,8 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 
 	defer func() {
 		if err != nil {
+			r.log.WithError(err).Errorf("Failed to do SnapshotCloneDstStart for snapshot %v with "+
+				"srcReplicaName %v, srcReplicaAddress %v", snapshotName, srcReplicaName, srcReplicaAddress)
 			if r.State != types.InstanceStateError {
 				r.State = types.InstanceStateError
 			}
@@ -1657,7 +1659,7 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 	r.snapshotCloningDstCache.srcReplicaName = srcReplicaName
 	r.snapshotCloningDstCache.srcReplicaAddress = srcReplicaAddress
 
-	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_SNAPSHOT_LINKED {
+	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
 		srcReplicaIP, _, err := splitHostPort(srcReplicaAddress)
 		if err != nil {
 			return errors.Wrapf(err, "failed to split src Replica address %v", srcReplicaAddress)
@@ -1684,7 +1686,7 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 			return err
 		}
 		r.snapshotCloningDstCache.cloningState = types.ProgressStateComplete
-		r.log.Infof("clone state: %v", r.snapshotCloningDstCache.cloningState)
+		r.log.Infof("Clone state: %v", r.snapshotCloningDstCache.cloningState)
 		return r.SnapshotCloneDstFinish(spdkClient, cloneMode)
 	}
 
@@ -1714,7 +1716,7 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 	}
 	dstCloningLvolAddress := net.JoinHostPort(r.IP, strconv.Itoa(int(r.snapshotCloningDstCache.cloningPort)))
 
-	// Ask Dst replica to start cloning
+	// Ask src replica to start cloning
 	srcReplicaServiceCli, err := GetServiceClient(r.snapshotCloningDstCache.srcReplicaAddress)
 	if err != nil {
 		return err
@@ -1831,7 +1833,7 @@ func (r *Replica) monitorSnapshotClone(spdkCli *spdkclient.Client, ctx context.C
 			setStatus(status.State, status.ErrorMsg, status.ProcessedClusters, status.TotalClusters)
 
 			if status.State == types.ProgressStateError || status.State == types.ProgressStateComplete {
-				r.log.Infof("clone state: %v", status.State)
+				r.log.Infof("Clone state: %v", status.State)
 				return
 			}
 		}
@@ -1868,7 +1870,7 @@ func (r *Replica) SnapshotCloneDstStatusCheck() (status *spdkrpc.ReplicaSnapshot
 }
 
 func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMode spdkrpc.CloneMode) (err error) {
-	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_SNAPSHOT_LINKED {
+	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
 		r.isSnapshotCloning = true
 		return nil
 	}
@@ -2068,7 +2070,7 @@ func (r *Replica) SnapshotCloneSrcStart(spdkClient *spdkclient.Client, snapshotN
 	}
 	r.snapshotCloningSrcCache[dstReplicaName] = c
 
-	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_SNAPSHOT_LINKED {
+	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
 		return r.snapshotLinkedCloneSrcStart(spdkClient, snapshotName, dstReplicaName)
 	}
 

@@ -2042,6 +2042,12 @@ func (e *Engine) SnapshotHashStatus(snapshotName string) (*spdkrpc.EngineSnapsho
 	return resp, nil
 }
 
+type replicaCandidate struct {
+	ip      string
+	lvsUUID string
+	address string
+}
+
 func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress string, cloneMode spdkrpc.CloneMode) (err error) {
 	e.Lock()
 	defer e.Unlock()
@@ -2109,11 +2115,7 @@ func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress str
 		return err
 	}
 
-	srcReplicaCandidates := map[string]struct {
-		ip      string
-		lvsUUID string
-		address string
-	}{}
+	srcReplicaCandidates := map[string]replicaCandidate{}
 	for rName, mode := range srcEngine.ReplicaModeMap {
 		if mode != types.ModeRW {
 			continue
@@ -2126,11 +2128,7 @@ func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress str
 		if !ok {
 			continue
 		}
-		srcReplicaCandidates[rName] = struct {
-			ip      string
-			lvsUUID string
-			address string
-		}{ip: r.IP, lvsUUID: r.LvsUUID, address: rAddr}
+		srcReplicaCandidates[rName] = replicaCandidate{ip: r.IP, lvsUUID: r.LvsUUID, address: rAddr}
 	}
 
 	srcReplicaName := ""
@@ -2144,8 +2142,8 @@ func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress str
 	}
 
 	if srcReplicaName == "" || srcReplicaAddress == "" {
-		if cloneMode == spdkrpc.CloneMode_CLONE_MODE_SNAPSHOT_LINKED {
-			return fmt.Errorf("can not find the src replica at the same address %v and on same LvsUUID %v as the "+
+		if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
+			return fmt.Errorf("cannot find the src replica at the same address %v and on same LvsUUID %v as the "+
 				"dst replica", dstReplica.IP, dstReplica.LvsUUID)
 		}
 		for rName, cand := range srcReplicaCandidates {
