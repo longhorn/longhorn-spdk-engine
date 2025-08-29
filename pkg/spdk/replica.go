@@ -1143,7 +1143,7 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 
 	// resize it if not equal
 	if bdevLvol.SpecSize != size {
-		// Blindly stop exposing the bdev if it exists. This is to avoid potential inconsistencies during salvage case.
+		// If the bdev is exposed, we must stop exposing it before the resize.
 		reExposeBdev := false
 		if r.IsExposed {
 			if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
