@@ -63,6 +63,10 @@ type Engine struct {
 	IsRestoring           bool
 	RestoringSnapshotName string
 
+	isExpanding           bool
+	lastExpansionFailedAt string
+	lastExpansionError    string
+
 	// UpdateCh should not be protected by the engine lock
 	UpdateCh chan interface{}
 
@@ -227,6 +231,10 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		}
 	}
 
+	if err := e.ValidateReplicaSize(replicaAddressMap); err != nil {
+		return nil, err
+	}
+
 	defer func() {
 		if err != nil {
 			e.log.WithError(err).Errorf("Failed to create engine %s", e.Name)
@@ -311,7 +319,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		e.checkAndUpdateInfoFromReplicaNoLock()
 
 		e.log.Infof("Connecting all available replicas %+v, then launching raid during engine creation", e.ReplicaStatusMap)
-		if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
+		if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList, ""); err != nil {
 			return nil, err
 		}
 	} else {
@@ -377,6 +385,48 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 	e.log.Info("Created engine")
 
 	return e.getWithoutLock(), nil
+}
+
+func (e *Engine) ValidateReplicaSize(replicaAddressMap map[string]string) error {
+	if len(replicaAddressMap) == 0 {
+		return fmt.Errorf("no replicas provided for engine %s", e.Name)
+	}
+
+	// Validate the engine & replica sizes before creating the engine
+	replicaSizeMap := make(map[string]uint64, len(replicaAddressMap))
+	for replicaName, replicaAddr := range replicaAddressMap {
+		replicaClient, err := GetServiceClient(replicaAddr)
+		if err != nil {
+			return err
+		}
+		replica, err := replicaClient.ReplicaGet(replicaName)
+		if err != nil {
+			return errors.Wrapf(err, "failed to get replica %v from %v during engine creation", replicaName, replicaAddr)
+		}
+
+		replicaSizeMap[replicaName] = replica.SpecSize
+	}
+
+	// check if all replica sizes are the same
+	expectedSize := uint64(0)
+	for _, replicaSize := range replicaSizeMap {
+		if expectedSize == 0 {
+			expectedSize = replicaSize
+		} else if expectedSize != replicaSize {
+			return fmt.Errorf("found different replica sizes during engine creation: %v", replicaSizeMap)
+		}
+	}
+
+	if e.SpecSize < expectedSize {
+		return fmt.Errorf("engine spec size %d is smaller than replica size %d", e.SpecSize, expectedSize)
+	} else if e.SpecSize > expectedSize {
+		// not return error here
+		// it may cause infinite retry if the user doesn't fix the size issue
+		e.log.Warnf("Engine spec size (%d) is larger than replica size (%d); setting engine spec size to %d", e.SpecSize, expectedSize, expectedSize)
+		e.SpecSize = expectedSize
+	}
+
+	return nil
 }
 
 // filterSalvageCandidates updates the replicaAddressMap by retaining only replicas
@@ -634,6 +684,54 @@ func (e *Engine) handleUblkFrontend(spdkClient *spdkclient.Client) (err error) {
 	return nil
 }
 
+func (e *Engine) reconnectNvmeTcpFrontend(spdkClient *spdkclient.Client) (err error) {
+	if e.NvmeTcpFrontend == nil {
+		return fmt.Errorf("cannot reconnect: NvmeTcpFrontend is nil")
+	}
+
+	if e.NvmeTcpFrontend.IP == "" || e.NvmeTcpFrontend.Port == 0 {
+		return fmt.Errorf("NvmeTcpFrontend IP or Port is not set")
+	}
+
+	if e.initiator == nil {
+		return fmt.Errorf("initiator is missing for reconnecting frontend")
+	}
+
+	defer func() {
+		if err == nil {
+			if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
+				"endpoint":   e.Endpoint,
+				"port":       e.NvmeTcpFrontend.Port,
+				"targetPort": e.NvmeTcpFrontend.TargetPort,
+			}); errUpdateLogger != nil {
+				e.log.WithError(err).Warn("Failed to update logger during reconnect frontend")
+			}
+			e.log.Infof("Finished reconnecting frontend for engine: %+v", e)
+		}
+	}()
+
+	// No need to disconnect nvme target and stop expose bdev again
+	// We already did it in prepareRaidForExpansion
+	err = spdkClient.StartExposeBdev(
+		e.NvmeTcpFrontend.Nqn,
+		e.Name,
+		e.NvmeTcpFrontend.Nguid,
+		e.NvmeTcpFrontend.IP,
+		strconv.Itoa(int(e.NvmeTcpFrontend.Port)),
+	)
+	if err != nil {
+		return errors.Wrapf(err, "failed to expose bdev during reconnect for engine %v", e.Name)
+	}
+
+	dmDeviceIsBusy, err := e.initiator.StartNvmeTCPInitiator(e.NvmeTcpFrontend.IP, strconv.Itoa(int(e.NvmeTcpFrontend.Port)), true)
+	if err != nil {
+		return errors.Wrapf(err, "failed to start initiator during reconnect for engine %v", e.Name)
+	}
+	e.dmDeviceIsBusy = dmDeviceIsBusy
+
+	return nil
+}
+
 func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *commonbitmap.Bitmap) (err error) {
 	requireUpdate := false
 
@@ -641,6 +739,7 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *co
 	defer func() {
 		// Considering that there may be still pending validations, it's better to update the state after the deletion.
 		if err != nil {
+			e.log.WithError(err).Errorf("Failed to delete engine %s", e.Name)
 			if e.State != types.InstanceStateError {
 				e.State = types.InstanceStateError
 				e.ErrorMsg = err.Error()
@@ -683,6 +782,7 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *co
 
 	if e.NvmeTcpFrontend != nil {
 		if err := spdkClient.StopExposeBdev(e.NvmeTcpFrontend.Nqn); err != nil {
+			e.log.Error(err)
 			return err
 		}
 	}
@@ -817,6 +917,11 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		return nil
 	}
 
+	if e.isExpanding {
+		e.log.Debug("Engine is expandind, will skip the validation and update")
+		return nil
+	}
+
 	// Syncing with the SPDK TGT server only when the engine is running.
 	if e.State != types.InstanceStateRunning {
 		return nil
@@ -862,7 +967,19 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 
 	bdevRaidSize := bdevRaid.NumBlocks * uint64(bdevRaid.BlockSize)
 	if e.SpecSize != bdevRaidSize {
-		return fmt.Errorf("found mismatching between engine spec size %d and actual raid bdev size %d for engine %s", e.SpecSize, bdevRaidSize, e.Name)
+		// not directly return error
+
+		// If the volume is not attached and do the expand
+		// At first, we create and attach the engine with new size, but not yet to expand
+		// it will cause infinite loop for size mismatching
+		// loop to destroy and create engine
+		// and there is no chance to execute EngineExpand()
+
+		// wait the lh-manager to reconcile engine CR and call EngineExpand()
+
+		e.SpecSize = bdevRaidSize
+		e.log.Warnf("found mismatching between engine spec size %d and actual raid bdev size %d for engine %s", e.SpecSize, bdevRaidSize, e.Name)
+		return nil
 	}
 
 	// Verify replica status map
@@ -1229,6 +1346,415 @@ func (e *Engine) validateAndUpdateReplicaNvme(replicaName string, bdev *spdktype
 	return e.ReplicaStatusMap[replicaName].Mode, nil
 }
 
+// This method performs an online volume expansion for the Longhorn Engine using SPDK. It:
+// Expands underlying replica logical volumes (lvol)
+// Recreates the SPDK RAID bdev
+// Suspends and resumes frontend I/O as needed
+// Ensures cleanup and status update on failure
+func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (retErr error) {
+	e.Lock()
+	defer e.Unlock()
+
+	e.log.Info("Expanding engine")
+
+	// fetch all replica clients
+	replicaClients, err := e.getReplicaClients()
+	if err != nil {
+		retErr = err
+		return retErr
+	}
+	defer e.closeRplicaClients(replicaClients)
+
+	// startExpansion checks if the expansion can be started, and marks the expansion as in progress
+	requireExpansion, err := e.startExpansion(size, replicaClients)
+	if err != nil {
+		return errors.Wrap(err, "startExpansion failed")
+	}
+	if !requireExpansion {
+		e.log.Info("No need to expand engine")
+		e.SpecSize = size
+		return nil
+	}
+
+	var (
+		expanded  = false
+		engineErr error
+	)
+
+	// engineErr will be set when the engine failed to do any non-recoverable operations.
+	defer func() {
+		if retErr != nil {
+			e.log.WithError(engineErr).Errorf("Engine %s failed to expand", e.Name)
+			e.lastExpansionError = errors.Wrap(retErr, "engine failed to expand expansion").Error()
+			e.lastExpansionFailedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+
+		if engineErr != nil {
+			if e.State != types.InstanceStateError {
+				e.State = types.InstanceStateError
+			}
+			e.ErrorMsg = engineErr.Error()
+			e.log.WithError(engineErr).Errorf("Engine %s under non-recoverable operation during expansion", e.Name)
+
+			if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
+				"replicaStatusMap": e.ReplicaStatusMap,
+			}); errUpdateLogger != nil {
+				e.log.WithError(errUpdateLogger).Warn("Failed to update logger with replica status map during engine creation")
+			}
+
+			e.lastExpansionError = errors.Wrap(retErr, "engine under non-recoverable operation").Error()
+			e.lastExpansionFailedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+
+		e.finishExpansion(expanded, size)
+	}()
+
+	// prepareRaidForExpansion checks if RAID exists, suspends frontend if needed, and deletes the RAID bdev.
+	isSuspended, bdevRaidUUID, err := e.prepareRaidForExpansion(spdkClient)
+	if isSuspended {
+		defer func() {
+			if frontendErr := e.initiator.Resume(); frontendErr != nil {
+				frontendErr = errors.Wrapf(frontendErr, "failed to resume NVMe initiator during engine %s", e.Name)
+				if engineErr != nil {
+					engineErr = errors.Wrapf(engineErr, "original error; resume failed: %v", frontendErr)
+				} else {
+					engineErr = frontendErr
+				}
+			}
+		}()
+	}
+	if err != nil {
+		engineErr = errors.Wrap(err, "prepare raid for expansion failed")
+		retErr = engineErr
+		return retErr
+	}
+
+	// expand replicas
+	if err := e.expandReplicas(replicaClients, spdkClient, size); err != nil {
+		engineErr = err
+		retErr = err
+		return retErr
+	}
+
+	// recreate RAID and reconnect frontend
+	if err := e.reconnectFrontend(spdkClient, bdevRaidUUID); err != nil {
+		engineErr = errors.Wrap(err, "reconnectFrontend failed")
+		retErr = engineErr
+		return retErr
+	}
+	e.log.Info("Expanding engine complete")
+
+	expanded = true // which could be true even in partial success
+	return nil
+}
+
+func (e *Engine) startExpansion(size uint64, replicaClients map[string]*client.SPDKClient) (requireExpansion bool, err error) {
+	if e.isExpanding {
+		return false, fmt.Errorf("expansion is in progress")
+	}
+
+	if e.IsRestoring {
+		return false, fmt.Errorf("restoring is in progress")
+	}
+
+	if e.SpecSize > size {
+		return false, fmt.Errorf("cannot expand engine to a smaller size %v, current size %v", size, e.SpecSize)
+	} else if e.SpecSize == size {
+		e.log.Infof("Engine already at requested size %v, skipping expansion", size)
+		return false, nil // no need to expand
+	}
+
+	roundedNewSize := util.RoundUp(size, helpertypes.MiB)
+	if roundedNewSize != size {
+		return false, fmt.Errorf("rounded up spec size from %v to %v since the spec size should be multiple of MiB", size, roundedNewSize)
+	}
+
+	// Ensure all replicas are in RW mode and have the same size
+	if len(e.ReplicaStatusMap) == 0 {
+		e.log.Warn("Cannot expand engine: no replica found")
+		return false, fmt.Errorf("cannot expand engine with no replica")
+	}
+
+	currentReplicaSize := uint64(0)
+	for replicaName, replicaStatus := range e.ReplicaStatusMap {
+		if replicaStatus.Mode != types.ModeRW {
+			return false, fmt.Errorf("cannot expand engine with replica %s in mode %v", replicaName, replicaStatus.Mode)
+		}
+
+		replicaClient, ok := replicaClients[replicaName]
+		if !ok {
+			return false, fmt.Errorf("cannot find client for replica %s", replicaName)
+		}
+		replica, err := replicaClient.ReplicaGet(replicaName)
+		if err != nil {
+			return false, errors.Wrapf(err, "cannot get replica %s before expansion", replicaName)
+		}
+
+		if currentReplicaSize == 0 {
+			currentReplicaSize = replica.SpecSize
+		} else if currentReplicaSize != replica.SpecSize {
+			return false, fmt.Errorf("cannot expand engine with replicas in different sizes: replica %s has size %v while other replicas have size %v", replicaName, replica.SpecSize, currentReplicaSize)
+		}
+	}
+
+	if currentReplicaSize > size {
+		return false, fmt.Errorf("cannot expand engine to a smaller size %v, current replica size %v", size, currentReplicaSize)
+	} else if currentReplicaSize == size {
+		e.log.Infof("Replicas already at requested size %v, skipping expansion", size)
+		e.SpecSize = size
+		return false, nil // no need to expand
+	}
+
+	// Mark expansion as in progress
+	e.isExpanding = true
+	e.lastExpansionFailedAt = ""
+	e.lastExpansionError = ""
+
+	return true, nil
+}
+
+func (e *Engine) finishExpansion(expanded bool, size uint64) {
+	if expanded {
+		if e.lastExpansionError != "" {
+			e.log.Infof("Succeeded to expand from size %v to %v but there are some replica expansion failures: %v", e.SpecSize, size, e.lastExpansionError)
+		} else {
+			e.log.Infof("Succeeded to expand from size %v to %v", e.SpecSize, size)
+		}
+		e.SpecSize = size
+	} else {
+		e.log.Infof("Failed to expand from size %v to %v", e.SpecSize, size)
+	}
+	e.isExpanding = false
+}
+
+func (e *Engine) prepareRaidForExpansion(spdkClient *spdkclient.Client) (suspendFrontend bool, bdevUUID string, err error) {
+	// check if bdev raid exist
+	bdevRaid, err := spdkClient.BdevRaidGet(e.Name, 0)
+	if err != nil {
+		if jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return suspendFrontend, "", nil // RAID does not exist, nothing to do
+		}
+		return suspendFrontend, "", errors.Wrap(err, "failed to get bdev raid")
+	}
+	if len(bdevRaid) == 0 {
+		return suspendFrontend, "", nil // RAID already deleted
+	}
+	bdevUUID = bdevRaid[0].UUID
+
+	// Suspend IO if frontend is active
+	if e.Frontend == types.FrontendSPDKTCPBlockdev && e.Endpoint != "" {
+		if err := e.initiator.Suspend(false, false); err != nil {
+			return suspendFrontend, "", errors.Wrapf(err, "failed to suspend initiator for engine %s", e.Name)
+		}
+		suspendFrontend = true
+	} else if types.IsUblkFrontend(e.Frontend) {
+		return suspendFrontend, "", fmt.Errorf("not support ublk frontend for expansion for engine %s", e.Name)
+	}
+
+	if err := e.initiator.DisconnectNVMeTCPTarget(); err != nil {
+		return suspendFrontend, "", errors.Wrapf(err, "failed to disconnect NVMe target for engine %s", e.Name)
+	}
+
+	if err := spdkClient.StopExposeBdev(e.NvmeTcpFrontend.Nqn); err != nil {
+		return suspendFrontend, bdevUUID, errors.Wrapf(err, "failed to stop exposing bdev for engine %s", e.Name)
+	}
+
+	// delete raid bdev if still exist
+	deleted, err := spdkClient.BdevRaidDelete(e.Name)
+	if err != nil {
+		if jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			e.log.WithField("engineName", e.Name).Info("RAID bdev already deleted")
+		} else {
+			return suspendFrontend, bdevUUID, err
+		}
+	} else if !deleted {
+		return suspendFrontend, bdevUUID, fmt.Errorf("engine %s raid delete failed", e.Name)
+	}
+
+	return suspendFrontend, bdevUUID, nil
+}
+
+func (e *Engine) expandReplicas(replicaClients map[string]*client.SPDKClient, spdkClient *spdkclient.Client, size uint64) (err error) {
+	e.log.Info("Expand replicas")
+
+	var (
+		errorLock sync.Mutex
+		wg        sync.WaitGroup
+	)
+
+	failedReplica := map[string]error{}
+
+	for replicaName, replicaClient := range replicaClients {
+		wg.Add(1)
+
+		go func(replicaName string, replicaClient *client.SPDKClient) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					e.log.WithField("replica", replicaName).Errorf("Panic during replica expansion: %v", r)
+				}
+			}()
+
+			replicaStatus, ok := e.ReplicaStatusMap[replicaName]
+			if !ok {
+				e.log.WithField("replica", replicaName).Warn("Replica not found in status map")
+				return
+			}
+
+			replica, err := replicaClient.ReplicaGet(replicaName)
+			if err != nil {
+				errorLock.Lock()
+				failedReplica[replicaName] = errors.Wrap(err, "Get replica failure")
+				errorLock.Unlock()
+				return
+			}
+
+			if replica.SpecSize == size {
+				return
+			}
+
+			if err := disconnectNVMfBdev(spdkClient, replicaStatus.BdevName); err != nil {
+				errorLock.Lock()
+				failedReplica[replicaName] = err
+				errorLock.Unlock()
+				return
+			}
+
+			if err := replicaClient.ReplicaExpand(replicaName, size); err != nil {
+				errorLock.Lock()
+				failedReplica[replicaName] = err
+				errorLock.Unlock()
+				return
+			}
+
+		}(replicaName, replicaClient)
+	}
+
+	wg.Wait()
+
+	// Some replicas may have returned an error during expansion due to unexpected issues
+	// (e.g. temporary network glitch, internal error, timeout).
+	// To avoid mistakenly marking those as failed, we perform a single follow-up check
+	// to verify if the replica was actually expanded.
+	//
+	// If ReplicaGet shows the desired size, we consider the expansion successful
+	// and remove it from the failed list.
+	for replicaName := range failedReplica {
+		client := replicaClients[replicaName]
+
+		replica, err := client.ReplicaGet(replicaName)
+		if err != nil {
+			e.log.WithError(err).WithField("replica", replicaName).
+				Warn("Could not verify replica expansion after failure")
+			continue
+		}
+
+		if replica.SpecSize == size {
+			e.log.WithField("replica", replicaName).
+				Info("Replica expansion succeeded despite earlier error, removing from failure list")
+
+			errorLock.Lock()
+			delete(failedReplica, replicaName)
+			errorLock.Unlock()
+		}
+	}
+
+	var aggregatedErr map[string]string
+
+	if len(failedReplica) > 0 {
+		aggregatedErr = map[string]string{}
+		for replicaName, err := range failedReplica {
+			aggregatedErr[replicaName] = err.Error()
+		}
+	}
+
+	switch {
+	case len(failedReplica) == 0:
+		// all success
+		e.log.Info("All replicas expand success")
+		return nil
+	case len(failedReplica) == len(e.ReplicaStatusMap):
+		// all fail, no based lvols are resized
+		e.log.WithFields(logrus.Fields{"failedReplicas": aggregatedErr}).
+			Error("All replicas failed to expand")
+
+		return fmt.Errorf("all replicas failed to expand; aborting RAID recreation")
+	default:
+		// partial success
+		// the failedReplica is seems as outOfSync
+		// set it to ERR
+		for replicaName := range failedReplica {
+			e.ReplicaStatusMap[replicaName].Mode = types.ModeERR
+		}
+
+		e.log.WithFields(logrus.Fields{"failedReplicas": aggregatedErr}).
+			Warn("Some replicas failed to expand and have been marked as ERR")
+
+		return nil
+	}
+}
+
+func (e *Engine) reconnectFrontend(spdkClient *spdkclient.Client, bdevRaidUUID string) (err error) {
+	e.log.WithFields(logrus.Fields{
+		"engineName": e.Name,
+		"volumeName": e.VolumeName,
+		"frontend":   e.Frontend,
+	}).Info("reconnectFrontend")
+
+	var (
+		attempts           = 10
+		baseDelay          = time.Second
+		maxDelay           = time.Second * 10
+		exponentialBackoff = 1.5
+	)
+
+	// create the same name of raid bdev
+	replicaBdevList := []string{}
+	for replicaName, replicaStatus := range e.ReplicaStatusMap {
+		if replicaStatus.Mode == types.ModeERR {
+			continue
+		}
+
+		bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaStatus.Address, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec)
+		if err != nil {
+			e.log.WithError(err).Warnf("Failed to get bdev from replica %s with address %s during creation, will mark the mode to ERR and continue", replicaName, replicaStatus.Address)
+			e.ReplicaStatusMap[replicaName].Mode = types.ModeERR
+		} else {
+			e.ReplicaStatusMap[replicaName].Mode = types.ModeRW
+			e.ReplicaStatusMap[replicaName].BdevName = bdevName
+			replicaBdevList = append(replicaBdevList, bdevName)
+		}
+	}
+	if len(replicaBdevList) == 0 {
+		return fmt.Errorf("no healthy replica bdevs available for RAID creation")
+	}
+
+	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList, bdevRaidUUID); err != nil {
+		return err
+	}
+
+	// wait the raid bdev is created
+	if err := util.BackoffRetry(attempts, baseDelay, maxDelay, exponentialBackoff, func() error {
+		_, err := spdkClient.BdevRaidGet(e.Name, 0)
+		return err
+	}); err != nil {
+		return err
+	}
+
+	// reconnect
+	if e.Frontend == types.FrontendSPDKTCPBlockdev && e.Endpoint != "" {
+		if err := e.reconnectNvmeTcpFrontend(spdkClient); err != nil {
+			e.log.WithError(err).Errorf("failed to reconnect nvme tcp frontend during engine %s expansion", e.Name)
+			return err
+		}
+	} else {
+		// TODO: support ublk frontend for expansion
+		return errors.New("ublk frontend is not supported for expansion")
+	}
+
+	return nil
+}
+
 func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string) (err error) {
 	updateRequired := false
 
@@ -1285,12 +1811,6 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 					Mode:    types.ModeERR,
 					Address: dstReplicaAddress,
 				}
-			}
-
-			if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
-				"replicaStatusMap": e.ReplicaStatusMap,
-			}); errUpdateLogger != nil {
-				e.log.WithError(errUpdateLogger).Warn("Failed to update logger with replica status map during engine creation")
 			}
 
 			e.log.WithError(err).Errorf("Engine failed to start replica %s rebuilding, will mark the rebuilding replica mode from %v to ERR", dstReplicaName, prevMode)
@@ -1976,7 +2496,7 @@ func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, rep
 			}
 			replicaBdevList = append(replicaBdevList, replicaStatus.BdevName)
 		}
-		if _, raidErr := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); raidErr != nil {
+		if _, raidErr := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList, ""); raidErr != nil {
 			engineErr = errors.Wrapf(raidErr, "engine %s failed to re-create RAID after snapshot %s revert", e.Name, snapshotName)
 		}
 	}
@@ -2383,7 +2903,7 @@ func (e *Engine) BackupRestoreFinish(spdkClient *spdkclient.Client) error {
 	}
 
 	e.log.Infof("Creating raid bdev %s with replicas %+v before finishing restoration", e.Name, replicaBdevList)
-	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList); err != nil {
+	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList, ""); err != nil {
 		if !jsonrpc.IsJSONRPCRespErrorFileExists(err) {
 			e.log.WithError(err).Errorf("Failed to create raid bdev before finishing restoration")
 			return err
