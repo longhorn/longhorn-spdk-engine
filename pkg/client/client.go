@@ -124,7 +124,7 @@ func (c *SPDKClient) ReplicaExpand(name string, size uint64) error {
 		Name: name,
 		Size: size,
 	})
-	return errors.Wrapf(err, "failed to expand SPDK replica %v", name)
+	return errors.Wrapf(err, "failed to expand replica %v", name)
 }
 
 func (c *SPDKClient) ReplicaList() (map[string]*api.Replica, error) {
