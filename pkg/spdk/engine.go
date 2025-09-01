@@ -1551,8 +1551,9 @@ func (e *Engine) prepareRaidForExpansion(spdkClient *spdkclient.Client) (suspend
 		return suspendFrontend, "", fmt.Errorf("not support ublk frontend for expansion for engine %s", e.Name)
 	}
 
-	if err := e.initiator.DisconnectNVMeTCPTarget(); err != nil {
-		return suspendFrontend, "", errors.Wrapf(err, "failed to disconnect NVMe target for engine %s", e.Name)
+	currentTargetAddress := net.JoinHostPort(e.initiator.NVMeTCPInfo.TransportAddress, e.initiator.NVMeTCPInfo.TransportServiceID)
+	if err := e.disconnectTarget(currentTargetAddress); err != nil {
+		return suspendFrontend, "", errors.Wrapf(err, "failed to disconnect target %s for engine %s", currentTargetAddress, e.Name)
 	}
 
 	if err := spdkClient.StopExposeBdev(e.NvmeTcpFrontend.Nqn); err != nil {
@@ -3327,17 +3328,17 @@ func (e *Engine) disconnectTarget(targetAddress string) error {
 		}
 	}
 
-	e.log.Infof("Disconnecting from old target %s before target switchover", targetAddress)
+	e.log.Infof("Disconnecting from old target %s", targetAddress)
 	if err := i.DisconnectNVMeTCPTarget(); err != nil {
 		return errors.Wrapf(err, "failed to disconnect from old target %s for engine %s", targetAddress, e.Name)
 	}
 
 	// Make sure the old target is disconnected before connecting to the new targets
-	if err := i.WaitForNVMeTCPConnect(maxNumRetries, retryInterval); err != nil {
+	if err := i.WaitForNVMeTCPTargetDisconnect(maxNumRetries, retryInterval); err != nil {
 		return errors.Wrapf(err, "failed to wait for disconnect from old target %s for engine %s", targetAddress, e.Name)
 	}
 
-	e.log.Infof("Disconnected from old target %s before target switchover", targetAddress)
+	e.log.Infof("Disconnected from old target %s", targetAddress)
 
 	return nil
 }
