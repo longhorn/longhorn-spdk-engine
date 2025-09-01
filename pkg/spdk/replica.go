@@ -1126,9 +1126,9 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 		return fmt.Errorf("replica %s rounded up spec size from %v to %v since the spec size should be multiple of MiB", r.Name, size, roundedSize)
 	}
 
-	if r.SpecSize > roundedSize {
+	if r.SpecSize > size {
 		return fmt.Errorf("cannot expand replica %s to a smaller size %v, current spec size %v", r.Name, size, r.SpecSize)
-	} else if r.SpecSize == roundedSize {
+	} else if r.SpecSize == size {
 		r.log.Infof("Replica %s had been expanded to size %v", r.Name, size)
 		return nil
 	}
@@ -1141,8 +1141,7 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 	}
 	bdevLvol := BdevLvolInfoToServiceLvol(&headBdevLvol)
 
-	// resize it if not equal
-	if bdevLvol.SpecSize != size {
+	if bdevLvol.SpecSize < size {
 		// If the bdev is exposed, we must stop exposing it before the resize.
 		reExposeBdev := false
 		if r.IsExposed {
@@ -1157,7 +1156,9 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 		if err != nil {
 			r.log.Errorf("Resize replica %s failed, %v", r.Name, err)
 			return errors.Wrapf(err, "bdev lvol resize error")
-		} else if !resized {
+		}
+
+		if !resized {
 			return fmt.Errorf("no error, but replica %s not resized", r.Name)
 		}
 
@@ -1169,21 +1170,24 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 			}
 			r.IsExposed = true
 		}
+
+		// Blindly clean up then update the caches for the head
+		r.Head = nil
+		if r.ActiveChain[len(r.ActiveChain)-1] != nil &&
+			r.ActiveChain[len(r.ActiveChain)-1].Name == r.Name {
+			r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
+		}
+
+		if err := r.updateHeadCache(spdkClient); err != nil {
+			r.log.Errorf("update head failed, %v", err)
+			return err
+		}
+
+		r.log.Info("Expanding replica complete")
+	} else if bdevLvol.SpecSize > size {
+		r.log.Warnf("Found the actual size %v of replica %s is already larger than the requested size %v, will just update the spec size", bdevLvol.SpecSize, r.Name, size)
 	}
 
-	// Blindly clean up then update the caches for the head
-	r.Head = nil
-	if r.ActiveChain[len(r.ActiveChain)-1] != nil &&
-		r.ActiveChain[len(r.ActiveChain)-1].Name == r.Name {
-		r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
-	}
-
-	if err := r.updateHeadCache(spdkClient); err != nil {
-		r.log.Errorf("update head failed, %v", err)
-		return err
-	}
-
-	r.log.Info("Expanding replica complete")
 	r.SpecSize = size
 	return nil
 }
