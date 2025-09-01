@@ -412,18 +412,16 @@ func (e *Engine) ValidateReplicaSize(replicaAddressMap map[string]string) error 
 	for _, replicaSize := range replicaSizeMap {
 		if expectedSize == 0 {
 			expectedSize = replicaSize
-		} else if expectedSize != replicaSize {
+			continue
+		}
+
+		if expectedSize != replicaSize {
 			return fmt.Errorf("found different replica sizes during engine creation: %v", replicaSizeMap)
 		}
 	}
 
 	if e.SpecSize < expectedSize {
 		return fmt.Errorf("engine spec size %d is smaller than replica size %d", e.SpecSize, expectedSize)
-	} else if e.SpecSize > expectedSize {
-		// not return error here
-		// it may cause infinite retry if the user doesn't fix the size issue
-		e.log.Warnf("Engine spec size (%d) is larger than replica size (%d); setting engine spec size to %d", e.SpecSize, expectedSize, expectedSize)
-		e.SpecSize = expectedSize
 	}
 
 	return nil
@@ -918,7 +916,7 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 	}
 
 	if e.isExpanding {
-		e.log.Debug("Engine is expandind, will skip the validation and update")
+		e.log.Debug("Engine is expanding, will skip the validation and update")
 		return nil
 	}
 
@@ -966,7 +964,7 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 	}
 
 	bdevRaidSize := bdevRaid.NumBlocks * uint64(bdevRaid.BlockSize)
-	if e.SpecSize != bdevRaidSize {
+	if e.SpecSize > bdevRaidSize {
 		// not directly return error
 
 		// If the volume is not attached and do the expand
@@ -980,6 +978,11 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		e.SpecSize = bdevRaidSize
 		e.log.Warnf("found mismatching between engine spec size %d and actual raid bdev size %d for engine %s", e.SpecSize, bdevRaidSize, e.Name)
 		return nil
+	}
+
+	if e.SpecSize < bdevRaidSize {
+		// should not happen
+		return fmt.Errorf("engine spec size %d is smaller than actual raid bdev size %d for engine %s", e.SpecSize, bdevRaidSize, e.Name)
 	}
 
 	// Verify replica status map
@@ -1346,11 +1349,9 @@ func (e *Engine) validateAndUpdateReplicaNvme(replicaName string, bdev *spdktype
 	return e.ReplicaStatusMap[replicaName].Mode, nil
 }
 
-// This method performs an online volume expansion for the Longhorn Engine using SPDK. It:
-// Expands underlying replica logical volumes (lvol)
-// Recreates the SPDK RAID bdev
-// Suspends and resumes frontend I/O as needed
-// Ensures cleanup and status update on failure
+// Expand performs an online volume expansion for the Longhorn Engine using SPDK.
+// It expands the underlying replica logical volumes (lvol), recreates the SPDK RAID bdev,
+// suspends and resumes frontend I/O as needed, and ensures cleanup and status updates on failure.
 func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (retErr error) {
 	e.Lock()
 	defer e.Unlock()
@@ -1360,19 +1361,18 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (retErr erro
 	// fetch all replica clients
 	replicaClients, err := e.getReplicaClients()
 	if err != nil {
-		retErr = err
-		return retErr
+		return err
 	}
 	defer e.closeRplicaClients(replicaClients)
 
-	// startExpansion checks if the expansion can be started, and marks the expansion as in progress
-	requireExpansion, err := e.startExpansion(size, replicaClients)
+	// requireExpansion checks if the expansion is needed and validates the request.
+	requireExpansion, err := e.requireExpansion(size, replicaClients)
 	if err != nil {
-		return errors.Wrap(err, "startExpansion failed")
+		return errors.Wrap(err, "requireExpansion failed")
 	}
 	if !requireExpansion {
 		e.log.Info("No need to expand engine")
-		e.SpecSize = size
+		e.finishExpansion(true, size)
 		return nil
 	}
 
@@ -1390,17 +1390,16 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (retErr erro
 		}
 
 		if engineErr != nil {
-			if e.State != types.InstanceStateError {
-				e.State = types.InstanceStateError
-			}
+			e.State = types.InstanceStateError
 			e.ErrorMsg = engineErr.Error()
-			e.log.WithError(engineErr).Errorf("Engine %s under non-recoverable operation during expansion", e.Name)
 
 			if errUpdateLogger := e.log.UpdateLogger(logrus.Fields{
 				"replicaStatusMap": e.ReplicaStatusMap,
 			}); errUpdateLogger != nil {
 				e.log.WithError(errUpdateLogger).Warn("Failed to update logger with replica status map during engine creation")
 			}
+
+			e.log.WithError(engineErr).Errorf("Engine %s under non-recoverable operation during expansion", e.Name)
 
 			e.lastExpansionError = errors.Wrap(retErr, "engine under non-recoverable operation").Error()
 			e.lastExpansionFailedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -1425,22 +1424,19 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (retErr erro
 	}
 	if err != nil {
 		engineErr = errors.Wrap(err, "prepare raid for expansion failed")
-		retErr = engineErr
-		return retErr
+		return err
 	}
 
 	// expand replicas
 	if err := e.expandReplicas(replicaClients, spdkClient, size); err != nil {
 		engineErr = err
-		retErr = err
-		return retErr
+		return err
 	}
 
 	// recreate RAID and reconnect frontend
 	if err := e.reconnectFrontend(spdkClient, bdevRaidUUID); err != nil {
 		engineErr = errors.Wrap(err, "reconnectFrontend failed")
-		retErr = engineErr
-		return retErr
+		return err
 	}
 	e.log.Info("Expanding engine complete")
 
@@ -1448,7 +1444,7 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (retErr erro
 	return nil
 }
 
-func (e *Engine) startExpansion(size uint64, replicaClients map[string]*client.SPDKClient) (requireExpansion bool, err error) {
+func (e *Engine) requireExpansion(size uint64, replicaClients map[string]*client.SPDKClient) (requireExpansion bool, err error) {
 	if e.isExpanding {
 		return false, fmt.Errorf("expansion is in progress")
 	}
@@ -1459,7 +1455,8 @@ func (e *Engine) startExpansion(size uint64, replicaClients map[string]*client.S
 
 	if e.SpecSize > size {
 		return false, fmt.Errorf("cannot expand engine to a smaller size %v, current size %v", size, e.SpecSize)
-	} else if e.SpecSize == size {
+	}
+	if e.SpecSize == size {
 		e.log.Infof("Engine already at requested size %v, skipping expansion", size)
 		return false, nil // no need to expand
 	}
@@ -1492,16 +1489,19 @@ func (e *Engine) startExpansion(size uint64, replicaClients map[string]*client.S
 
 		if currentReplicaSize == 0 {
 			currentReplicaSize = replica.SpecSize
-		} else if currentReplicaSize != replica.SpecSize {
+			continue
+		}
+
+		if currentReplicaSize != replica.SpecSize {
 			return false, fmt.Errorf("cannot expand engine with replicas in different sizes: replica %s has size %v while other replicas have size %v", replicaName, replica.SpecSize, currentReplicaSize)
 		}
 	}
 
 	if currentReplicaSize > size {
 		return false, fmt.Errorf("cannot expand engine to a smaller size %v, current replica size %v", size, currentReplicaSize)
-	} else if currentReplicaSize == size {
+	}
+	if currentReplicaSize == size {
 		e.log.Infof("Replicas already at requested size %v, skipping expansion", size)
-		e.SpecSize = size
 		return false, nil // no need to expand
 	}
 
@@ -1524,6 +1524,7 @@ func (e *Engine) finishExpansion(expanded bool, size uint64) {
 	} else {
 		e.log.Infof("Failed to expand from size %v to %v", e.SpecSize, size)
 	}
+
 	e.isExpanding = false
 }
 
