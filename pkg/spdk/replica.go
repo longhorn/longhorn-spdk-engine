@@ -1114,11 +1114,12 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 	r.Lock()
 	defer r.Unlock()
 
-	r.log.Info("Expanding replica")
+	r.log.Infof("Expanding replica %s to size %v", r.Name, size)
 
 	clusterSize, err := r.fetchClusterSize(spdkClient)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "Replica %s, fetch cluster size failed", r.Name)
+
 	}
 
 	roundedSize := util.RoundUp(size, clusterSize)
@@ -1128,7 +1129,8 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 
 	if r.SpecSize > size {
 		return fmt.Errorf("cannot expand replica %s to a smaller size %v, current spec size %v", r.Name, size, r.SpecSize)
-	} else if r.SpecSize == size {
+	}
+	if r.SpecSize == size {
 		r.log.Infof("Replica %s had been expanded to size %v", r.Name, size)
 		return nil
 	}
@@ -1136,17 +1138,22 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 	// double check if size is already be expanded
 	headBdevLvol, err := spdkClient.BdevLvolGetByName(r.Alias, 0)
 	if err != nil {
-		r.log.Errorf("Get replica %s failed, %v", r.Name, err)
-		return err
+		return errors.Wrapf(err, "Get replica %s failed", r.Name)
 	}
 	bdevLvol := BdevLvolInfoToServiceLvol(&headBdevLvol)
+
+	if bdevLvol.SpecSize > size {
+		r.log.Warnf("Found the actual size %v of replica %s is already larger than the requested size %v, will just update the spec size", bdevLvol.SpecSize, r.Name, size)
+		r.SpecSize = bdevLvol.SpecSize
+		return nil
+	}
 
 	if bdevLvol.SpecSize < size {
 		// If the bdev is exposed, we must stop exposing it before the resize.
 		reExposeBdev := false
 		if r.IsExposed {
 			if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-				return fmt.Errorf("failed to stop expose replica %v before expansion: %w", r.Name, err)
+				return errors.Wrapf(err, "failed to stop expose replica %v before expansion", r.Name)
 			}
 			r.IsExposed = false
 			reExposeBdev = true
@@ -1166,26 +1173,24 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 		if reExposeBdev {
 			nguid := commonutils.RandomID(nvmeNguidLength)
 			if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.Head.UUID, nguid, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
-				return fmt.Errorf("failed to start expose replica %v after expansion: %w", r.Name, err)
+				return errors.Wrapf(err, "failed to start expose replica %v after expansion", r.Name)
 			}
 			r.IsExposed = true
 		}
 
 		// Blindly clean up then update the caches for the head
 		r.Head = nil
-		if r.ActiveChain[len(r.ActiveChain)-1] != nil &&
+		if len(r.ActiveChain) > 0 &&
+			r.ActiveChain[len(r.ActiveChain)-1] != nil &&
 			r.ActiveChain[len(r.ActiveChain)-1].Name == r.Name {
 			r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
 		}
 
 		if err := r.updateHeadCache(spdkClient); err != nil {
-			r.log.Errorf("update head failed, %v", err)
-			return err
+			return errors.Wrapf(err, "failed to update head cache for replica %v", r.Name)
 		}
 
 		r.log.Info("Expanding replica complete")
-	} else if bdevLvol.SpecSize > size {
-		r.log.Warnf("Found the actual size %v of replica %s is already larger than the requested size %v, will just update the spec size", bdevLvol.SpecSize, r.Name, size)
 	}
 
 	r.SpecSize = size
@@ -1208,7 +1213,7 @@ func (r *Replica) fetchClusterSize(spdkClient *spdkclient.Client) (uint64, error
 	}
 
 	if err != nil {
-		return 0, fmt.Errorf("failed to query lvstore for replica %s (name=%s uuid=%s): %w", r.Name, r.LvsName, r.LvsUUID, err)
+		return 0, errors.Wrapf(err, "failed to query lvstore for replica %s (name=%s uuid=%s)", r.Name, r.LvsName, r.LvsUUID)
 	}
 
 	if len(lvsList) != 1 {
