@@ -1737,6 +1737,8 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 	monitorCtx, monitorCancelFunc := context.WithTimeout(context.Background(), MaxSnapshotCloneWaitTime)
 	r.snapshotCloningDstCache.monitorCancelFunc = monitorCancelFunc
 
+	r.log.Infof("Dst relica sending clone request to src replica %v at address %v", srcReplicaName, srcReplicaAddress)
+
 	go r.monitorSnapshotClone(spdkClient, monitorCtx, monitorCancelFunc, srcReplicaName, srcReplicaAddress, snapshotName, cloneMode)
 
 	return nil
@@ -2069,6 +2071,8 @@ func (r *Replica) SnapshotCloneSrcStart(spdkClient *spdkclient.Client, snapshotN
 		snapshotName:   snapshotName,
 	}
 	r.snapshotCloningSrcCache[dstReplicaName] = c
+
+	r.log.Infof("Src relica starts snapshot clone for snapshot %v, dst replica %v, dst cloning lvol address %v", snapshotName, dstReplicaName, dstCloningLvolAddress)
 
 	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
 		return r.snapshotLinkedCloneSrcStart(spdkClient, snapshotName, dstReplicaName)
