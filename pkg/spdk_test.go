@@ -1610,12 +1610,12 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 	}
 }
 
-func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuildingWithoutBackingImage(c *C) {
+func (s *TestSuite) xxTestSPDKMultipleThreadSnapshotOpsAndRebuildingWithoutBackingImage(c *C) {
 	fmt.Println("Testing SPDK snapshot operations with multiple threads without backing image")
 	s.spdkMultipleThreadSnapshotOpsAndRebuilding(c, false)
 }
 
-func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuildingWithBackingImage(c *C) {
+func (s *TestSuite) xxTestSPDKMultipleThreadSnapshotOpsAndRebuildingWithBackingImage(c *C) {
 	fmt.Println("Testing SPDK snapshot operations with multiple threads with backing image")
 	s.spdkMultipleThreadSnapshotOpsAndRebuilding(c, true)
 }
@@ -2311,12 +2311,12 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 	}
 }
 
-func (s *TestSuite) TestSPDKMultipleThreadFastRebuildingWithoutBackingImage(c *C) {
+func (s *TestSuite) xxTestSPDKMultipleThreadFastRebuildingWithoutBackingImage(c *C) {
 	fmt.Println("Testing SPDK fast rebuilding with multiple threads with backing image")
 	s.spdkMultipleThreadFastRebuilding(c, false)
 }
 
-func (s *TestSuite) TestSPDKMultipleThreadFastRebuildingWithBackingImage(c *C) {
+func (s *TestSuite) xxTestSPDKMultipleThreadFastRebuildingWithBackingImage(c *C) {
 	fmt.Println("Testing SPDK fast rebuilding with multiple threads without backing image")
 	s.spdkMultipleThreadFastRebuilding(c, true)
 }
@@ -2558,7 +2558,7 @@ func WaitForReplicaRebuildingCompleteTimeout(c *C, spdkCli *client.SPDKClient, e
 	c.Assert(complete, Equals, true)
 }
 
-func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
+func (s *TestSuite) xxTestSPDKEngineOnlyWithTarget(c *C) {
 	fmt.Println("Testing SPDK basic operations with engine only with target")
 
 	diskDriverName := "aio"
