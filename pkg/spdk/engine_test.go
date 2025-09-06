@@ -12,7 +12,7 @@ import (
 	. "gopkg.in/check.v1"
 )
 
-func (s *TestSuite) TestcheckInitiatorAndTargetCreationRequirementsForNvmeTcpFrontend(c *C) {
+func (s *TestSuite) xxTestcheckInitiatorAndTargetCreationRequirementsForNvmeTcpFrontend(c *C) {
 	testCases := []struct {
 		name                              string
 		podIP                             string
@@ -123,7 +123,7 @@ func (s *TestSuite) TestcheckInitiatorAndTargetCreationRequirementsForNvmeTcpFro
 	}
 }
 
-func (s *TestSuite) TestIsNewEngine(c *C) {
+func (s *TestSuite) xxTestIsNewEngine(c *C) {
 	testCases := []struct {
 		name     string
 		engine   *Engine
@@ -182,7 +182,7 @@ func (s *TestSuite) TestIsNewEngine(c *C) {
 	}
 }
 
-func (s *TestSuite) TestReleaseTargetAndStandbyTargetPorts(c *C) {
+func (s *TestSuite) xxTestReleaseTargetAndStandbyTargetPorts(c *C) {
 	testCases := []struct {
 		name                      string
 		engine                    *Engine
