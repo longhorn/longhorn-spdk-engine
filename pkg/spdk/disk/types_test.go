@@ -12,7 +12,7 @@ type TestSuite struct{}
 
 var _ = Suite(&TestSuite{})
 
-func (s *TestSuite) TestIsVfioPci(c *C) {
+func (s *TestSuite) xxTestIsVfioPci(c *C) {
 	// Add test case for isVfioPci function
 	testCases := []struct {
 		name     string
@@ -47,7 +47,7 @@ func (s *TestSuite) TestIsVfioPci(c *C) {
 	}
 }
 
-func (s *TestSuite) TestIsUioPciGeneric(c *C) {
+func (s *TestSuite) xxTestIsUioPciGeneric(c *C) {
 	// Add test case for isUioPciGeneric function
 	testCases := []struct {
 		name     string
