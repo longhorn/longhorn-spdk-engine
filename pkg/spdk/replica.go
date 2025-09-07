@@ -2820,6 +2820,7 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	}
 
 	externalSnapshotLvolName := GetReplicaSnapshotLvolName(srcReplicaName, externalSnapshotName)
+	r.log.Infof("RebuildingDstStart: connecting NVMf bdev for external snapshot lvol %s from src replica %s at address %s", externalSnapshotLvolName, srcReplicaName, srcReplicaAddress)
 	externalSnapshotBdevName, err := connectNVMfBdev(spdkClient, externalSnapshotLvolName, externalSnapshotAddress,
 		replicaCtrlrLossTimeoutSec, replicaFastIOFailTimeoutSec)
 	if err != nil {
@@ -2838,10 +2839,13 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		}
 	}
 
+	r.log.Infof("RebuildingDstStart: replica %v isExposed %v", r.Name, r.IsExposed)
 	if r.IsExposed {
+		r.log.Infof("RebuildingDstStart: stopping exposing bdev %v", r.Name)
 		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil {
 			return "", err
 		}
+		r.log.Infof("RebuildingDstStart: stopped exposing bdev %v", r.Name)
 		r.IsExposed = false
 	}
 	// TODO: Uncomment below code after the RAID delta bitmap feature is ready
@@ -2853,19 +2857,25 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	//		r.log.WithError(err).Warnf("Failed to rename the previous head lvol %s to %s for dst replica %v rebuilding start, will try to remove it instead", r.Head.Alias, expiredLvolName, r.Name)
 	//	}
 	//}
+
+	r.log.Infof("RebuildingDstStart: deleting bdev %v", r.Alias)
 	if _, err := spdkClient.BdevLvolDelete(r.Alias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return "", err
 	}
+
+	r.log.Infof("RebuildingDstStart: deleted bdev %v", r.Alias)
 
 	// Retain the backing image in the active chain. All unverified lvols should be removed first.
 	r.Head = nil
 	r.ActiveChain = []*Lvol{r.ActiveChain[0]}
 
 	// Create a new head lvol based on the external src snapshot lvol then
+	r.log.Infof("RebuildingDstStart: cloning bdev %v", r.rebuildingDstCache.externalSnapshotBdevName)
 	headLvolUUID, err := spdkClient.BdevLvolCloneBdev(r.rebuildingDstCache.externalSnapshotBdevName, r.LvsName, r.Name)
 	if err != nil {
 		return "", err
 	}
+	r.log.Infof("RebuildingDstStart: cloned bdev %v", r.rebuildingDstCache.externalSnapshotBdevName)
 	headBdevLvol, err := spdkClient.BdevLvolGetByName(headLvolUUID, 0)
 	if err != nil {
 		return "", err
@@ -2874,9 +2884,11 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	r.ActiveChain = append(r.ActiveChain, r.Head)
 
 	nguid := commonutils.RandomID(nvmeNguidLength)
+	r.log.Infof("RebuildingDstStart: starting to expose bdev %v with nguid %s on port %d", r.Name, nguid, r.rebuildingDstCache.rebuildingPort)
 	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.Head.UUID, nguid, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
 		return "", err
 	}
+	r.log.Infof("RebuildingDstStart: started to expose bdev %v with nguid %s on port %d", r.Name, nguid, r.rebuildingDstCache.rebuildingPort)
 	r.IsExposed = true
 	dstHeadLvolAddress := net.JoinHostPort(r.IP, strconv.Itoa(int(r.PortStart)))
 
