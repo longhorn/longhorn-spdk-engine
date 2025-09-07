@@ -3407,6 +3407,7 @@ func (r *Replica) RebuildingDstShallowCopyStart(spdkClient *spdkclient.Client, s
 		if !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			return err
 		}
+		r.log.Infof("Replica did not find an existing snapshot lvol %s hence will do a full shallow copy for snapshot %s", dstSnapLvolName, snapshotName)
 		// Directly start a shallow copy when there is no existing snapshot lvol
 		return srcReplicaServiceCli.ReplicaRebuildingSrcShallowCopyStart(r.rebuildingDstCache.srcReplicaName, snapshotName, dstRebuildingLvolAddress)
 	}
