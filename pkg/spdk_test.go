@@ -454,10 +454,14 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica3.Head.CreationTime, Not(Equals), "")
 			c.Assert(replica3.Head.Parent, Equals, "")
 
+			logrus.Infof("Debug ====> Add Replica %s", replicaName3)
 			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))))
 			c.Assert(err, IsNil)
 
+			logrus.Infof("Debug ====> Wait for Replica %s rebuilding complete", replicaName3)
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
+
+			logrus.Infof("Debug ====> Check data integrity after Replica %s rebuilding", replicaName3)
 
 			snapshotNameRebuild := ""
 			for replicaName := range replicaAddressMap {
