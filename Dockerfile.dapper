@@ -47,7 +47,7 @@ RUN echo "Cloning longhorn/dep-versions SRC_BRANCH=${SRC_BRANCH} SRC_TAG=${SRC_T
 
 # Build spdk
 RUN export REPO_OVERRIDE="https://github.com/derekbit/spdk.git" && \
-    export COMMIT_ID_OVERRIDE="39c7d9a44ab2921f885ad207057ba3d6afa9b636" && \
+    export COMMIT_ID_OVERRIDE="7d4196a03cfe6caa346150cce7a5d2e06e7833d3" && \
     bash /usr/src/dep-versions/scripts/build-spdk.sh "${REPO_OVERRIDE}" "${COMMIT_ID_OVERRIDE}" "${ARCH}"
 
 # Build libjson-c-devel
