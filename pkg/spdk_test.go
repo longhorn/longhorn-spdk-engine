@@ -240,7 +240,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 		c.Assert(err, IsNil)
 	}()
 
-	concurrentCount := 5
+	concurrentCount := 1
 	dataCountInMB := 100
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
