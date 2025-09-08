@@ -2,16 +2,16 @@ module github.com/longhorn/longhorn-spdk-engine
 
 go 1.24.0
 
-toolchain go1.25.0
+toolchain go1.25.1
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20250804022317-794abf817297
-	github.com/longhorn/go-common-libs v0.0.0-20250831092333-eaa5dddf05b8
-	github.com/longhorn/go-spdk-helper v0.0.3-0.20250831144217-5b276fe12f4e
-	github.com/longhorn/types v0.0.0-20250831081209-ea63b0b5f6e1
+	github.com/longhorn/go-common-libs v0.0.0-20250908085655-4593e23015c0
+	github.com/longhorn/go-spdk-helper v0.0.3
+	github.com/longhorn/types v0.0.0-20250907125557-ef38b61560af
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
