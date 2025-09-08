@@ -52,4 +52,4 @@ trap "rm -f /tmp/test-disk" EXIT
 echo 'core.%p' > /proc/sys/kernel/core_pattern
 
 
-go test -v -p 1 -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 480m -count=30
+go test -v -p 1 -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 480m -count=100
