@@ -139,6 +139,20 @@ func stopSPDKTgtDaemon(timeout time.Duration, signal syscall.Signal) error {
 				_, err := process.Wait()
 				done <- err
 				close(done)
+
+				// Wait until process is deleted
+				for {
+					logrus.Infof("Waiting for spdk_tgt %v to exit", process.Pid)
+					exists, err := proc.IsProcessExists(process.Pid)
+					if err != nil {
+						logrus.Errorf("Failed to check if spdk_tgt %v exists: %v", process.Pid, err)
+						break
+					}
+					if !exists {
+						break
+					}
+					time.Sleep(1 * time.Second)
+				}
 			}()
 
 			select {
