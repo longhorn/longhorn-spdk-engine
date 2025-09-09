@@ -1245,7 +1245,7 @@ func (s *Server) EngineExpand(ctx context.Context, req *spdkrpc.EngineExpandRequ
 		return nil, grpcstatus.Errorf(grpccodes.Unimplemented, "cannot expand ublk frontend engine %v", req.Name)
 	}
 
-	err = e.Expand(s.spdkClient, req.Size)
+	err = e.Expand(s.spdkClient, req.Size, s.portAllocator)
 	if err != nil {
 		return nil, grpcstatus.Error(grpccodes.Internal, errors.Wrapf(err, "failed to expand engine %v", req.Name).Error())
 	}
