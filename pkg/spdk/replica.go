@@ -1135,64 +1135,48 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 		return nil
 	}
 
-	// double check if size is already be expanded
-	headBdevLvol, err := spdkClient.BdevLvolGetByName(r.Alias, 0)
+	// If the bdev is exposed, we must stop exposing it before the resize.
+	reExposeBdev := false
+	if r.IsExposed {
+		if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return errors.Wrapf(err, "failed to stop expose replica %v before expansion", r.Name)
+		}
+		r.IsExposed = false
+		reExposeBdev = true
+	}
+
+	resized, err := spdkClient.BdevLvolResize(r.Alias, util.BytesToMiB(size))
 	if err != nil {
-		return errors.Wrapf(err, "Get replica %s failed", r.Name)
-	}
-	bdevLvol := BdevLvolInfoToServiceLvol(&headBdevLvol)
-
-	if bdevLvol.SpecSize > size {
-		r.log.Warnf("Found the actual size %v of replica %s is already larger than the requested size %v, will just update the spec size", bdevLvol.SpecSize, r.Name, size)
-		r.SpecSize = bdevLvol.SpecSize
-		return nil
+		r.log.Errorf("Resize replica %s failed, %v", r.Name, err)
+		return errors.Wrapf(err, "bdev lvol resize error")
 	}
 
-	if bdevLvol.SpecSize < size {
-		// If the bdev is exposed, we must stop exposing it before the resize.
-		reExposeBdev := false
-		if r.IsExposed {
-			if err := spdkClient.StopExposeBdev(helpertypes.GetNQN(r.Name)); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-				return errors.Wrapf(err, "failed to stop expose replica %v before expansion", r.Name)
-			}
-			r.IsExposed = false
-			reExposeBdev = true
-		}
-
-		resized, err := spdkClient.BdevLvolResize(r.Alias, util.BytesToMiB(size))
-		if err != nil {
-			r.log.Errorf("Resize replica %s failed, %v", r.Name, err)
-			return errors.Wrapf(err, "bdev lvol resize error")
-		}
-
-		if !resized {
-			return fmt.Errorf("no error, but replica %s not resized", r.Name)
-		}
-
-		// If we had previously exposed the bdev, we must re-expose it after the resize.
-		if reExposeBdev {
-			nguid := commonutils.RandomID(nvmeNguidLength)
-			if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.Head.UUID, nguid, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
-				return errors.Wrapf(err, "failed to start expose replica %v after expansion", r.Name)
-			}
-			r.IsExposed = true
-		}
-
-		// Blindly clean up then update the caches for the head
-		r.Head = nil
-		if len(r.ActiveChain) > 0 &&
-			r.ActiveChain[len(r.ActiveChain)-1] != nil &&
-			r.ActiveChain[len(r.ActiveChain)-1].Name == r.Name {
-			r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
-		}
-
-		if err := r.updateHeadCache(spdkClient); err != nil {
-			return errors.Wrapf(err, "failed to update head cache for replica %v", r.Name)
-		}
-
-		r.log.Info("Expanding replica complete")
+	if !resized {
+		return fmt.Errorf("no error, but replica %s not resized", r.Name)
 	}
 
+	// If we had previously exposed the bdev, we must re-expose it after the resize.
+	if reExposeBdev {
+		nguid := commonutils.RandomID(nvmeNguidLength)
+		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.Head.UUID, nguid, r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
+			return errors.Wrapf(err, "failed to start expose replica %v after expansion", r.Name)
+		}
+		r.IsExposed = true
+	}
+
+	// Blindly clean up then update the caches for the head
+	r.Head = nil
+	if len(r.ActiveChain) > 0 &&
+		r.ActiveChain[len(r.ActiveChain)-1] != nil &&
+		r.ActiveChain[len(r.ActiveChain)-1].Name == r.Name {
+		r.ActiveChain = r.ActiveChain[:len(r.ActiveChain)-1]
+	}
+
+	if err := r.updateHeadCache(spdkClient); err != nil {
+		return errors.Wrapf(err, "failed to update head cache for replica %v", r.Name)
+	}
+
+	r.log.Info("Expanding replica complete")
 	r.SpecSize = size
 	return nil
 }
