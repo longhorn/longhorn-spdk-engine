@@ -113,7 +113,7 @@ func (c *SPDKClient) ReplicaGet(name string) (*api.Replica, error) {
 
 func (c *SPDKClient) ReplicaExpand(name string, size uint64) error {
 	if name == "" {
-		return fmt.Errorf("failed to delete SPDK replica: missing required parameter")
+		return fmt.Errorf("failed to expand replica: missing required parameter")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -822,7 +822,7 @@ func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error)
 
 func (c *SPDKClient) EngineExpand(ctx context.Context, name string, size uint64) error {
 	if name == "" {
-		return fmt.Errorf("failed to delete target for engine: missing required parameter")
+		return fmt.Errorf("failed to expand engine: missing required parameter")
 	}
 
 	client := c.getSPDKServiceClient()

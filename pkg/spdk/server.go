@@ -1238,7 +1238,7 @@ func (s *Server) EngineExpand(ctx context.Context, req *spdkrpc.EngineExpandRequ
 	s.RUnlock()
 
 	if e == nil {
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for resumption", req.Name)
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for expansion", req.Name)
 	}
 
 	if types.IsUblkFrontend(e.Frontend) {

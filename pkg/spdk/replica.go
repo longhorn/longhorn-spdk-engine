@@ -1118,8 +1118,7 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 
 	clusterSize, err := r.fetchClusterSize(spdkClient)
 	if err != nil {
-		return errors.Wrapf(err, "Replica %s, fetch cluster size failed", r.Name)
-
+		return errors.Wrapf(err, "failed to fetch cluster size for replica %v", r.Name)
 	}
 
 	roundedSize := util.RoundUp(size, clusterSize)
@@ -1146,13 +1145,30 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 	}
 
 	resized, err := spdkClient.BdevLvolResize(r.Alias, util.BytesToMiB(size))
-	if err != nil {
-		r.log.Errorf("Resize replica %s failed, %v", r.Name, err)
-		return errors.Wrapf(err, "bdev lvol resize error")
-	}
+	if !resized || err != nil {
+		r.log.Warn("Failed to expand replica or returned false; verifying lvol size")
 
-	if !resized {
-		return fmt.Errorf("no error, but replica %s not resized", r.Name)
+		// Some replicas may have returned an error during expansion due to unexpected issues
+		// (e.g. temporary network glitch, internal error, timeout).
+		// To avoid mistakenly marking those as failed, we perform a single follow-up check
+		// to verify if the replica was actually expanded.
+
+		headBdevLvol, getLvolErr := spdkClient.BdevLvolGetByName(r.Alias, 0)
+		if getLvolErr != nil {
+			return errors.Wrapf(err, "failed to get bdev lvol: %v", getLvolErr)
+		}
+		lvol := BdevLvolInfoToServiceLvol(&headBdevLvol)
+		if lvol.SpecSize != size {
+			if err != nil {
+				return errors.Wrapf(err, "bdev lvol resize error")
+			}
+
+			if !resized {
+				return fmt.Errorf("no error, but replica %s not resized", r.Name)
+			}
+		}
+
+		r.log.Info("Replica expansion succeeded despite earlier error")
 	}
 
 	// If we had previously exposed the bdev, we must re-expose it after the resize.
