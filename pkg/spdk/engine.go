@@ -1874,26 +1874,33 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	}
 
 	// Ask the source replica to expose the newly created snapshot if the source replica and destination replica are not on the same node.
+	e.log.Infof("Asking source replica %s to expose snapshot %s for rebuilding destination replica %s", srcReplicaName, snapshotName, dstReplicaName)
 	externalSnapshotAddress, err := srcReplicaServiceCli.ReplicaRebuildingSrcStart(srcReplicaName, dstReplicaName, dstReplicaAddress, snapshotName)
 	if err != nil {
 		return err
 	}
 
+	e.log.Infof("Asking destination replica %s to start rebuilding from source replica %s exposed snapshot %s", dstReplicaName, srcReplicaName, snapshotName)
 	// The destination replica attaches the source replica exposed snapshot as the external snapshot then create a head based on it.
 	dstHeadLvolAddress, err := dstReplicaServiceCli.ReplicaRebuildingDstStart(dstReplicaName, srcReplicaName, srcReplicaAddress, snapshotName, externalSnapshotAddress, rebuildingSnapshotList)
 	if err != nil {
 		return err
 	}
 
+	logrus.Infof("Engine connecting rebuilding replica %s head lvol %s", dstReplicaName, dstHeadLvolAddress)
+
 	// Add rebuilding replica head bdev to the base bdev list of the RAID bdev
 	dstHeadLvolBdevName, err := connectNVMfBdev(spdkClient, dstReplicaName, dstHeadLvolAddress, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec)
 	if err != nil {
 		return err
 	}
+
+	logrus.Infof("Engine adding rebuilding replica %s head bdev %s to the base bdev list for engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
 	if _, err := spdkClient.BdevRaidGrowBaseBdev(e.Name, dstHeadLvolBdevName); err != nil {
 		return errors.Wrapf(err, "failed to adding the rebuilding replica %s head bdev %s to the base bdev list for engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
 	}
 
+	logrus.Infof("Engine connected rebuilding replica %s head bdev %s to the RAID bdev %s successfully", dstReplicaName, dstHeadLvolBdevName, e.Name)
 	e.ReplicaStatusMap[dstReplicaName] = &EngineReplicaStatus{
 		Address:  dstReplicaAddress,
 		Mode:     types.ModeWO,

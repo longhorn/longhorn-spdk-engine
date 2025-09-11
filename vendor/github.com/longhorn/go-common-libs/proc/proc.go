@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/c9s/goprocinfo/linux"
 	"github.com/mitchellh/go-ps"
@@ -175,6 +176,29 @@ func FindProcessByName(name string) (*os.Process, error) {
 	}
 
 	return nil, fmt.Errorf("process %s is not found", name)
+}
+
+func IsProcessExists(pid int) (bool, error) {
+	_, err := os.FindProcess(pid)
+	if err != nil {
+		return false, errors.Wrapf(err, "failed to find process %v", pid)
+	}
+
+	// Sending signal 0 to check process existence.
+	err = syscall.Kill(pid, 0)
+	if err != nil {
+		if err == syscall.ESRCH {
+			// No such process
+			return false, nil
+		}
+		if err == syscall.EPERM {
+			// Process exists, but no permission to signal it
+			return true, nil
+		}
+		return false, errors.Wrapf(err, "unexpected error while signaling process %v", pid)
+	}
+
+	return true, nil
 }
 
 // FindProcessByCmdline finds the processes with matching cmdline

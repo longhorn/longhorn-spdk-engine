@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -128,36 +129,60 @@ func stopSPDKTgtDaemon(timeout time.Duration, signal syscall.Signal) error {
 		return errors.Wrap(err, "failed to find spdk_tgt")
 	}
 
-	var errs error
+	var (
+		errs error
+		wg   sync.WaitGroup
+	)
+
 	for _, process := range processes {
-		logrus.Infof("Sending signal %v to spdk_tgt %v", signal, process.Pid)
-		if err := process.Signal(signal); err != nil {
-			errs = multierr.Append(errs, errors.Wrapf(err, "failed to send signal %v to spdk_tgt %v", signal, process.Pid))
-		} else {
+		wg.Add(1)
+
+		go func(p *os.Process) {
+			defer wg.Done()
+
+			logrus.Infof("Sending signal %v to spdk_tgt %v", signal, p.Pid)
+			if err := p.Signal(signal); err != nil {
+				errs = multierr.Append(errs, errors.Wrapf(err, "failed to send signal %v to spdk_tgt %v", signal, p.Pid))
+				return
+			}
+
 			done := make(chan error, 1)
 			go func() {
-				_, err := process.Wait()
+				_, err := p.Wait()
 				done <- err
 				close(done)
 			}()
 
 			select {
 			case <-time.After(timeout):
-				logrus.Warnf("spdk_tgt %v failed to exit in time, sending signal %v", process.Pid, signal)
-				err = process.Signal(signal)
-				if err != nil {
-					errs = multierr.Append(errs, errors.Wrapf(err, "failed to send signal %v to spdk_tgt %v", signal, process.Pid))
+				logrus.Warnf("spdk_tgt %v failed to exit in time, sending signal %v", p.Pid, signal)
+				if err := p.Signal(signal); err != nil {
+					errs = multierr.Append(errs, errors.Wrapf(err, "failed to send signal %v to spdk_tgt %v", signal, p.Pid))
 				}
 			case err := <-done:
 				if err != nil {
-					errs = multierr.Append(errs, errors.Wrapf(err, "spdk_tgt %v exited with error", process.Pid))
+					errs = multierr.Append(errs, errors.Wrapf(err, "spdk_tgt %v exited with error", p.Pid))
 				} else {
-					logrus.Infof("spdk_tgt %v exited successfully", process.Pid)
+					logrus.Infof("spdk_tgt %v exited successfully", p.Pid)
 				}
 			}
-		}
+
+			for {
+				exists, err := proc.IsProcessExists(p.Pid)
+				if err != nil {
+					logrus.Errorf("Failed to check if spdk_tgt %v exists: %v", p.Pid, err)
+					break
+				}
+				if !exists {
+					logrus.Infof("Confirmed spdk_tgt %v is gone", p.Pid)
+					break
+				}
+				time.Sleep(1 * time.Second)
+			}
+		}(process)
 	}
 
+	wg.Wait()
 	return errs
 }
 
