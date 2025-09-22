@@ -1344,11 +1344,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			for snapName := range snapshotMap {
 				err = spdkCli.EngineSnapshotHash(engineName, snapName, false)
-				if snapName == snapshotNameRebuild1 {
-					c.Assert(err, NotNil) // This snapshot is system created, so it should not be hashed
-				} else {
-					c.Assert(err, IsNil)
-				}
+				c.Assert(err, IsNil)
 			}
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName2, replicaName3}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
@@ -1448,11 +1444,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			for snapName := range snapshotMap {
 				err = spdkCli.EngineSnapshotHash(engineName, snapName, false)
-				if snapName == snapshotNameRebuild1 || snapName == snapshotNameRebuild2 {
-					c.Assert(err, NotNil) // This snapshot is system created, so it should not be hashed
-				} else {
-					c.Assert(err, IsNil)
-				}
+				c.Assert(err, IsNil)
 			}
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
@@ -2265,11 +2257,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 
 			for snapName := range snapshotMap {
 				err = spdkCli.EngineSnapshotHash(engineName, snapName, false)
-				if snapName == snapshotNameRebuild1 {
-					c.Assert(err, NotNil) // This snapshot is system created, so it should not be hashed
-				} else {
-					c.Assert(err, IsNil)
-				}
+				c.Assert(err, IsNil)
 			}
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
