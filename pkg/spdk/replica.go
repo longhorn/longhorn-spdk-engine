@@ -42,8 +42,6 @@ import (
 const (
 	restorePeriodicRefreshInterval = 2 * time.Second
 
-	checksumWaitPeriodAfterRebuilding = 10 * time.Second
-
 	lvolRangeShallowCopyLength = uint64(1 << 8)
 )
 
@@ -1643,10 +1641,6 @@ func (r *Replica) SnapshotHash(spdkClient *spdkclient.Client, snapshotName strin
 	if !snapSvcLvol.UserCreated || (snapParentSvcLvol != nil && !snapParentSvcLvol.UserCreated) {
 		if r.isRebuilding || r.rebuildingSrcCache.dstReplicaName != "" {
 			return fmt.Errorf("cannot hash snapshot %s(%s)(%s) checksum, since its parent or itself is a system created snapshot while the replica is rebuilding", snapshotName, snapLvolName, snapSvcLvol.UUID)
-		}
-		// Delay the checksum hash of system created snapshot lvols a while after rebuilding as they may be purged later.
-		if !time.Now().After(r.lastRebuildingAt.Add(checksumWaitPeriodAfterRebuilding)) {
-			return fmt.Errorf("cannot hash snapshot %s(%s)(%s) checksum, since its parent or itself is a system created snapshot while the replica just finished rebuilding", snapshotName, snapLvolName, snapSvcLvol.UUID)
 		}
 	}
 
