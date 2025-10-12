@@ -2,15 +2,15 @@ module github.com/longhorn/longhorn-spdk-engine
 
 go 1.24.0
 
-toolchain go1.25.1
+toolchain go1.25.2
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/avast/retry-go/v4 v4.6.1
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20250804022317-794abf817297
-	github.com/longhorn/go-common-libs v0.0.0-20250921030719-16313e7f30b3
+	github.com/longhorn/backupstore v0.0.0-20251009075049-1b6c3422a333
+	github.com/longhorn/go-common-libs v0.0.0-20251012091539-422bbbd4c8b9
 	github.com/longhorn/go-spdk-helper v0.0.4
 	github.com/longhorn/types v0.0.0-20250915085125-0638a2eac534
 	github.com/pkg/errors v0.9.1
@@ -18,15 +18,19 @@ require (
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.44.0
 	google.golang.org/grpc v1.75.1
-	google.golang.org/protobuf v1.36.9
+	google.golang.org/protobuf v1.36.10
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
 )
 
 require (
+	github.com/cockroachdb/errors v1.12.0 // indirect
+	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
+	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
+	github.com/getsentry/sentry-go v0.27.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -68,7 +72,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/exp v0.0.0-20250911091902-df9299821621 // indirect
+	golang.org/x/exp v0.0.0-20251009144603-d2f985daa21b // indirect
 	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/text v0.29.0 // indirect; sindirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
