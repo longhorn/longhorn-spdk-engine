@@ -5,8 +5,8 @@ github.com/0xPolygon/polygon-edge/consensus/polybft/bitmap
 ## explicit; go 1.14
 github.com/RoaringBitmap/roaring
 github.com/RoaringBitmap/roaring/internal
-# github.com/avast/retry-go/v4 v4.6.1
-## explicit; go 1.18
+# github.com/avast/retry-go/v4 v4.7.0
+## explicit; go 1.20
 github.com/avast/retry-go/v4
 # github.com/beorn7/perks v1.0.1
 ## explicit; go 1.11
@@ -228,7 +228,7 @@ go.yaml.in/yaml/v2
 # golang.org/x/exp v0.0.0-20251017212417-90e834f514db
 ## explicit; go 1.24.0
 golang.org/x/exp/constraints
-# golang.org/x/net v0.44.0
+# golang.org/x/net v0.46.0
 ## explicit; go 1.24.0
 golang.org/x/net/context
 golang.org/x/net/http/httpguts
@@ -238,13 +238,13 @@ golang.org/x/net/idna
 golang.org/x/net/internal/httpcommon
 golang.org/x/net/internal/timeseries
 golang.org/x/net/trace
-# golang.org/x/sys v0.36.0
+# golang.org/x/sys v0.37.0
 ## explicit; go 1.24.0
 golang.org/x/sys/execabs
 golang.org/x/sys/unix
 golang.org/x/sys/windows
 golang.org/x/sys/windows/registry
-# golang.org/x/text v0.29.0
+# golang.org/x/text v0.30.0
 ## explicit; go 1.24.0
 golang.org/x/text/cases
 golang.org/x/text/internal
