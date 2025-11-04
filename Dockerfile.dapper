@@ -27,7 +27,7 @@ CMD ["ci"]
 RUN for i in {1..10}; do \
         zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:tools:compiler/16.0/devel:tools:compiler.repo && \
         zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:/languages:/python:/Factory/16.0/devel:languages:python:Factory.repo && \
-        zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:languages:python:backports/16.0/devel:languages:python:backports.repo && \
+        zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:/languages:/python:/backports/16.0/devel:languages:python:backports.repo && \
         zypper --gpg-auto-import-keys ref && break || sleep 1; \
     done
 
@@ -40,7 +40,7 @@ RUN curl -sSL "https://golang.org/dl/go${GOLANG_VERSION}.linux-${ARCH}.tar.gz" -
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin latest
 
 RUN echo "Cloning longhorn/dep-versions SRC_BRANCH=${SRC_BRANCH} SRC_TAG=${SRC_TAG}" && \
-    git clone https://github.com/longhorn/dep-versions.git -b ${SRC_BRANCH} /usr/src/dep-versions && \
+    git clone https://github.com/derekbit/dep-versions.git -b ${SRC_BRANCH} /usr/src/dep-versions && \
     cd /usr/src/dep-versions && \
     if [ -n "${SRC_TAG}" ] && git show-ref --tags ${SRC_TAG} > /dev/null 2>&1; then \
         echo "Checking out tag ${SRC_TAG}"; \
