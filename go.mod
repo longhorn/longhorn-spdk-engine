@@ -4,11 +4,6 @@ go 1.24.0
 
 toolchain go1.25.4
 
-replace (
-	github.com/longhorn/go-spdk-helper => ../go-spdk-helper
-	github.com/longhorn/types => ../types
-)
-
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/avast/retry-go/v4 v4.7.0
@@ -17,8 +12,8 @@ require (
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20251112123319-cb342d92b1e3
 	github.com/longhorn/go-common-libs v0.0.0-20251025140453-faa811992208
-	github.com/longhorn/go-spdk-helper v0.2.0
-	github.com/longhorn/types v0.0.0-20251019113838-3455d9c2f5ca
+	github.com/longhorn/go-spdk-helper v0.2.1-0.20251114033407-2b59bbd85cb8
+	github.com/longhorn/types v0.0.0-20251114033314-2b0f01ee4a71
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.47.0
