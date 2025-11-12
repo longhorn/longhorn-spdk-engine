@@ -2,7 +2,7 @@ module github.com/longhorn/longhorn-spdk-engine
 
 go 1.24.0
 
-toolchain go1.25.3
+toolchain go1.25.4
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
@@ -10,7 +10,7 @@ require (
 	github.com/cockroachdb/errors v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20251009075049-1b6c3422a333
+	github.com/longhorn/backupstore v0.0.0-20251112123319-cb342d92b1e3
 	github.com/longhorn/go-common-libs v0.0.0-20251025140453-faa811992208
 	github.com/longhorn/go-spdk-helper v0.2.0
 	github.com/longhorn/types v0.0.0-20251019113838-3455d9c2f5ca
@@ -20,8 +20,8 @@ require (
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.10
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
-	k8s.io/apimachinery v0.34.1
-	k8s.io/client-go v0.34.1
+	k8s.io/apimachinery v0.34.2
+	k8s.io/client-go v0.34.2
 )
 
 require (
