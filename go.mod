@@ -12,8 +12,8 @@ require (
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20251123054148-021939243385
 	github.com/longhorn/go-common-libs v0.0.0-20251116145113-3788c6f8aba8
-	github.com/longhorn/go-spdk-helper v0.2.1-0.20251122081607-ba5a970c7558
-	github.com/longhorn/types v0.0.0-20251114033314-2b0f01ee4a71
+	github.com/longhorn/go-spdk-helper v0.2.1-0.20251127040022-2ab7a5b5c5a9
+	github.com/longhorn/types v0.0.0-20251125140643-490b3f39dabd
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
 	google.golang.org/grpc v1.77.0
@@ -27,6 +27,7 @@ require (
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
+	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/getsentry/sentry-go v0.27.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
@@ -36,6 +37,8 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/russross/blackfriday/v2 v2.1.0 // indirect
+	github.com/urfave/cli v1.22.17 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/net v0.47.0 // indirect
