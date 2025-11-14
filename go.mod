@@ -4,6 +4,11 @@ go 1.24.0
 
 toolchain go1.25.4
 
+replace (
+	github.com/longhorn/go-spdk-helper => ../go-spdk-helper
+	github.com/longhorn/types => ../types
+)
+
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/avast/retry-go/v4 v4.7.0
