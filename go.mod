@@ -10,13 +10,12 @@ require (
 	github.com/cockroachdb/errors v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20251112123319-cb342d92b1e3
-	github.com/longhorn/go-common-libs v0.0.0-20251025140453-faa811992208
-	github.com/longhorn/go-spdk-helper v0.2.1-0.20251114033407-2b59bbd85cb8
+	github.com/longhorn/backupstore v0.0.0-20251123054148-021939243385
+	github.com/longhorn/go-common-libs v0.0.0-20251116145113-3788c6f8aba8
+	github.com/longhorn/go-spdk-helper v0.2.1-0.20251122081607-ba5a970c7558
 	github.com/longhorn/types v0.0.0-20251114033314-2b0f01ee4a71
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
-	golang.org/x/net v0.47.0
 	google.golang.org/grpc v1.77.0
 	google.golang.org/protobuf v1.36.10
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
@@ -39,6 +38,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
+	golang.org/x/net v0.47.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
@@ -72,7 +72,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
+	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect; sindirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251022142026-3a174f9686a8 // indirect
