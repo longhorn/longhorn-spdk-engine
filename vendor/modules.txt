@@ -126,7 +126,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.2.1-0.20251130143546-00546a63ae27
+# github.com/longhorn/go-spdk-helper v0.2.1-0.20251130143546-00546a63ae27 => github.com/davidcheng0922/go-spdk-helper v0.0.0-20251128084218-8f95d637e37c
 ## explicit; go 1.24.0
 github.com/longhorn/go-spdk-helper/pkg/initiator
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
@@ -434,3 +434,4 @@ sigs.k8s.io/randfill/bytesource
 # sigs.k8s.io/structured-merge-diff/v6 v6.3.0
 ## explicit; go 1.23
 sigs.k8s.io/structured-merge-diff/v6/value
+# github.com/longhorn/go-spdk-helper => github.com/davidcheng0922/go-spdk-helper v0.0.0-20251128084218-8f95d637e37c
