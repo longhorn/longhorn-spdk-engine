@@ -2,6 +2,7 @@ package aio
 
 import (
 	"fmt"
+	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	"io"
 	"os"
 
@@ -33,7 +34,12 @@ func (d *DiskDriverAio) DiskCreate(spdkClient *spdkclient.Client, diskName, disk
 }
 
 func (d *DiskDriverAio) DiskDelete(spdkClient *spdkclient.Client, diskName, diskPath string) (deleted bool, err error) {
-	return spdkClient.BdevAioDelete(diskName)
+	if _, err = spdkClient.BdevAioDelete(diskName); err != nil {
+		if !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func (d *DiskDriverAio) DiskGet(spdkClient *spdkclient.Client, diskName, diskPath string, timeout uint64) ([]spdktypes.BdevInfo, error) {

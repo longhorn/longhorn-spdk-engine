@@ -88,32 +88,35 @@ func (d *Disk) DiskCreate(spdkClient *spdkclient.Client, diskName, diskUUID, dis
 
 	log.Info("Creating disk")
 
+	d.Lock()
+	defer d.Unlock()
+
 	if diskName == "" || diskPath == "" {
+		d.State = DiskStateError
 		return grpcstatus.Error(grpccodes.InvalidArgument, "disk name and disk path are required")
 	}
 
 	exactDiskDriver, err := spdkdisk.GetDiskDriver(commontypes.DiskDriver(diskDriver), diskPath)
 	if err != nil {
+		d.State = DiskStateError
 		log.WithError(err).Error("Failed to determine disk driver")
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "failed to get disk driver for disk %q: %v", diskName, err)
 	}
+	d.DiskDriver = string(exactDiskDriver)
 
 	lvstoreUUID, err := addBlockDevice(spdkClient, diskName, diskUUID, diskPath, exactDiskDriver, blockSize, denyInUseDisk)
 	if err != nil {
+		d.State = DiskStateError
 		log.WithError(err).Error("Failed to add block device")
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to add disk block device: %v", err)
 	}
 
 	diskID, err := getDiskID(diskPath, exactDiskDriver)
 	if err != nil {
+		d.State = DiskStateError
 		log.WithError(err).Error("Failed to get disk ID")
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to get disk ID for %q: %v", diskName, err)
 	}
-
-	d.Lock()
-	defer d.Unlock()
-
-	d.DiskDriver = string(exactDiskDriver)
 	d.DiskID = diskID
 
 	if err := d.lvstoreToDisk(spdkClient, "", lvstoreUUID); err != nil {
@@ -171,6 +174,9 @@ func (d *Disk) DiskDelete(spdkClient *spdkclient.Client, diskName, diskUUID, dis
 		log.Warn("Disk UUID is not provided, blindly delete the disk")
 	}
 
+	if diskDriver == "" {
+		diskDriver = d.DiskDriver
+	}
 	if _, err := spdkdisk.DiskDelete(spdkClient, diskName, diskPath, diskDriver); err != nil {
 		return nil, errors.Wrapf(err, "failed to delete disk %v", diskName)
 	}
