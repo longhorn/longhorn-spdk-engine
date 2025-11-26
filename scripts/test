@@ -49,4 +49,10 @@ PACKAGES="$(find . -name '*.go' -print0 | xargs -0 -I{} dirname {} |  cut -f2 -d
 
 trap "rm -f /tmp/test-disk" EXIT
 
-go test -v -p 1 -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 180m
+# go test -v -p 1 -race -cover ${PACKAGES} -coverprofile=coverage.out -timeout 180m
+
+for i in {1..10}; do
+  echo "[DEBUG] Run #$i"
+  go test ./pkg -v -count=1 -p 1 -race -check.vv -check.f 'TestSPDKMultipleThread' -timeout 180m || break
+  # go test ./pkg -v -count=1 -p 1 -race -check.vv -check.f '^TestSPDKMultipleThread$' -timeout 180m || break
+done
