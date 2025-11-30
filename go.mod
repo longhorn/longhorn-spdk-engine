@@ -10,9 +10,9 @@ require (
 	github.com/cockroachdb/errors v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20251130062045-a1de4c42df07
-	github.com/longhorn/go-common-libs v0.0.0-20251130061014-a2c18552fb30
-	github.com/longhorn/go-spdk-helper v0.2.1-0.20251130062018-ed9dee0a2cd3
+	github.com/longhorn/backupstore v0.0.0-20251130143517-bd9d3a1f688b
+	github.com/longhorn/go-common-libs v0.0.0-20251130104056-3332521977c9
+	github.com/longhorn/go-spdk-helper v0.2.1-0.20251130143546-00546a63ae27
 	github.com/longhorn/types v0.0.0-20251130061042-fc15b4776c60
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
