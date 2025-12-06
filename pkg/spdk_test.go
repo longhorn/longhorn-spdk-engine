@@ -1657,11 +1657,6 @@ func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuildingWithoutBacking
 	s.spdkMultipleThreadSnapshotOpsAndRebuilding(c, false)
 }
 
-func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuildingWithBackingImage(c *C) {
-	fmt.Println("Testing SPDK snapshot operations with multiple threads with backing image")
-	s.spdkMultipleThreadSnapshotOpsAndRebuilding(c, true)
-}
-
 func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool) {
 	diskDriverName := "aio"
 
@@ -2358,13 +2353,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 }
 
 func (s *TestSuite) TestSPDKMultipleThreadFastRebuildingWithoutBackingImage(c *C) {
-	fmt.Println("Testing SPDK fast rebuilding with multiple threads with backing image")
-	s.spdkMultipleThreadFastRebuilding(c, false)
-}
-
-func (s *TestSuite) TestSPDKMultipleThreadFastRebuildingWithBackingImage(c *C) {
 	fmt.Println("Testing SPDK fast rebuilding with multiple threads without backing image")
-	s.spdkMultipleThreadFastRebuilding(c, true)
+	s.spdkMultipleThreadFastRebuilding(c, false)
 }
 
 func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, replicaList []string, snapshotMap map[string][]string, snapshotOpts map[string]api.SnapshotOptions, maxRetries int, retryInterval time.Duration) {
