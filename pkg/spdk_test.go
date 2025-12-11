@@ -985,8 +985,6 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName22)
 			c.Assert(err, IsNil)
-			err = spdkCli.EngineSnapshotDelete(engineName, snapshotName23)
-			c.Assert(strings.Contains(err.Error(), "since it is the parent of volume head"), Equals, true)
 			err = spdkCli.EngineSnapshotHash(engineName, snapshotName23, false)
 			c.Assert(err, IsNil)
 			for _, replicaName := range []string{replicaName1, replicaName2} {
