@@ -158,7 +158,7 @@ func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func
 	}()
 }
 
-func PrepareDiskFile(c *C) string {
+func PrepareDiskFile(c *C) []string {
 	err := os.RemoveAll(defaultTestDiskPath)
 	c.Assert(err, IsNil)
 
@@ -181,22 +181,24 @@ func PrepareDiskFile(c *C) string {
 	_, err = ne.Execute(nil, "losetup", []string{loopDevicePath, defaultTestDiskPath}, defaultTestExecuteTimeout)
 	c.Assert(err, IsNil)
 
-	return loopDevicePath
+	return []string{loopDevicePath}
 }
 
-func CleanupDiskFile(c *C, loopDevicePath string) {
+func CleanupDiskFile(c *C, loopDevicePath []string) {
 	defer func() {
 		err := os.RemoveAll(defaultTestDiskPath)
 		c.Assert(err, IsNil)
 	}()
 
-	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
-	c.Assert(err, IsNil)
-	_, err = ne.Execute(nil, "losetup", []string{"-d", loopDevicePath}, time.Second)
-	c.Assert(err, IsNil)
+	for _, path := range loopDevicePath {
+		ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+		c.Assert(err, IsNil)
+		_, err = ne.Execute(nil, "losetup", []string{"-d", path}, time.Second)
+		c.Assert(err, IsNil)
+	}
 }
 
-func waitForDiskReady(ctx context.Context, spdkCli *client.SPDKClient, loopDevicePath, diskDriverName string) (*spdkrpc.Disk, error) {
+func waitForDiskReady(ctx context.Context, spdkCli *client.SPDKClient, diskDriverName string, loopDevicePath []string) (*spdkrpc.Disk, error) {
 	opts := []retry.Option{
 		retry.Context(ctx),
 		retry.Attempts(60),
@@ -209,7 +211,7 @@ func waitForDiskReady(ctx context.Context, spdkCli *client.SPDKClient, loopDevic
 
 	err := retry.Do(func() error {
 		logrus.Info("Checking if the disk is in 'ready' state")
-		disk, err := spdkCli.DiskGet(defaultTestDiskName, loopDevicePath, diskDriverName)
+		disk, err := spdkCli.DiskGet(defaultTestDiskName, diskDriverName, loopDevicePath)
 		if err != nil {
 			logrus.WithError(err).Warnf("Failed to get disk %s", defaultTestDiskName)
 			return err
@@ -264,20 +266,20 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 		}
 	}()
 
-	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", diskDriverName, loopDevicePath, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
 	c.Assert(disk, NotNil)
 
-	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	disk, err = waitForDiskReady(ctx, spdkCli, diskDriverName, loopDevicePath)
 	c.Assert(err, IsNil)
 	c.Assert(disk.Path, Equals, loopDevicePath)
 	c.Assert(disk.Uuid, Not(Equals), "")
 
 	defer func() {
-		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, diskDriverName, disk.Path)
 		c.Assert(err, IsNil)
 
-		disk, err = spdkCli.DiskGet(defaultTestDiskName, disk.Path, diskDriverName)
+		disk, err = spdkCli.DiskGet(defaultTestDiskName, diskDriverName, disk.Path)
 		c.Assert(err, NotNil)
 		c.Assert(disk, IsNil)
 	}()
@@ -606,20 +608,20 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 		}
 	}()
 
-	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", diskDriverName, loopDevicePath, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
 	c.Assert(disk, NotNil)
 
-	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	disk, err = waitForDiskReady(ctx, spdkCli, diskDriverName, loopDevicePath)
 	c.Assert(err, IsNil)
 	c.Assert(disk.Path, Equals, loopDevicePath)
 	c.Assert(disk.Uuid, Not(Equals), "")
 
 	defer func() {
-		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, diskDriverName, disk.Path)
 		c.Assert(err, IsNil)
 
-		disk, err = spdkCli.DiskGet(defaultTestDiskName, disk.Path, diskDriverName)
+		disk, err = spdkCli.DiskGet(defaultTestDiskName, diskDriverName, disk.Path)
 		c.Assert(err, NotNil)
 		c.Assert(disk, IsNil)
 	}()
@@ -1683,20 +1685,20 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 	c.Assert(err, IsNil)
 
-	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", diskDriverName, loopDevicePath, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
 	c.Assert(disk, NotNil)
 
-	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	disk, err = waitForDiskReady(ctx, spdkCli, diskDriverName, loopDevicePath)
 	c.Assert(err, IsNil)
 	c.Assert(disk.Path, Equals, loopDevicePath)
 	c.Assert(disk.Uuid, Not(Equals), "")
 
 	defer func() {
-		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, diskDriverName, disk.Path)
 		c.Assert(err, IsNil)
 
-		disk, err = spdkCli.DiskGet(defaultTestDiskName, disk.Path, diskDriverName)
+		disk, err = spdkCli.DiskGet(defaultTestDiskName, diskDriverName, disk.Path)
 		c.Assert(err, NotNil)
 		c.Assert(disk, IsNil)
 	}()
@@ -2627,20 +2629,20 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 		}
 	}()
 
-	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", diskDriverName, loopDevicePath, int64(defaultTestBlockSize))
 	c.Assert(err, IsNil)
 	c.Assert(disk, NotNil)
 
-	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	disk, err = waitForDiskReady(ctx, spdkCli, diskDriverName, loopDevicePath)
 	c.Assert(err, IsNil)
 	c.Assert(disk.Path, Equals, loopDevicePath)
 	c.Assert(disk.Uuid, Not(Equals), "")
 
 	defer func() {
-		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, diskDriverName, disk.Path)
 		c.Assert(err, IsNil)
 
-		disk, err = spdkCli.DiskGet(defaultTestDiskName, disk.Path, diskDriverName)
+		disk, err = spdkCli.DiskGet(defaultTestDiskName, diskDriverName, disk.Path)
 		c.Assert(err, NotNil)
 		c.Assert(disk, IsNil)
 	}()
