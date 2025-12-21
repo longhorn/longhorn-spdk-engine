@@ -8,9 +8,9 @@ require (
 	github.com/cockroachdb/errors v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20251213143132-51fdc08d1cd9
+	github.com/longhorn/backupstore v0.0.0-20251220100905-806bfd28ecb6
 	github.com/longhorn/go-common-libs v0.0.0-20251220083855-f666c812e595
-	github.com/longhorn/go-spdk-helper v0.2.1-0.20251213143112-c40a36fce272
+	github.com/longhorn/go-spdk-helper v0.2.1-0.20251221140104-7df556b7ea01
 	github.com/longhorn/types v0.0.0-20251218094636-43d032f49660
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
@@ -60,7 +60,7 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/opencontainers/runc v1.1.14 // indirect
 	github.com/opencontainers/runtime-spec v1.1.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.22 // indirect
+	github.com/pierrec/lz4/v4 v4.1.23 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_golang v1.20.5 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
