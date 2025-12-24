@@ -14,6 +14,7 @@ import (
 	spdkutil "github.com/longhorn/go-spdk-helper/pkg/util"
 
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
+
 	"github.com/longhorn/longhorn-spdk-engine/pkg/spdk/disk"
 )
 
