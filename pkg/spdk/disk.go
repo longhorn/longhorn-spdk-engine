@@ -266,8 +266,8 @@ func (d *Disk) DiskGet(spdkClient *spdkclient.Client, diskName, diskPath, diskDr
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "disk name is required")
 	}
 
+	d.RLock()
 	if d.State == DiskStateCreating || d.State == DiskStateError {
-		d.RLock()
 		defer d.RUnlock()
 		return &spdkrpc.Disk{
 			Id:          d.DiskID,
@@ -285,6 +285,7 @@ func (d *Disk) DiskGet(spdkClient *spdkclient.Client, diskName, diskPath, diskDr
 			State:       string(d.State),
 		}, nil
 	}
+	d.RUnlock()
 
 	d.Lock()
 	diskBdevName, err := d.updateDiskFromLvstoreNoLock(spdkClient, diskName, diskPath, diskDriver)
