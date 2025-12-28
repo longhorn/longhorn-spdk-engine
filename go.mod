@@ -9,12 +9,12 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20251220100905-806bfd28ecb6
-	github.com/longhorn/go-common-libs v0.0.0-20251220083855-f666c812e595
+	github.com/longhorn/go-common-libs v0.0.0-20251228142402-32900f1ed495
 	github.com/longhorn/go-spdk-helper v0.2.1-0.20251221140104-7df556b7ea01
-	github.com/longhorn/types v0.0.0-20251218094636-43d032f49660
+	github.com/longhorn/types v0.0.0-20251228142423-336840fb2fd6
 	github.com/sirupsen/logrus v1.9.3
 	go.uber.org/multierr v1.11.0
-	google.golang.org/grpc v1.77.0
+	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	k8s.io/apimachinery v0.35.0
@@ -74,7 +74,7 @@ require (
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect; sindirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251022142026-3a174f9686a8 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/mount-utils v0.31.3 // indirect
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 // indirect
