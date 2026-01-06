@@ -441,6 +441,15 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 	if err != nil {
 		return err
 	}
+
+	// If SnapshotLvolMap is empty but we have snapshots in SPDK, the replica needs reconstruction
+	// This can happen after a reboot if construct() wasn't called or failed
+	if len(r.SnapshotLvolMap) == 0 && len(newSnapshotLvolMap) > 0 {
+		r.log.Warnf("Replica snapshot lvol map is empty but SPDK has %d snapshots, marking for reconstruction", len(newSnapshotLvolMap))
+		r.State = types.InstanceStatePending
+		return nil
+	}
+
 	if len(r.SnapshotLvolMap) != len(newSnapshotLvolMap) {
 		return fmt.Errorf("replica current active snapshot lvol map length %d is not the same as the latest snapshot lvol map length %d", len(r.SnapshotLvolMap), len(newSnapshotLvolMap))
 	}
