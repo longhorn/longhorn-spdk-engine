@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -40,6 +41,7 @@ type Server struct {
 	sync.RWMutex
 
 	diskCreateLock sync.Mutex
+	hotplugActive  atomic.Bool // use atomic.Bool to avoid data races across goroutines.
 
 	ctx context.Context
 
@@ -95,6 +97,8 @@ func NewServer(ctx context.Context, portStart, portEnd int32) (*Server, error) {
 	s := &Server{
 		ctx: ctx,
 
+		hotplugActive: atomic.Bool{},
+
 		spdkClient:    cli,
 		portAllocator: bitmap,
 
@@ -111,6 +115,7 @@ func NewServer(ctx context.Context, portStart, portEnd int32) (*Server, error) {
 		broadcastChs: broadcastChs,
 		updateChs:    updateChs,
 	}
+	s.hotplugActive.Store(true)
 
 	if _, err := s.broadcasters[types.InstanceTypeReplica].Subscribe(ctx, s.replicaBroadcastConnector); err != nil {
 		return nil, err
@@ -229,6 +234,20 @@ func (s *Server) verify() (err error) {
 			}
 		}
 	}()
+
+	// Self-heal: re-enable hotplug only if no disks are being created and the last enablement failed.
+	isDiskCreating := false
+	for _, disk := range s.diskMap {
+		if disk.State == DiskStateCreating {
+			isDiskCreating = true
+			break
+		}
+	}
+	if !isDiskCreating && !s.hotplugActive.Load() {
+		if success := setNvmeHotPlug(spdkClient, true); success {
+			s.hotplugActive.Store(true)
+		}
+	}
 
 	// Detect if the lvol bdev is an uncached replica or backing image.
 	// But cannot detect if a RAID bdev is an engine since:
@@ -1830,6 +1849,16 @@ func (s *Server) DiskCreate(ctx context.Context, req *spdkrpc.DiskCreateRequest)
 		s.diskCreateLock.Lock()
 		defer s.diskCreateLock.Unlock()
 
+		// Disabling hotplug is a best-effort guard to improve stability; creation continues even if this call fails.
+		_ = setNvmeHotPlug(spdkClient, false)
+		defer func() {
+			if success := setNvmeHotPlug(spdkClient, true); success {
+				s.hotplugActive.Store(true)
+			} else {
+				s.hotplugActive.Store(false)
+			}
+		}()
+
 		if err := d.DiskCreate(spdkClient, req.DiskName, req.DiskUuid, req.DiskPath, req.DiskDriver, req.BlockSize); err != nil {
 			logrus.WithError(err).Errorf("Failed to create disk %s(%s) path %s", req.DiskName, req.DiskUuid, req.DiskPath)
 			return
@@ -2308,4 +2337,14 @@ func (s *Server) MetricsGet(ctx context.Context, req *spdkrpc.MetricsRequest) (r
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine metrics: %s", req.Name)
 	}
 	return m, nil
+}
+
+func setNvmeHotPlug(spdkClient *spdkclient.Client, enable bool) (success bool) {
+	// 1000000 microseconds = 1 seconds
+	_, hotPlugErr := spdkClient.BdevNvmeSetHotplug(enable, 1000000)
+	if hotPlugErr != nil {
+		logrus.WithError(hotPlugErr).Warnf("failed to set nvme hotplug to %v", enable)
+		return false
+	}
+	return true
 }
