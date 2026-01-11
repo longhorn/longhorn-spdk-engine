@@ -14,10 +14,14 @@ import (
 	"time"
 
 	"github.com/avast/retry-go/v4"
+	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
+
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
@@ -227,6 +231,104 @@ func waitForDiskReady(ctx context.Context, spdkCli *client.SPDKClient, loopDevic
 	}
 
 	return readyDisk, nil
+}
+
+func (s *TestSuite) TestReplicaCreateWithStateChecks(c *C) {
+	fmt.Println("Testing SPDK replica creation with state checks")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	replicaName := "test-replica-state"
+	defer func() {
+		_ = spdkCli.ReplicaDelete(replicaName, true)
+	}()
+
+	// Pending -> first create should succeed
+	replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	c.Assert(replica.State, Equals, types.InstanceStateRunning)
+
+	// Running -> create again should return AlreadyExists
+	_, err = spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, NotNil)
+	rootErr := errors.UnwrapAll(err)
+	st, ok := grpcstatus.FromError(rootErr)
+	c.Assert(ok, Equals, true)
+	c.Assert(st.Code(), Equals, grpccodes.AlreadyExists)
+	c.Assert(strings.Contains(st.Message(), "already exists and running"), Equals, true)
+
+	// Stopped -> delete without cleanup then create again should succeed
+	err = spdkCli.ReplicaDelete(replicaName, false)
+	c.Assert(err, IsNil)
+
+	replica, err = spdkCli.ReplicaGet(replicaName)
+	c.Assert(err, IsNil)
+	c.Assert(replica.State, Equals, types.InstanceStateStopped)
+
+	replica, err = spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	c.Assert(replica.State, Equals, types.InstanceStateRunning)
+}
+
+func (s *TestSuite) TestReplicaDeletePendingWithoutCleanupIsNoop(c *C) {
+	fmt.Println("Testing SPDK pending replica delete without cleanup is no-op")
+
+	r := server.NewReplica(context.Background(), "test-replica-pending", "test-lvs", "test-lvs-uuid", 0, true, make(chan interface{}, 1))
+	c.Assert(r, NotNil)
+	c.Assert(string(r.State), Equals, types.InstanceStatePending)
+
+	err := r.Delete(nil, false, nil)
+	c.Assert(err, IsNil)
+	c.Assert(string(r.State), Equals, types.InstanceStatePending)
+
+	select {
+	case <-r.UpdateCh:
+		c.Fatalf("unexpected update signal for pending replica delete without cleanup")
+	default:
+	}
 }
 
 func (s *TestSuite) TestSPDKMultipleThread(c *C) {
