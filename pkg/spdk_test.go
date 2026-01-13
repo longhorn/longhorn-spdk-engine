@@ -1447,12 +1447,12 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
-			// Purging snapshots would lead to rebuild11 cleanup
+			// Purging snapshots would lead to rebuild11 and rebuild12 cleanup
 			err = spdkCli.EngineSnapshotPurge(engineName)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree (with backing image):
-			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50] -> rebuild12[60,80] -> head[80,80]
+			// nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50] -> head[60,80]
 			// 	                                    |\                \
 			// 	                                    | \                -> snap23[30,60]
 			// 	                                    |  \
@@ -1460,22 +1460,22 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			// 	                                     \
 			// 	                                      -> snap41[10,20] -> snap42[20,30]
 			snapshotMap = map[string][]string{
-				snapshotName11:       {snapshotName13, snapshotName32, snapshotName41},
-				snapshotName13:       {snapshotName15, snapshotName23},
-				snapshotName15:       {snapshotNameRebuild2},
-				snapshotNameRebuild2: {types.VolumeHead},
-				snapshotName23:       {},
-				snapshotName32:       {},
-				snapshotName41:       {snapshotName42},
-				snapshotName42:       {},
+				snapshotName11: {snapshotName13, snapshotName32, snapshotName41},
+				snapshotName13: {snapshotName15, snapshotName23},
+				snapshotName15: {types.VolumeHead},
+				snapshotName23: {},
+				snapshotName32: {},
+				snapshotName41: {snapshotName42},
+				snapshotName42: {},
 			}
 			delete(snapshotOpts, snapshotNameRebuild1)
+			delete(snapshotOpts, snapshotNameRebuild2)
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 			for _, replicaName := range []string{replicaName3, replicaName4} {
 				replica, err := spdkCli.ReplicaGet(replicaName)
 				c.Assert(err, IsNil)
-				c.Assert(replica.Head.Parent, Equals, snapshotNameRebuild2)
-				c.Assert(replica.Head.ActualSize, Equals, uint64(0))
+				c.Assert(replica.Head.Parent, Equals, snapshotName15)
+				c.Assert(replica.Head.ActualSize, Equals, uint64(2*dataCountInMB*helpertypes.MiB))
 			}
 
 			// The newly rebuilt replicas should contain correct/unchanged data
@@ -1518,7 +1518,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			revertSnapshot(c, spdkCli, snapshotName23, volumeName, engineName, replicaAddressMap)
 
 			// Current snapshot tree (with backing image):
-			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50] -> rebuild12[60,80]
+			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50]
 			// 	                                    |\                \
 			// 	                                    | \                -> snap23[30,60] -> head
 			// 	                                    |  \
@@ -1526,14 +1526,13 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			// 	                                     \
 			// 	                                      -> snap41[10,20] -> snap42[20,30]
 			snapshotMap = map[string][]string{
-				snapshotName11:       {snapshotName13, snapshotName32, snapshotName41},
-				snapshotName13:       {snapshotName15, snapshotName23},
-				snapshotName15:       {snapshotNameRebuild2},
-				snapshotNameRebuild2: {},
-				snapshotName23:       {types.VolumeHead},
-				snapshotName32:       {},
-				snapshotName41:       {snapshotName42},
-				snapshotName42:       {},
+				snapshotName11: {snapshotName13, snapshotName32, snapshotName41},
+				snapshotName13: {snapshotName15, snapshotName23},
+				snapshotName15: {},
+				snapshotName23: {types.VolumeHead},
+				snapshotName32: {},
+				snapshotName41: {snapshotName42},
+				snapshotName42: {},
 			}
 			delete(snapshotOpts, snapshotNameRebuild1)
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
@@ -1566,7 +1565,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			// Verify chain3
 			revertSnapshot(c, spdkCli, snapshotName32, volumeName, engineName, replicaAddressMap)
 			// Current snapshot tree (with backing image):
-			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50] -> rebuild12[60,80]
+			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50]
 			// 	                                    |\                \
 			// 	                                    | \                -> snap23[30,60]
 			// 	                                    |  \
@@ -1574,14 +1573,13 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			// 	                                     \
 			// 	                                      -> snap41[10,20] -> snap42[20,30]
 			snapshotMap = map[string][]string{
-				snapshotName11:       {snapshotName13, snapshotName32, snapshotName41},
-				snapshotName13:       {snapshotName15, snapshotName23},
-				snapshotName15:       {snapshotNameRebuild2},
-				snapshotNameRebuild2: {},
-				snapshotName23:       {},
-				snapshotName32:       {types.VolumeHead},
-				snapshotName41:       {snapshotName42},
-				snapshotName42:       {},
+				snapshotName11: {snapshotName13, snapshotName32, snapshotName41},
+				snapshotName13: {snapshotName15, snapshotName23},
+				snapshotName15: {},
+				snapshotName23: {},
+				snapshotName32: {types.VolumeHead},
+				snapshotName41: {snapshotName42},
+				snapshotName42: {},
 			}
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
@@ -1600,7 +1598,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			// Verify chain4
 			revertSnapshot(c, spdkCli, snapshotName42, volumeName, engineName, replicaAddressMap)
 			// Current snapshot tree (with backing image):
-			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50] -> rebuild12[60,80]
+			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50]
 			// 	                                    |\                \
 			// 	                                    | \                -> snap23[30,60]
 			// 	                                    |  \
@@ -1608,14 +1606,13 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			// 	                                     \
 			// 	                                      -> snap41[10,20] -> snap42[20,30] -> head
 			snapshotMap = map[string][]string{
-				snapshotName11:       {snapshotName13, snapshotName32, snapshotName41},
-				snapshotName13:       {snapshotName15, snapshotName23},
-				snapshotName15:       {snapshotNameRebuild2},
-				snapshotNameRebuild2: {},
-				snapshotName23:       {},
-				snapshotName32:       {},
-				snapshotName41:       {snapshotName42},
-				snapshotName42:       {types.VolumeHead},
+				snapshotName11: {snapshotName13, snapshotName32, snapshotName41},
+				snapshotName13: {snapshotName15, snapshotName23},
+				snapshotName15: {},
+				snapshotName23: {},
+				snapshotName32: {},
+				snapshotName41: {snapshotName42},
+				snapshotName42: {types.VolumeHead},
 			}
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName3, replicaName4}, snapshotMap, snapshotOpts, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
