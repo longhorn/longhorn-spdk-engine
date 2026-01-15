@@ -3204,9 +3204,12 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 		if err := r.stopSnapshotHash(spdkClient, dstSnapSvcLvol); err != nil {
 			return "", false, errors.Wrapf(err, "failed to stop the existing snapshot %s checksum hashing before rebuilding dst replica reuses then clones a rebuilding lvol behind it", dstSnapshotLvolName)
 		}
-		isIntactSnap := srcSnapSvcLvol.SnapshotTimestamp == dstSnapSvcLvol.SnapshotTimestamp &&
-			srcSnapSvcLvol.ActualSize == dstSnapSvcLvol.ActualSize &&
-			srcSnapSvcLvol.SnapshotChecksum != "" && dstSnapSvcLvol.SnapshotChecksum != "" && srcSnapSvcLvol.SnapshotChecksum == dstSnapSvcLvol.SnapshotChecksum
+
+		isIntactSnap := srcSnapSvcLvol.ActualSize == dstSnapSvcLvol.ActualSize &&
+			srcSnapSvcLvol.SnapshotChecksum != "" &&
+			dstSnapSvcLvol.SnapshotChecksum != "" &&
+			srcSnapSvcLvol.SnapshotChecksum == dstSnapSvcLvol.SnapshotChecksum
+
 		if isIntactSnap {
 			if _, err = spdkClient.BdevLvolClone(dstSnapSvcLvol.Alias, rebuildingLvolName); err != nil {
 				return "", false, errors.Wrapf(err, "failed to clone rebuilding lvol %s behinds the existing intact snapshot lvol %s for dst replica %v rebuilding snapshot %s shallow copy prepare", rebuildingLvolName, dstSnapSvcLvol.Alias, r.Name, snapshotName)
