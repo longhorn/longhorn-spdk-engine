@@ -643,8 +643,11 @@ func (s *Server) ReplicaWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_Replic
 }
 
 func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *spdkrpc.Replica, err error) {
-	if req.Name == "" || req.SnapshotName == "" {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and snapshot name are required")
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+	if req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "snapshot name is required")
 	}
 
 	s.RLock()
@@ -665,8 +668,11 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.Snapsho
 }
 
 func (s *Server) ReplicaSnapshotDelete(ctx context.Context, req *spdkrpc.SnapshotRequest) (ret *emptypb.Empty, err error) {
-	if req.Name == "" || req.SnapshotName == "" {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and snapshot name are required")
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
+	}
+	if req.SnapshotName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "snapshot name is required")
 	}
 
 	s.RLock()

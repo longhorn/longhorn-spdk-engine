@@ -1384,7 +1384,24 @@ func (r *Replica) fetchClusterSize(spdkClient *spdkclient.Client) (uint64, error
 	return lvsList[0].ClusterSize, nil
 }
 
-func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string, opts *api.SnapshotOptions) (pReplica *spdkrpc.Replica, err error) {
+func getSnapshotXattrsFromOptions(opts *api.SnapshotOptions) []spdkclient.Xattr {
+	if opts == nil {
+		return nil
+	}
+
+	return []spdkclient.Xattr{
+		{
+			Name:  spdkclient.UserCreated,
+			Value: strconv.FormatBool(opts.UserCreated),
+		},
+		{
+			Name:  spdkclient.SnapshotTimestamp,
+			Value: opts.Timestamp,
+		},
+	}
+}
+
+func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string, opts *api.SnapshotOptions) (replica *spdkrpc.Replica, err error) {
 	updateRequired := false
 
 	r.Lock()
@@ -1395,6 +1412,8 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 			r.UpdateCh <- nil
 		}
 	}()
+
+	r.log.Infof("Creating snapshot %s with options %+v for replica %s", snapshotName, opts, r.Name)
 
 	if r.State != types.InstanceStateStopped && r.State != types.InstanceStateRunning {
 		return nil, fmt.Errorf("invalid state %v for replica %s snapshot creation", r.State, r.Name)
@@ -1412,6 +1431,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 				updateRequired = true
 			}
 			r.ErrorMsg = err.Error()
+			r.log.WithError(err).Errorf("Failed to create snapshot %s for replica %s", snapshotName, r.Name)
 		} else {
 			if r.State != types.InstanceStateError {
 				r.ErrorMsg = ""
@@ -1423,20 +1443,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 		return nil, fmt.Errorf("nil head for replica snapshot creation")
 	}
 
-	var xattrs []spdkclient.Xattr
-	if opts != nil {
-		userCreated := spdkclient.Xattr{
-			Name:  spdkclient.UserCreated,
-			Value: strconv.FormatBool(opts.UserCreated),
-		}
-		xattrs = append(xattrs, userCreated)
-
-		snapshotTimestamp := spdkclient.Xattr{
-			Name:  spdkclient.SnapshotTimestamp,
-			Value: opts.Timestamp,
-		}
-		xattrs = append(xattrs, snapshotTimestamp)
-	}
+	xattrs := getSnapshotXattrsFromOptions(opts)
 
 	snapUUID, err := spdkClient.BdevLvolSnapshot(r.Head.UUID, snapLvolName, xattrs)
 	if err != nil {
@@ -1456,7 +1463,20 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	r.Head = BdevLvolInfoToServiceLvol(&headBdevLvol)
 	snapSvcLvol.Children[r.Head.Name] = r.Head
 
-	// Already contain a valid snapshot lvol or backing image lvol before this snapshot creation
+	// Rewire the in-memory chain/children links to insert the new snapshot between
+	// the previous parent lvol (if any) and the refreshed head.
+	//
+	// Before:
+	//   ActiveChain: [..., prev, head]
+	//   prev.Children[head] = head
+	//
+	// After:
+	//   ActiveChain: [..., prev, snap, head]
+	//   prev.Children[snap] = snap
+	//   snap.Children[head] = head
+	//
+	// If there is no prev lvol (i.e. the chain only contained the head), we only
+	// need to build the snap -> head link and update ActiveChain accordingly.
 	if len(r.ActiveChain) > 1 && r.ActiveChain[len(r.ActiveChain)-2] != nil {
 		prevSvcLvol := r.ActiveChain[len(r.ActiveChain)-2]
 		prevSvcLvol.Lock()
@@ -1474,7 +1494,7 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 	return ServiceReplicaToProtoReplica(r), err
 }
 
-func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) (pReplica *spdkrpc.Replica, err error) {
+func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) (replica *spdkrpc.Replica, err error) {
 	updateRequired := false
 
 	r.Lock()
@@ -1506,6 +1526,7 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 				updateRequired = true
 			}
 			r.ErrorMsg = err.Error()
+			r.log.WithError(err).Errorf("Failed to delete snapshot %s for replica %s", snapshotName, r.Name)
 		} else {
 			if r.State != types.InstanceStateError {
 				r.ErrorMsg = ""
@@ -3754,20 +3775,7 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 		r.log.Infof("Rebuilding dst replica reused the intact existing snapshot %s(%s)", snapSvcLvol.Alias, snapSvcLvol.UUID)
 	} else {
 		// The snapshot lvol does not exist or the existing snapshot lvol is corrupted or outdated
-		var xattrs []spdkclient.Xattr
-		if opts != nil {
-			userCreated := spdkclient.Xattr{
-				Name:  spdkclient.UserCreated,
-				Value: strconv.FormatBool(opts.UserCreated),
-			}
-			xattrs = append(xattrs, userCreated)
-
-			snapshotTimestamp := spdkclient.Xattr{
-				Name:  spdkclient.SnapshotTimestamp,
-				Value: opts.Timestamp,
-			}
-			xattrs = append(xattrs, snapshotTimestamp)
-		}
+		xattrs := getSnapshotXattrsFromOptions(opts)
 
 		snapUUID, err := spdkClient.BdevLvolSnapshot(r.rebuildingDstCache.rebuildingLvol.UUID, snapLvolName, xattrs)
 		if err != nil {
