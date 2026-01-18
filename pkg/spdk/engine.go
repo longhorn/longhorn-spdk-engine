@@ -104,7 +104,8 @@ type UblkFrontend struct {
 }
 
 func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}, ublkQueueDepth, ublkNumberOfQueue int32) *Engine {
-	log := logrus.StandardLogger().WithFields(logrus.Fields{
+	logger := logrus.StandardLogger()
+	log := logger.WithFields(logrus.Fields{
 		"engineName": engineName,
 		"volumeName": volumeName,
 		"frontend":   frontend,
@@ -1463,7 +1464,8 @@ func (e *Engine) requireExpansion(size uint64, replicaClients map[string]*client
 	}
 
 	// The longhorn-manager webhook rounds and validates volume sizes before they reach the engine.
-	// If an invalid size slips through, later SPDK calls will surface the error; the engine avoids duplicating webhook validation.
+	// If a non-MiB-aligned or otherwise invalid size slips through, later SPDK calls will surface the error;
+	// the engine avoids duplicating webhook validation.
 
 	// Ensure all replicas are in RW mode and have the same size
 	if len(e.ReplicaStatusMap) == 0 {
