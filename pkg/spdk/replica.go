@@ -246,12 +246,7 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 		"lvsName":     lvsName,
 		"lvsUUID":     lvsUUID,
 	})
-
-	roundedSpecSize := util.RoundUp(specSize, helpertypes.MiB)
-	if roundedSpecSize != specSize {
-		log.Infof("Rounded up spec size from %v to %v since the specSize should be multiple of MiB", specSize, roundedSpecSize)
-	}
-	log = log.WithField("specSize", roundedSpecSize)
+	log = log.WithField("specSize", specSize)
 
 	return &Replica{
 		ctx: ctx,
@@ -262,7 +257,7 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 		LvsUUID: lvsUUID,
 		Nqn:     helpertypes.GetNQN(replicaName),
 
-		SpecSize: roundedSpecSize,
+		SpecSize: specSize,
 		State:    types.InstanceStatePending,
 
 		Head: nil,
@@ -1278,15 +1273,7 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 
 	r.log.Infof("Expanding replica %s to size %v", r.Name, size)
 
-	clusterSize, err := r.fetchClusterSize(spdkClient)
-	if err != nil {
-		return errors.Wrapf(err, "failed to fetch cluster size for replica %v", r.Name)
-	}
-
-	roundedSize := util.RoundUp(size, clusterSize)
-	if roundedSize != size {
-		return fmt.Errorf("replica %s rounded up spec size from %v to %v since the spec size should be multiple of MiB", r.Name, size, roundedSize)
-	}
+	// The longhorn-manager webhook validates and rounds volume sizes; accept the requested size directly here.
 
 	if r.SpecSize > size {
 		return fmt.Errorf("cannot expand replica %s to a smaller size %v, current spec size %v", r.Name, size, r.SpecSize)

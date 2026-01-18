@@ -1463,7 +1463,8 @@ func (e *Engine) requireExpansion(size uint64, replicaClients map[string]*client
 		return false, nil // no need to expand
 	}
 
-	// The longhorn-manager webhook rounds and validates volume sizes; accept the requested size as-is here.
+	// The longhorn-manager webhook rounds and validates volume sizes before they reach the engine.
+	// If an invalid size slips through, later SPDK calls will surface the error; the engine avoids duplicating webhook validation.
 
 	// Ensure all replicas are in RW mode and have the same size
 	if len(e.ReplicaStatusMap) == 0 {
