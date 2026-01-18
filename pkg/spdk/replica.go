@@ -1274,6 +1274,7 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 	r.log.Infof("Expanding replica %s to size %v", r.Name, size)
 
 	// The longhorn-manager webhook validates and rounds volume sizes; accept the requested size directly here.
+	// If an invalid size slips through, the subsequent SPDK resize calls will fail and surface the error.
 
 	if r.SpecSize > size {
 		return fmt.Errorf("cannot expand replica %s to a smaller size %v, current spec size %v", r.Name, size, r.SpecSize)
