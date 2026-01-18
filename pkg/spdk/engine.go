@@ -108,8 +108,7 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		"engineName": engineName,
 		"volumeName": volumeName,
 		"frontend":   frontend,
-	})
-	log = log.WithField("specSize", specSize)
+	}).WithField("specSize", specSize)
 
 	var nvmeTcpFrontend *NvmeTcpFrontend
 	var ublkFrontend *UblkFrontend
