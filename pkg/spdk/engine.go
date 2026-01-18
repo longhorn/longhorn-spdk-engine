@@ -1468,6 +1468,8 @@ func (e *Engine) requireExpansion(size uint64, replicaClients map[string]*client
 		return false, nil // no need to expand
 	}
 
+	// The longhorn-manager webhook rounds and validates volume sizes; accept the requested size as-is here.
+
 	// Ensure all replicas are in RW mode and have the same size
 	if len(e.ReplicaStatusMap) == 0 {
 		e.log.Warn("Cannot expand engine: no replica found")
