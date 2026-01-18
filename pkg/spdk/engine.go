@@ -109,12 +109,7 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		"volumeName": volumeName,
 		"frontend":   frontend,
 	})
-
-	roundedSpecSize := util.RoundUp(specSize, helpertypes.MiB)
-	if roundedSpecSize != specSize {
-		log.Infof("Rounded up spec size from %v to %v since the spec size should be multiple of MiB", specSize, roundedSpecSize)
-	}
-	log.WithField("specSize", roundedSpecSize)
+	log = log.WithField("specSize", specSize)
 
 	var nvmeTcpFrontend *NvmeTcpFrontend
 	var ublkFrontend *UblkFrontend
