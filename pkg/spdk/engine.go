@@ -104,8 +104,7 @@ type UblkFrontend struct {
 }
 
 func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}, ublkQueueDepth, ublkNumberOfQueue int32) *Engine {
-	logger := logrus.StandardLogger()
-	log := logger.WithFields(logrus.Fields{
+	log := logrus.StandardLogger().WithFields(logrus.Fields{
 		"engineName": engineName,
 		"volumeName": volumeName,
 		"frontend":   frontend,
