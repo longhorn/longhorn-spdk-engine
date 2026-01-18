@@ -1468,11 +1468,6 @@ func (e *Engine) requireExpansion(size uint64, replicaClients map[string]*client
 		return false, nil // no need to expand
 	}
 
-	roundedNewSize := util.RoundUp(size, helpertypes.MiB)
-	if roundedNewSize != size {
-		return false, fmt.Errorf("rounded up spec size from %v to %v since the spec size should be multiple of MiB", size, roundedNewSize)
-	}
-
 	// Ensure all replicas are in RW mode and have the same size
 	if len(e.ReplicaStatusMap) == 0 {
 		e.log.Warn("Cannot expand engine: no replica found")
