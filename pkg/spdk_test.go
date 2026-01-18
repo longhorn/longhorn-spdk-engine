@@ -1845,15 +1845,12 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 		go func() {
 			defer func() {
 				// Do cleanup
-				// TODO: Check why there is a race here
-				// err = spdkCli.EngineDelete(engineName)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName1, true)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName2, true)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName3, true)
-				// c.Assert(err, IsNil)
+				cleanupErr := spdkCli.EngineDelete(engineName)
+				c.Assert(cleanupErr, IsNil)
+				cleanupErr = spdkCli.ReplicaDelete(replicaName1, true)
+				c.Assert(cleanupErr, IsNil)
+				cleanupErr = spdkCli.ReplicaDelete(replicaName2, true)
+				c.Assert(cleanupErr, IsNil)
 
 				wg.Done()
 			}()
