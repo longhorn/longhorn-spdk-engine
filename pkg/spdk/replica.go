@@ -1346,32 +1346,6 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 	return nil
 }
 
-func (r *Replica) fetchClusterSize(spdkClient *spdkclient.Client) (uint64, error) {
-	var (
-		lvsList []spdktypes.LvstoreInfo
-		err     error
-	)
-
-	switch {
-	case r.LvsUUID != "":
-		lvsList, err = spdkClient.BdevLvolGetLvstore("", r.LvsUUID)
-	case r.LvsName != "":
-		lvsList, err = spdkClient.BdevLvolGetLvstore(r.LvsName, "")
-	default:
-		return 0, fmt.Errorf("either LvsUUID or LvsName must be set for replica %s", r.Name)
-	}
-
-	if err != nil {
-		return 0, errors.Wrapf(err, "failed to query lvstore for replica %s (name=%s uuid=%s)", r.Name, r.LvsName, r.LvsUUID)
-	}
-
-	if len(lvsList) != 1 {
-		return 0, fmt.Errorf("unexpected number of lvstores (%d) found for replica %s (name=%s uuid=%s)", len(lvsList), r.Name, r.LvsName, r.LvsUUID)
-	}
-
-	return lvsList[0].ClusterSize, nil
-}
-
 func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string, opts *api.SnapshotOptions) (pReplica *spdkrpc.Replica, err error) {
 	updateRequired := false
 
