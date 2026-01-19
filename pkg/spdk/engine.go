@@ -108,13 +108,7 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		"engineName": engineName,
 		"volumeName": volumeName,
 		"frontend":   frontend,
-	})
-
-	roundedSpecSize := util.RoundUp(specSize, helpertypes.MiB)
-	if roundedSpecSize != specSize {
-		log.Infof("Rounded up spec size from %v to %v since the spec size should be multiple of MiB", specSize, roundedSpecSize)
-	}
-	log.WithField("specSize", roundedSpecSize)
+	}).WithField("specSize", specSize)
 
 	var nvmeTcpFrontend *NvmeTcpFrontend
 	var ublkFrontend *UblkFrontend
@@ -1468,10 +1462,9 @@ func (e *Engine) requireExpansion(size uint64, replicaClients map[string]*client
 		return false, nil // no need to expand
 	}
 
-	roundedNewSize := util.RoundUp(size, helpertypes.MiB)
-	if roundedNewSize != size {
-		return false, fmt.Errorf("rounded up spec size from %v to %v since the spec size should be multiple of MiB", size, roundedNewSize)
-	}
+	// The longhorn-manager webhook rounds and validates volume sizes before they reach the engine.
+	// If a non-MiB-aligned or otherwise invalid size slips through, later SPDK calls will surface the error;
+	// the engine avoids duplicating webhook validation.
 
 	// Ensure all replicas are in RW mode and have the same size
 	if len(e.ReplicaStatusMap) == 0 {
