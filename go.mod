@@ -9,9 +9,9 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20260120061542-61f6a1bcd863
-	github.com/longhorn/go-common-libs v0.0.0-20260103034008-119bdcf1b2d6
+	github.com/longhorn/go-common-libs v0.0.0-20260118234208-0048623a22b1
 	github.com/longhorn/go-spdk-helper v0.4.0
-	github.com/longhorn/types v0.0.0-20251228142423-336840fb2fd6
+	github.com/longhorn/types v0.0.0-20260118234234-63598269a247
 	github.com/sirupsen/logrus v1.9.4
 	go.uber.org/multierr v1.11.0
 	google.golang.org/grpc v1.78.0
@@ -71,7 +71,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
+	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect; sindirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda // indirect
