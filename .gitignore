@@ -27,6 +27,7 @@ coverage.out
 
 # Rancher
 .dapper
+.dapper.tmp
 trash.lock
 .trash-conf
 bin/
