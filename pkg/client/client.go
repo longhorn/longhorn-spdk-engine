@@ -1107,7 +1107,6 @@ func (c *SPDKClient) EngineBackupRestore(req *BackupRestoreRequest) error {
 	recv, err := client.EngineBackupRestore(ctx, &spdkrpc.EngineBackupRestoreRequest{
 		BackupUrl:       req.BackupUrl,
 		EngineName:      req.EngineName,
-		SnapshotName:    req.SnapshotName,
 		Credential:      req.Credential,
 		ConcurrentLimit: req.ConcurrentLimit,
 	})
@@ -1136,7 +1135,6 @@ func (c *SPDKClient) ReplicaBackupRestore(req *BackupRestoreRequest) error {
 	_, err := client.ReplicaBackupRestore(ctx, &spdkrpc.ReplicaBackupRestoreRequest{
 		BackupUrl:       req.BackupUrl,
 		ReplicaName:     req.ReplicaName,
-		SnapshotName:    req.SnapshotName,
 		Credential:      req.Credential,
 		ConcurrentLimit: req.ConcurrentLimit,
 	})
