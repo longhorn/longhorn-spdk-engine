@@ -45,7 +45,6 @@ type BackupRestoreRequest struct {
 	BackupUrl       string
 	EngineName      string
 	ReplicaName     string
-	SnapshotName    string
 	Credential      map[string]string
 	ConcurrentLimit int32
 }
