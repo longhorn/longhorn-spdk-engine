@@ -538,12 +538,6 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 		}
 	}
 
-	// In case of a stopped replica being wrongly exposed, this function will check the exposing state anyway.
-	if r.isRestoring {
-		r.log.Info("Replica is being restored, skip the exposing state check")
-		return nil
-	}
-
 	nqn := helpertypes.GetNQN(r.Name)
 	exposedPort, exposedPortErr := getExposedPort(subsystemMap[nqn])
 	if r.IsExposed {
@@ -1142,9 +1136,7 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		prevState := r.State
 		if err != nil {
 			r.log.WithError(err).Errorf("Failed to delete replica with cleanupRequired flag %v", cleanupRequired)
-			if r.isRestoring {
-				// This is not a real error. No need to update the state.
-			} else if r.State != types.InstanceStateError {
+			if r.State != types.InstanceStateError {
 				r.State = types.InstanceStateError
 				r.ErrorMsg = err.Error()
 			}
@@ -1154,12 +1146,10 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 					r.State = types.InstanceStateTerminating
 				}
 			} else if r.State != types.InstanceStateTerminating {
-				if !r.isRestoring {
-					if cleanupRequired {
-						r.State = types.InstanceStateTerminating
-					} else {
-						r.State = types.InstanceStateStopped
-					}
+				if cleanupRequired {
+					r.State = types.InstanceStateTerminating
+				} else {
+					r.State = types.InstanceStateStopped
 				}
 			}
 		}
@@ -1188,12 +1178,6 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		// A pending replica without cleanup is a no-op
 		r.log.Info("Skipped deletion for a pending replica as cleanup is not required")
 		return nil
-	}
-
-	if r.isRestoring && r.restore != nil {
-		r.log.Info("Canceling volume restoration before replica deletion")
-		r.restore.Stop()
-		return fmt.Errorf("waiting for volume restoration to stop")
 	}
 
 	if err := r.stopAllSnapshotHashing(spdkClient); err != nil {
