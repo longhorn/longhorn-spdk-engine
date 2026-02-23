@@ -352,9 +352,39 @@ func (r *Replica) stopSnapshotHash(spdkClient *spdkclient.Client, parentLvol *Lv
 			return err
 		}
 		r.SnapshotLvolHashStatusMap.Delete(parentLvol.Name)
+		waitSnapshotHashStopped(spdkClient, parentLvol.Alias, r.log)
 	}
 
 	return nil
+}
+
+// waitSnapshotHashStopped polls BdevLvolStopSnapshotChecksum until SPDK confirms
+// that the background checksum goroutine for the given alias has fully stopped
+// (indicated by a NoSuchProcess error), guaranteeing that all pending I/O on the
+// bdev channel has been drained. It returns when the process is gone, the alias
+// is no longer found, or the timeout is exceeded.
+func waitSnapshotHashStopped(spdkClient *spdkclient.Client, alias string, log *safelog.SafeLogger) {
+	const (
+		pollInterval = 500 * time.Millisecond
+		timeout      = 10 * time.Second
+	)
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, err := spdkClient.BdevLvolStopSnapshotChecksum(alias)
+		if err == nil {
+			// Stop signal delivered; the background task is still running.
+			time.Sleep(pollInterval)
+			continue
+		}
+		if jsonrpc.IsJSONRPCRespErrorNoSuchProcess(err) || jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			// SPDK confirmed: no active checksum goroutine remains, I/O is drained.
+			return
+		}
+		log.WithError(err).Warnf("Unexpected error while waiting for snapshot checksum to stop for %s", alias)
+		time.Sleep(pollInterval)
+	}
+	log.Warnf("Timed out waiting for snapshot checksum to stop for %s", alias)
 }
 
 func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
@@ -3220,6 +3250,11 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 // Option cleanupRequired should be set to true if Longhorn does not want to reuse this dst replica for the next fast rebuilding, which typically means the replica removal
 func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client) error {
 	aggregatedErrors := []error{}
+
+	// Ensure all snapshot hash operations on rebuilding snapshots and existing snapshots are stopped
+	// before disconnecting the external snapshot bdev, to avoid assertion failure caused by pending I/O.
+	_ = r.stopAllSnapshotHashing(spdkClient)
+
 	if r.rebuildingDstCache.externalSnapshotBdevName != "" {
 		if err := disconnectNVMfBdev(spdkClient, r.rebuildingDstCache.externalSnapshotBdevName); err != nil {
 			r.log.WithError(err).Errorf("Rebuilding dst replica failed to disconnect the external src snapshot bdev %s for rebuilding dst cleanup, will continue", r.rebuildingDstCache.externalSnapshotBdevName)
