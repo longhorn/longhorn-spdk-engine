@@ -107,14 +107,14 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20260127053626-a9fd84935804
-## explicit; go 1.24.0
+# github.com/longhorn/backupstore v0.0.0-20260225123158-39d1f7ecbb74
+## explicit; go 1.25.0
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20260120075236-9a9dafa0a7ea
-## explicit; go 1.24.0
+# github.com/longhorn/go-common-libs v0.0.0-20260223034035-98eef598b5bd
+## explicit; go 1.25.0
 github.com/longhorn/go-common-libs/backup
 github.com/longhorn/go-common-libs/bitmap
 github.com/longhorn/go-common-libs/exec
@@ -225,8 +225,8 @@ go.uber.org/multierr
 # go.yaml.in/yaml/v2 v2.4.3
 ## explicit; go 1.15
 go.yaml.in/yaml/v2
-# golang.org/x/exp v0.0.0-20260112195511-716be5621a96
-## explicit; go 1.24.0
+# golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa
+## explicit; go 1.25.0
 golang.org/x/exp/constraints
 # golang.org/x/net v0.49.0
 ## explicit; go 1.24.0
