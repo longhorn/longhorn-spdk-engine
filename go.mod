@@ -8,17 +8,17 @@ require (
 	github.com/cockroachdb/errors v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20260225123158-39d1f7ecbb74
+	github.com/longhorn/backupstore v0.0.0-20260228145020-4b02fe818ebd
 	github.com/longhorn/go-common-libs v0.0.0-20260223034035-98eef598b5bd
-	github.com/longhorn/go-spdk-helper v0.4.1-0.20260206121825-8c1c33c29f35
+	github.com/longhorn/go-spdk-helper v0.4.1-0.20260228044657-faccf3d22332
 	github.com/longhorn/types v0.0.0-20260118234234-63598269a247
 	github.com/sirupsen/logrus v1.9.4
 	go.uber.org/multierr v1.11.0
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
-	k8s.io/apimachinery v0.35.1
-	k8s.io/client-go v0.35.1
+	k8s.io/apimachinery v0.35.2
+	k8s.io/client-go v0.35.2
 )
 
 require (
