@@ -166,6 +166,56 @@ func (s *TestSuite) TestServerEngineFrontendSwitchOverBlockdevRequiresSuspended(
 	c.Assert(st.Code(), Equals, grpccodes.FailedPrecondition)
 }
 
+func (s *TestSuite) TestServerEngineFrontendSwitchOverRejectedDuringRestore(c *C) {
+	fmt.Println("Testing Server.EngineFrontendSwitchOver is rejected during restore")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef.State = lhtypes.InstanceStateRunning
+	ef.IsRestoring = true
+
+	srv := &Server{
+		engineFrontendMap: map[string]*EngineFrontend{
+			ef.Name: ef,
+		},
+	}
+
+	_, err := srv.EngineFrontendSwitchOver(context.Background(), &spdkrpc.EngineFrontendSwitchOverRequest{
+		Name:          ef.Name,
+		EngineName:    "engine-b",
+		TargetAddress: "10.0.0.2:3000",
+	})
+	c.Assert(err, NotNil)
+
+	st, ok := grpcstatus.FromError(err)
+	c.Assert(ok, Equals, true)
+	c.Assert(st.Code(), Equals, grpccodes.FailedPrecondition)
+}
+
+func (s *TestSuite) TestServerEngineFrontendSwitchOverRejectedDuringExpand(c *C) {
+	fmt.Println("Testing Server.EngineFrontendSwitchOver is rejected during expansion")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef.State = lhtypes.InstanceStateRunning
+	ef.isExpanding = true
+
+	srv := &Server{
+		engineFrontendMap: map[string]*EngineFrontend{
+			ef.Name: ef,
+		},
+	}
+
+	_, err := srv.EngineFrontendSwitchOver(context.Background(), &spdkrpc.EngineFrontendSwitchOverRequest{
+		Name:          ef.Name,
+		EngineName:    "engine-b",
+		TargetAddress: "10.0.0.2:3000",
+	})
+	c.Assert(err, NotNil)
+
+	st, ok := grpcstatus.FromError(err)
+	c.Assert(ok, Equals, true)
+	c.Assert(st.Code(), Equals, grpccodes.FailedPrecondition)
+}
+
 func (s *TestSuite) TestEngineFrontendSwitchOverTargetResolveEngineNameFallback(c *C) {
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP NVMe-oF frontend with engine name fallback")
 
