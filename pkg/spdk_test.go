@@ -63,6 +63,8 @@ var (
 	defaultTestEndPort          = int32(30000)
 	defaultTestReplicaPortCount = int32(5)
 
+	defaultTestFastSync = true
+
 	// Use a larger timeout for the test to avoid timeout issues while enabling debugger such as valgrind.
 	defaultTestExecuteTimeout = 120 * time.Second
 
@@ -598,7 +600,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica3.Head.CreationTime, Not(Equals), "")
 			c.Assert(replica3.Head.Parent, Equals, "")
 
-			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))))
+			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync)
 			c.Assert(err, IsNil)
 
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
@@ -1378,7 +1380,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(replica3.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica3.PortStart, Not(Equals), int32(0))
 			// Start the 1st rebuilding and wait for the completion
-			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))))
+			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync)
 			c.Assert(err, IsNil)
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
 			// While the volume head data written before rebuilding remains
@@ -1478,7 +1480,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(replica4.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica4.PortStart, Not(Equals), int32(0))
 			// Start the 2nd rebuilding and wait for the completion
-			err = spdkCli.EngineReplicaAdd(engineName, replicaName4, net.JoinHostPort(ip, strconv.Itoa(int(replica4.PortStart))))
+			err = spdkCli.EngineReplicaAdd(engineName, replicaName4, net.JoinHostPort(ip, strconv.Itoa(int(replica4.PortStart))), defaultTestFastSync)
 			c.Assert(err, IsNil)
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName4)
 			// While the volume head data written before rebuilding remains
@@ -2290,7 +2292,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(engine.Endpoint, Equals, endpoint)
 
 			// And start the 1st rebuilding and wait for the completion
-			err = spdkCli.EngineReplicaAdd(engineName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))))
+			err = spdkCli.EngineReplicaAdd(engineName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))), defaultTestFastSync)
 			c.Assert(err, IsNil)
 			// The rebuilding should be pretty fast since all existing snapshots and the previous head are there
 			WaitForReplicaRebuildingCompleteTimeout(c, spdkCli, engineName, replicaName1, 300)
