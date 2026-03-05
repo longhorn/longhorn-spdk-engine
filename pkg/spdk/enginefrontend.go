@@ -1478,6 +1478,7 @@ func (ef *EngineFrontend) completeReplicaAdd(engineName, engineIP, dstReplicaNam
 	}
 
 	ef.log.Infof("Successfully completed replica add %s(%s) on engine %s", dstReplicaName, dstReplicaAddress, engineName)
+	ef.UpdateCh <- nil
 }
 
 func (ef *EngineFrontend) suspendForReplicaAddFinish() (bool, error) {
