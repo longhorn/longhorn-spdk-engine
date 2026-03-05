@@ -1344,6 +1344,10 @@ func (ef *EngineFrontend) resume() error {
 
 func (ef *EngineFrontend) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string, fastSync bool) (err error) {
 	ef.Lock()
+	if ef.isCreating {
+		ef.Unlock()
+		return fmt.Errorf("engine frontend %s is still creating", ef.Name)
+	}
 	if ef.isSwitchingOver {
 		ef.Unlock()
 		return errors.Wrapf(ErrSwitchOverTargetPrecondition, "engine frontend %s is switching over target", ef.Name)
@@ -1351,6 +1355,14 @@ func (ef *EngineFrontend) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaNa
 	if ef.isReplicaAdding {
 		ef.Unlock()
 		return fmt.Errorf("engine frontend %s replica add is already in progress", ef.Name)
+	}
+	if ef.isExpanding {
+		ef.Unlock()
+		return fmt.Errorf("engine frontend %s expansion is in progress", ef.Name)
+	}
+	if ef.IsRestoring {
+		ef.Unlock()
+		return fmt.Errorf("engine frontend %s restore is in progress", ef.Name)
 	}
 	if ef.State != types.InstanceStateRunning {
 		ef.Unlock()
