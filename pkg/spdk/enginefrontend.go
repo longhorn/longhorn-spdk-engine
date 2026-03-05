@@ -63,6 +63,10 @@ type EngineFrontend struct {
 	// UpdateCh should not be protected by the engine lock
 	UpdateCh chan interface{}
 
+	// stopCh is closed when the engine frontend is deleted to signal
+	// background goroutines (e.g. completeReplicaAdd) to abort early.
+	stopCh chan struct{}
+
 	// Test hook for switchover target engine name resolution.
 	resolveEngineNameByTargetAddressFn func(targetAddress string) (string, error)
 	// Test hook for switchover target connect/rollback.
@@ -152,6 +156,7 @@ func NewEngineFrontend(engineFrontendName, engineName, volumeName, frontend stri
 		ErrorMsg: "",
 
 		UpdateCh: engineFrontendUpdateCh,
+		stopCh:   make(chan struct{}),
 		log:      safelog.NewSafeLogger(log),
 	}
 }
@@ -297,6 +302,14 @@ func (ef *EngineFrontend) Delete(spdkClient *spdkclient.Client) (err error) {
 			ef.UpdateCh <- nil
 		}
 	}()
+
+	// Signal background goroutines to stop.
+	select {
+	case <-ef.stopCh:
+		// Already closed.
+	default:
+		close(ef.stopCh)
+	}
 
 	ef.log.WithField("hasInitiator", ef.initiator != nil).Info("Deleting engine frontend")
 
@@ -1429,6 +1442,17 @@ func (ef *EngineFrontend) completeReplicaAdd(engineName, engineIP, dstReplicaNam
 
 	var finishErr error
 
+	// Check if frontend is being deleted before starting shallow copy.
+	select {
+	case <-ef.stopCh:
+		ef.log.Warnf("Engine frontend %s is being deleted, aborting replica add for %s before shallow copy", ef.Name, dstReplicaName)
+		if cleanupErr := engineSpdkClient.EngineReplicaAddFinish(engineName, dstReplicaName, dstReplicaAddress, fastSync); cleanupErr != nil {
+			ef.log.WithError(cleanupErr).Warnf("Engine frontend %s failed to clean up replica %s add after stop", engineName, dstReplicaName)
+		}
+		return
+	default:
+	}
+
 	// 1. Shallow copy
 	if err := engineSpdkClient.EngineReplicaAddShallowCopy(engineName, dstReplicaName, dstReplicaAddress, fastSync); err != nil {
 		// Call EngineReplicaAddFinish to trigger proper SPDK resource cleanup:
@@ -1443,6 +1467,17 @@ func (ef *EngineFrontend) completeReplicaAdd(engineName, engineIP, dstReplicaNam
 		}
 		ef.setReplicaAddError(errors.Wrapf(err, "failed to shallow copy replica %s on engine %s", dstReplicaName, engineName))
 		return
+	}
+
+	// Check if frontend is being deleted before suspend/finish.
+	select {
+	case <-ef.stopCh:
+		ef.log.Warnf("Engine frontend %s is being deleted, aborting replica add for %s before finish", ef.Name, dstReplicaName)
+		if cleanupErr := engineSpdkClient.EngineReplicaAddFinish(engineName, dstReplicaName, dstReplicaAddress, fastSync); cleanupErr != nil {
+			ef.log.WithError(cleanupErr).Warnf("Engine frontend %s failed to clean up replica %s add after stop", engineName, dstReplicaName)
+		}
+		return
+	default:
 	}
 
 	// 2. Suspend
