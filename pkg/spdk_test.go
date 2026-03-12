@@ -2261,6 +2261,10 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
 			c.Assert(err, IsNil)
 
+			for replicaName := range replicaAddressMap {
+				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, snapshotName14)
+			}
+
 			// Current snapshot tree of the crashed replica1 (with backing image):
 			//       BackingImage -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA][2*INVALID_DATA, 3*INVALID_DATA] -> snap13[2*INVALID_DATA, 3*INVALID_DATA] -> snap14[3*INVALID_DATA, 4*INVALID_DATA] -> head[4*INVALID_DATA, 5*INVALID_DATA]
 			//                          \
@@ -2643,7 +2647,8 @@ func WaitForReplicaRebuildingComplete(c *C, spdkCli *client.SPDKClient, engineNa
 func WaitForReplicaRebuildingCompleteTimeout(c *C, spdkCli *client.SPDKClient, engineName, replicaName string, timeoutInSecond int) {
 	complete := false
 
-	for cnt := 0; cnt < timeoutInSecond; cnt++ {
+	maxIterations := timeoutInSecond / int(defaultTestRebuildingWaitInterval.Seconds())
+	for cnt := 0; cnt < maxIterations; cnt++ {
 		rebuildingStatus, err := spdkCli.ReplicaRebuildingDstShallowCopyCheck(replicaName)
 		c.Assert(err, IsNil)
 		c.Assert(rebuildingStatus.Error, Equals, "")
