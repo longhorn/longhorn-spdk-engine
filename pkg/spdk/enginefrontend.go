@@ -291,7 +291,7 @@ func (ef *EngineFrontend) Delete(spdkClient *spdkclient.Client) (err error) {
 				ef.ErrorMsg = ""
 			}
 		}
-		if ef.State != types.InstanceStateTerminating && ef.State != types.InstanceStateStopped {
+		if ef.State != types.InstanceStateError && ef.State != types.InstanceStateTerminating && ef.State != types.InstanceStateStopped {
 			ef.State = types.InstanceStateTerminating
 			requireUpdate = true
 		}
