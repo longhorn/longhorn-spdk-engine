@@ -33,8 +33,11 @@ const (
 
 	SyncTimeout = 60 * time.Minute
 
-	maxNumRetries = 15
+	maxRetries    = 30
 	retryInterval = 1 * time.Second
+
+	disconnectMaxRetries    = 5
+	disconnectRetryInterval = 1 * time.Second
 
 	MaxShallowCopyWaitTime   = 72 * time.Hour
 	ShallowCopyCheckInterval = 3 * time.Second
@@ -52,7 +55,7 @@ const (
 	// When an instance manager containing a replica is deleted, SPDK starts to reconnect to the base bdev's controller.
 	// If the connection cannot be reestablished within the ctrlr_loss_timeout_sec period, the base bdev is removed from the RAID bdev.
 	//
-	// Because the ctrl-loss-tmo for the NVMe-oF initiator connecting to the RAID target is also set to 30 seconds,
+	// Because the ctrl-loss-tmo for the NVMe/TCP initiator connecting to the RAID target is also set to 30 seconds,
 	// replicaCtrlrLossTimeoutSec and replicaFastIOFailTimeoutSec are set to 15 seconds and 10 seconds, respectively.
 	//
 	// If an I/O operation to a replica (base bdev) is unresponsive within 10 seconds, an I/O error is returned,

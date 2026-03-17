@@ -3,16 +3,26 @@ package client
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
+	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
+)
+
+const (
+	replicaAddPhaseMetadataKey = "x-longhorn-replica-add-phase"
+	replicaAddPhaseStart       = "start"
+	replicaAddPhaseShallowCopy = "shallow-copy"
+	replicaAddPhaseFinish      = "finish"
 )
 
 func (c *SPDKServiceContext) Close() error {
@@ -666,10 +676,15 @@ func (c *SPDKClient) ReplicaRebuildingDstSetQosLimit(replicaName string, qosLimi
 	return nil
 }
 
-func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32,
-	initiatorAddress, targetAddress string, salvageRequested bool, ublkQueueDepth, ublkNumberOfQueue int32) (*api.Engine, error) {
-	if name == "" || volumeName == "" || len(replicaAddressMap) == 0 {
-		return nil, fmt.Errorf("failed to start SPDK engine: missing required parameters")
+func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool) (*api.Engine, error) {
+	if name == "" {
+		return nil, fmt.Errorf("failed to start engine: missing required parameter name")
+	}
+	if volumeName == "" {
+		return nil, fmt.Errorf("failed to start engine: missing required parameter volumeName")
+	}
+	if len(replicaAddressMap) == 0 {
+		return nil, fmt.Errorf("failed to start engine: missing required parameter replicaAddressMap")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -679,18 +694,14 @@ func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize ui
 	resp, err := client.EngineCreate(ctx, &spdkrpc.EngineCreateRequest{
 		Name:              name,
 		VolumeName:        volumeName,
+		Frontend:          frontend,
 		SpecSize:          specSize,
 		ReplicaAddressMap: replicaAddressMap,
-		Frontend:          frontend,
 		PortCount:         portCount,
-		TargetAddress:     targetAddress,
-		InitiatorAddress:  initiatorAddress,
 		SalvageRequested:  salvageRequested,
-		UblkQueueDepth:    ublkQueueDepth,
-		UblkNumberOfQueue: ublkNumberOfQueue,
 	})
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to start SPDK engine")
+		return nil, errors.Wrap(err, "failed to start engine")
 	}
 
 	return api.ProtoEngineToEngine(resp), nil
@@ -698,7 +709,7 @@ func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize ui
 
 func (c *SPDKClient) EngineDelete(name string) error {
 	if name == "" {
-		return fmt.Errorf("failed to delete SPDK engine: missing required parameter")
+		return fmt.Errorf("failed to delete engine: missing required parameter")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -708,12 +719,12 @@ func (c *SPDKClient) EngineDelete(name string) error {
 	_, err := client.EngineDelete(ctx, &spdkrpc.EngineDeleteRequest{
 		Name: name,
 	})
-	return errors.Wrapf(err, "failed to delete SPDK engine %v", name)
+	return errors.Wrapf(err, "failed to delete engine %v", name)
 }
 
 func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
 	if name == "" {
-		return nil, fmt.Errorf("failed to get SPDK engine: missing required parameter")
+		return nil, fmt.Errorf("failed to get engine: missing required parameter")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -724,64 +735,113 @@ func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
 		Name: name,
 	})
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to get SPDK engine %v", name)
+		return nil, errors.Wrapf(err, "failed to get engine %v", name)
 	}
 	return api.ProtoEngineToEngine(resp), nil
 }
 
-func (c *SPDKClient) EngineSuspend(name string) error {
+func (c *SPDKClient) EngineFrontendSwitchOver(name, newEngineName, newTargetAddress string) error {
 	if name == "" {
-		return fmt.Errorf("failed to suspend engine: missing required parameter")
+		return fmt.Errorf("failed to switch over target for engine frontend: missing required parameter name")
+	}
+	if newTargetAddress == "" {
+		return fmt.Errorf("failed to switch over target for engine frontend: missing required parameter newTargetAddress")
 	}
 
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
 	defer cancel()
 
-	_, err := client.EngineSuspend(ctx, &spdkrpc.EngineSuspendRequest{
-		Name: name,
-	})
-	if err != nil {
-		return errors.Wrapf(err, "failed to suspend engine %v", name)
-	}
-	return nil
-}
-
-func (c *SPDKClient) EngineResume(name string) error {
-	if name == "" {
-		return fmt.Errorf("failed to resume engine: missing required parameter")
-	}
-
-	client := c.getSPDKServiceClient()
-	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
-	defer cancel()
-
-	_, err := client.EngineResume(ctx, &spdkrpc.EngineResumeRequest{
-		Name: name,
-	})
-	if err != nil {
-		return errors.Wrapf(err, "failed to resume engine %v", name)
-	}
-	return nil
-}
-
-func (c *SPDKClient) EngineSwitchOverTarget(name, targetAddress string) error {
-	if name == "" {
-		return fmt.Errorf("failed to switch over target for engine: missing required parameter")
-	}
-
-	client := c.getSPDKServiceClient()
-	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
-	defer cancel()
-
-	_, err := client.EngineSwitchOverTarget(ctx, &spdkrpc.EngineSwitchOverTargetRequest{
+	_, err := client.EngineFrontendSwitchOver(ctx, &spdkrpc.EngineFrontendSwitchOverRequest{
 		Name:          name,
-		TargetAddress: targetAddress,
+		EngineName:    newEngineName,
+		TargetAddress: newTargetAddress,
 	})
 	if err != nil {
-		return errors.Wrapf(err, "failed to switch over target for engine %v", name)
+		return errors.Wrapf(err, "failed to switch over target to %s with new engine %s for %s", newTargetAddress, newEngineName, name)
+	}
+
+	return nil
+}
+
+func (c *SPDKClient) EngineFrontendSwitchOverWithOptions(name, newEngineName, newTargetAddress string, opts *EngineFrontendSwitchOverOptions) error {
+	if opts != nil && (opts.ExpectedEngineName != "" || opts.ExpectedTargetAddress != "" || opts.RequestID != "") {
+		return fmt.Errorf("engine frontend switch-over options are not supported by current gRPC EngineFrontendSwitchOverRequest")
+	}
+	return c.EngineFrontendSwitchOver(name, newEngineName, newTargetAddress)
+}
+
+func (c *SPDKClient) EngineFrontendSuspend(name string) error {
+	if name == "" {
+		return fmt.Errorf("failed to suspend engine frontend: missing required parameter")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineFrontendSuspend(ctx, &spdkrpc.EngineFrontendSuspendRequest{
+		Name: name,
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to suspend engine frontend %v", name)
 	}
 	return nil
+}
+
+func (c *SPDKClient) EngineFrontendResume(name string) error {
+	if name == "" {
+		return fmt.Errorf("failed to resume engine frontend: missing required parameter")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineFrontendResume(ctx, &spdkrpc.EngineFrontendResumeRequest{
+		Name: name,
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to resume engine frontend %v", name)
+	}
+	return nil
+}
+
+func (c *SPDKClient) EngineFrontendExpand(ctx context.Context, name string, size uint64) error {
+	if name == "" {
+		return fmt.Errorf("failed to expand engine frontend: missing required parameter")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(ctx, GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineFrontendExpand(ctx, &spdkrpc.EngineFrontendExpandRequest{
+		Name: name,
+		Size: size,
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to expand engine frontend %v", name)
+	}
+	return nil
+}
+
+func (c *SPDKClient) EngineFrontendGet(name string) (*api.EngineFrontend, error) {
+	if name == "" {
+		return nil, fmt.Errorf("failed to get engine frontend: missing required parameter")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	resp, err := client.EngineFrontendGet(ctx, &spdkrpc.EngineFrontendGetRequest{
+		Name: name,
+	})
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get engine frontend %v", name)
+	}
+	return api.ProtoEngineFrontendToEngineFrontend(resp), nil
 }
 
 func (c *SPDKClient) EngineDeleteTarget(name string) error {
@@ -809,7 +869,7 @@ func (c *SPDKClient) EngineList() (map[string]*api.Engine, error) {
 
 	resp, err := client.EngineList(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to list SPDK engines")
+		return nil, errors.Wrap(err, "failed to list engines")
 	}
 
 	res := map[string]*api.Engine{}
@@ -848,9 +908,28 @@ func (c *SPDKClient) EngineExpand(ctx context.Context, name string, size uint64)
 	return nil
 }
 
+func (c *SPDKClient) EngineExpandPrecheck(ctx context.Context, name string, size uint64) error {
+	if name == "" {
+		return fmt.Errorf("failed to expand engine precheck: missing required parameter")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(ctx, GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineExpandPrecheck(ctx, &spdkrpc.EngineExpandPrecheckRequest{
+		Name: name,
+		Size: size,
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to expand engine %v", name)
+	}
+	return nil
+}
+
 func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) (string, error) {
 	if name == "" {
-		return "", fmt.Errorf("failed to create SPDK engine snapshot: missing required parameter name")
+		return "", fmt.Errorf("failed to create engine snapshot: missing required parameter name")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -862,14 +941,14 @@ func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) (string, er
 		SnapshotName: snapshotName,
 	})
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to create SPDK engine %s snapshot %s", name, snapshotName)
+		return "", errors.Wrapf(err, "failed to create engine %s snapshot %s", name, snapshotName)
 	}
 	return resp.SnapshotName, nil
 }
 
 func (c *SPDKClient) EngineSnapshotDelete(name, snapshotName string) error {
 	if name == "" || snapshotName == "" {
-		return fmt.Errorf("failed to delete SPDK engine snapshot: missing required parameter name or snapshot name")
+		return fmt.Errorf("failed to delete engine snapshot: missing required parameter name or snapshotName")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -880,12 +959,12 @@ func (c *SPDKClient) EngineSnapshotDelete(name, snapshotName string) error {
 		Name:         name,
 		SnapshotName: snapshotName,
 	})
-	return errors.Wrapf(err, "failed to delete SPDK engine %s snapshot %s", name, snapshotName)
+	return errors.Wrapf(err, "failed to delete engine %s snapshot %s", name, snapshotName)
 }
 
 func (c *SPDKClient) EngineSnapshotRevert(name, snapshotName string) error {
 	if name == "" || snapshotName == "" {
-		return fmt.Errorf("failed to revert SPDK engine snapshot: missing required parameter name or snapshot name")
+		return fmt.Errorf("failed to revert engine snapshot: missing required parameter name or snapshotName")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -896,12 +975,12 @@ func (c *SPDKClient) EngineSnapshotRevert(name, snapshotName string) error {
 		Name:         name,
 		SnapshotName: snapshotName,
 	})
-	return errors.Wrapf(err, "failed to revert SPDK engine %s snapshot %s", name, snapshotName)
+	return errors.Wrapf(err, "failed to revert engine %s snapshot %s", name, snapshotName)
 }
 
 func (c *SPDKClient) EngineSnapshotPurge(name string) error {
 	if name == "" {
-		return fmt.Errorf("failed to purge SPDK engine: missing required parameter name")
+		return fmt.Errorf("failed to purge engine: missing required parameter name")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -911,12 +990,12 @@ func (c *SPDKClient) EngineSnapshotPurge(name string) error {
 	_, err := client.EngineSnapshotPurge(ctx, &spdkrpc.SnapshotRequest{
 		Name: name,
 	})
-	return errors.Wrapf(err, "failed to purge SPDK engine %s", name)
+	return errors.Wrapf(err, "failed to purge engine %s", name)
 }
 
 func (c *SPDKClient) EngineSnapshotHash(name, snapshotName string, rehash bool) error {
 	if name == "" || snapshotName == "" {
-		return fmt.Errorf("failed to hash SPDK engine snapshot: missing required parameter name or snapshot name")
+		return fmt.Errorf("failed to hash engine snapshot: missing required parameter name or snapshotName")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -928,12 +1007,12 @@ func (c *SPDKClient) EngineSnapshotHash(name, snapshotName string, rehash bool) 
 		SnapshotName: snapshotName,
 		Rehash:       rehash,
 	})
-	return errors.Wrapf(err, "failed to hash SPDK engine %s snapshot %s", name, snapshotName)
+	return errors.Wrapf(err, "failed to hash engine %s snapshot %s", name, snapshotName)
 }
 
 func (c *SPDKClient) EngineSnapshotHashStatus(name, snapshotName string) (response *spdkrpc.EngineSnapshotHashStatusResponse, err error) {
 	if name == "" || snapshotName == "" {
-		return nil, fmt.Errorf("failed to check hash status for SPDK engine snapshot: missing required parameter name or snapshot name")
+		return nil, fmt.Errorf("failed to check hash status for engine snapshot: missing required parameter name or snapshotName")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -953,7 +1032,8 @@ func (c *SPDKClient) EngineSnapshotClone(name, snapshotName, srcEngineName, srcE
 		util.Param{Name: "srcEngineName", Value: srcEngineName},
 		util.Param{Name: "srcEngineAddress", Value: srcEngineAddress},
 	); err != nil {
-		return errors.Wrap(err, "failed to clone snapshot for SPDK engine")
+		return errors.Wrapf(err, "failed to clone snapshot for engine %s, snapshotName %s, srcEngineName %s, srcEngineAddress %s",
+			name, snapshotName, srcEngineName, srcEngineAddress)
 	}
 
 	client := c.getSPDKServiceClient()
@@ -967,16 +1047,16 @@ func (c *SPDKClient) EngineSnapshotClone(name, snapshotName, srcEngineName, srcE
 		SrcEngineAddress: srcEngineAddress,
 		CloneMode:        cloneMode,
 	})
-	return errors.Wrapf(err, "failed to clone snapshot for SPDK engine: name %s, snapshotName %s, "+
-		"srcEngineName %s, srcEngineAddress %v", name, snapshotName, srcEngineName, srcEngineAddress)
+	return errors.Wrapf(err, "failed to clone snapshot for engine %s, snapshotName %s, srcEngineName %s, srcEngineAddress %s",
+		name, snapshotName, srcEngineName, srcEngineAddress)
 }
 
 func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress string, fastSync bool) error {
 	if engineName == "" {
-		return fmt.Errorf("failed to add replica for SPDK engine: missing required parameter engine name")
+		return fmt.Errorf("failed to add replica for engine: missing required parameter engineName")
 	}
 	if replicaName == "" || replicaAddress == "" {
-		return fmt.Errorf("failed to add replica for SPDK engine: missing required parameter replica name or address")
+		return fmt.Errorf("failed to add replica for engine: missing required parameter replicaName or replicaAddress")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -992,9 +1072,72 @@ func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress st
 	return errors.Wrapf(err, "failed to add replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
 }
 
+// EngineReplicaAddStart is a scaffold for the future dedicated RPC.
+// TODO: switch to spdkrpc.EngineReplicaAddStart once proto is extended.
+func (c *SPDKClient) EngineReplicaAddStart(engineName, replicaName, replicaAddress string, fastSync bool) error {
+	return c.engineReplicaAddWithPhase(engineName, replicaName, replicaAddress, replicaAddPhaseStart, fastSync, GRPCServiceTimeout)
+}
+
+// EngineReplicaAddFinish is a scaffold for the future dedicated RPC.
+// TODO: switch to spdkrpc.EngineReplicaAddFinish once proto is extended.
+func (c *SPDKClient) EngineReplicaAddFinish(engineName, replicaName, replicaAddress string, fastSync bool) error {
+	return c.engineReplicaAddWithPhase(engineName, replicaName, replicaAddress, replicaAddPhaseFinish, fastSync, GRPCServiceTimeout)
+}
+
+// EngineReplicaAddShallowCopy is a scaffold for the future dedicated RPC.
+// TODO: switch to spdkrpc.EngineReplicaAddShallowCopy once proto is extended.
+func (c *SPDKClient) EngineReplicaAddShallowCopy(engineName, replicaName, replicaAddress string, fastSync bool) error {
+	return c.engineReplicaAddWithPhase(engineName, replicaName, replicaAddress, replicaAddPhaseShallowCopy, fastSync, GRPCServiceLongTimeout)
+}
+
+func (c *SPDKClient) engineReplicaAddWithPhase(engineName, replicaName, replicaAddress, phase string, fastSync bool, timeout time.Duration) error {
+	if engineName == "" {
+		return fmt.Errorf("failed to add replica for engine: missing required parameter engineName")
+	}
+	if replicaName == "" || replicaAddress == "" {
+		return fmt.Errorf("failed to add replica for engine: missing required parameter replicaName or replicaAddress")
+	}
+
+	req := &spdkrpc.EngineReplicaAddRequest{
+		EngineName:     engineName,
+		ReplicaName:    replicaName,
+		ReplicaAddress: replicaAddress,
+		FastSync:       fastSync,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ctx = metadata.AppendToOutgoingContext(ctx, replicaAddPhaseMetadataKey, phase)
+
+	resp := &emptypb.Empty{}
+	err := c.cc.Invoke(ctx, "/spdkrpc.SPDKService/EngineReplicaAdd", req, resp)
+	return errors.Wrapf(err, "failed to add replica %s with address %s to engine %s in %s phase", replicaName, replicaAddress, engineName, phase)
+}
+
+func (c *SPDKClient) EngineFrontendReplicaAdd(engineFrontendName, replicaName, replicaAddress string, fastSync bool) error {
+	if engineFrontendName == "" {
+		return fmt.Errorf("failed to add replica for engine frontend: missing required parameter engineFrontendName")
+	}
+	if replicaName == "" || replicaAddress == "" {
+		return fmt.Errorf("failed to add replica for engine frontend: missing required parameter replicaName or replicaAddress")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineFrontendReplicaAdd(ctx, &spdkrpc.EngineFrontendReplicaAddRequest{
+		EngineFrontendName: engineFrontendName,
+		ReplicaName:        replicaName,
+		ReplicaAddress:     replicaAddress,
+		FastSync:           fastSync,
+	})
+	return errors.Wrapf(err, "failed to add replica %s with address %s by engine frontend %s", replicaName, replicaAddress, engineFrontendName)
+}
+
 func (c *SPDKClient) EngineReplicaList(engineName string) (map[string]*api.Replica, error) {
 	if engineName == "" {
-		return nil, fmt.Errorf("failed to list replica for SPDK engine: missing required parameter engine name")
+		return nil, fmt.Errorf("failed to list replica for engine: missing required parameter engineName")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -1005,7 +1148,7 @@ func (c *SPDKClient) EngineReplicaList(engineName string) (map[string]*api.Repli
 		EngineName: engineName,
 	})
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to list replica for SPDK engine: %s", engineName)
+		return nil, errors.Wrapf(err, "failed to list replica for engine: %s", engineName)
 	}
 	res := map[string]*api.Replica{}
 	for replicaName, r := range resp.Replicas {
@@ -1016,10 +1159,10 @@ func (c *SPDKClient) EngineReplicaList(engineName string) (map[string]*api.Repli
 
 func (c *SPDKClient) EngineReplicaDelete(engineName, replicaName, replicaAddress string) error {
 	if engineName == "" {
-		return fmt.Errorf("failed to delete replica from SPDK engine: missing required parameter engine name")
+		return fmt.Errorf("failed to delete replica from engine: missing required parameter engineName")
 	}
 	if replicaName == "" && replicaAddress == "" {
-		return fmt.Errorf("failed to delete replica from SPDK engine: missing required parameter replica name or address, at least one of them is required")
+		return fmt.Errorf("failed to delete replica from engine: missing required parameter replicaName or replicaAddress, at least one of them is required")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -1087,6 +1230,157 @@ func (c *SPDKClient) EngineBackupStatus(backupName, engineName, replicaAddress s
 		EngineName:     engineName,
 		ReplicaAddress: replicaAddress,
 	})
+}
+
+// EngineFrontendCreate creates a new engine frontend.
+func (c *SPDKClient) EngineFrontendCreate(name, volumeName, engineName, frontend string, specSize uint64, targetAddress string,
+	ublkQueueDepth, ublkNumberOfQueue int32) (*api.EngineFrontend, error) {
+	if name == "" {
+		return nil, fmt.Errorf("failed to start engine frontend: missing required parameter name")
+	}
+	if volumeName == "" {
+		return nil, fmt.Errorf("failed to start engine frontend: missing required parameter volumeName")
+	}
+	if engineName == "" {
+		return nil, fmt.Errorf("failed to start engine frontend: missing required parameter engineName")
+	}
+	if frontend == types.FrontendSPDKTCPBlockdev || frontend == types.FrontendSPDKTCPNvmf {
+		if targetAddress == "" {
+			return nil, fmt.Errorf("failed to start engine frontend: missing required parameter targetAddress")
+		}
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	resp, err := client.EngineFrontendCreate(ctx, &spdkrpc.EngineFrontendCreateRequest{
+		Name:              name,
+		VolumeName:        volumeName,
+		EngineName:        engineName,
+		SpecSize:          specSize,
+		TargetAddress:     targetAddress,
+		Frontend:          frontend,
+		UblkQueueDepth:    ublkQueueDepth,
+		UblkNumberOfQueue: ublkNumberOfQueue,
+	})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to start engine frontend")
+	}
+
+	return api.ProtoEngineFrontendToEngineFrontend(resp), nil
+}
+
+// EngineFrontendDelete deletes an engine frontend.
+func (c *SPDKClient) EngineFrontendDelete(name string) error {
+	if name == "" {
+		return fmt.Errorf("failed to delete engine frontend: missing required parameter name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineFrontendDelete(ctx, &spdkrpc.EngineFrontendDeleteRequest{
+		Name: name,
+	})
+	return errors.Wrapf(err, "failed to delete engine frontend %v", name)
+}
+
+// EngineFrontendList lists all engine frontends.
+func (c *SPDKClient) EngineFrontendList() (map[string]*api.EngineFrontend, error) {
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	resp, err := client.EngineFrontendList(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list engine frontends")
+	}
+
+	res := map[string]*api.EngineFrontend{}
+	for engineFrontendName, ef := range resp.EngineFrontends {
+		res[engineFrontendName] = api.ProtoEngineFrontendToEngineFrontend(ef)
+	}
+	return res, nil
+}
+
+// EngineFrontendWatch watches engine frontends.
+func (c *SPDKClient) EngineFrontendWatch(ctx context.Context) (*api.EngineFrontendStream, error) {
+	client := c.getSPDKServiceClient()
+	stream, err := client.EngineFrontendWatch(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open engine frontend watch stream")
+	}
+
+	return api.NewEngineFrontendStream(stream), nil
+}
+
+// EngineFrontendSnapshotCreate creates a snapshot for an engine frontend.
+func (c *SPDKClient) EngineFrontendSnapshotCreate(name, snapshotName string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("failed to create snapshot: missing required parameter name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	resp, err := client.EngineFrontendSnapshotCreate(ctx, &spdkrpc.SnapshotRequest{
+		Name:         name,
+		SnapshotName: snapshotName,
+	})
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to create snapshot %s", snapshotName)
+	}
+	return resp.SnapshotName, nil
+}
+
+func (c *SPDKClient) EngineFrontendSnapshotDelete(name, snapshotName string) error {
+	if name == "" || snapshotName == "" {
+		return fmt.Errorf("failed to delete engine frontend snapshot: missing required parameter name or snapshot name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineFrontendSnapshotDelete(ctx, &spdkrpc.SnapshotRequest{
+		Name:         name,
+		SnapshotName: snapshotName,
+	})
+	return errors.Wrapf(err, "failed to delete engine frontend %s snapshot %s", name, snapshotName)
+}
+
+func (c *SPDKClient) EngineFrontendSnapshotRevert(name, snapshotName string) error {
+	if name == "" || snapshotName == "" {
+		return fmt.Errorf("failed to revert engine frontend snapshot: missing required parameter name or snapshot name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineFrontendSnapshotRevert(ctx, &spdkrpc.SnapshotRequest{
+		Name:         name,
+		SnapshotName: snapshotName,
+	})
+	return errors.Wrapf(err, "failed to revert engine frontend %s snapshot %s", name, snapshotName)
+}
+
+func (c *SPDKClient) EngineFrontendSnapshotPurge(name string) error {
+	if name == "" {
+		return fmt.Errorf("failed to purge engine frontend: missing required parameter name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineFrontendSnapshotPurge(ctx, &spdkrpc.SnapshotRequest{
+		Name: name,
+	})
+	return errors.Wrapf(err, "failed to purge engine frontend %s", name)
 }
 
 func (c *SPDKClient) ReplicaBackupStatus(backupName string) (*spdkrpc.BackupStatusResponse, error) {
@@ -1406,7 +1700,7 @@ func (c *SPDKClient) LogGetFlags() (string, error) {
 
 func (c *SPDKClient) MetricsGet(name string) (*spdkrpc.Metrics, error) {
 	if name == "" {
-		return nil, fmt.Errorf("failed to get SPDK engine metrics: missing required parameter")
+		return nil, fmt.Errorf("failed to get engine metrics: missing required parameter")
 	}
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -1415,7 +1709,7 @@ func (c *SPDKClient) MetricsGet(name string) (*spdkrpc.Metrics, error) {
 		Name: name,
 	})
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to get SPDK engine %v metrics", name)
+		return nil, errors.Wrapf(err, "failed to get engine %v metrics", name)
 	}
 	return resp, nil
 }

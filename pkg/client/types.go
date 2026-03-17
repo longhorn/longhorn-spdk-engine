@@ -49,3 +49,11 @@ type BackupRestoreRequest struct {
 	Credential      map[string]string
 	ConcurrentLimit int32
 }
+
+type EngineFrontendSwitchOverOptions struct {
+	// These fields are kept for API compatibility, but current gRPC
+	// EngineFrontendSwitchOverRequest does not support them.
+	ExpectedEngineName    string
+	ExpectedTargetAddress string
+	RequestID             string
+}
