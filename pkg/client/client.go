@@ -1051,6 +1051,15 @@ func (c *SPDKClient) EngineSnapshotClone(name, snapshotName, srcEngineName, srcE
 		name, snapshotName, srcEngineName, srcEngineAddress)
 }
 
+// Deprecated: EngineReplicaAdd is kept for backward compatibility.
+// The server now requires phase metadata, so this method delegates to
+// EngineReplicaAddStart. New callers should use the phase-specific
+// helpers (EngineReplicaAddStart, EngineReplicaAddShallowCopy,
+// EngineReplicaAddFinish) directly.
+func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress string, fastSync bool) error {
+	return c.EngineReplicaAddStart(engineName, replicaName, replicaAddress, fastSync)
+}
+
 // EngineReplicaAddStart is a scaffold for the future dedicated RPC.
 // TODO: switch to spdkrpc.EngineReplicaAddStart once proto is extended.
 func (c *SPDKClient) EngineReplicaAddStart(engineName, replicaName, replicaAddress string, fastSync bool) error {
