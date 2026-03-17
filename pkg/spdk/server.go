@@ -2689,6 +2689,10 @@ func (s *Server) EngineFrontendCreate(ctx context.Context, req *spdkrpc.EngineFr
 		// The race loser holds a fully-created frontend with real SPDK
 		// resources (bdevs, NVMe controllers, etc.). Clean them up so
 		// they don't leak.
+		// Clear metadataDir so Delete() won't remove the persistence
+		// record that belongs to the winning frontend (both share the
+		// same volumeName-based directory).
+		ef.metadataDir = ""
 		if deleteErr := ef.Delete(spdkClient); deleteErr != nil {
 			logrus.WithError(deleteErr).Warnf("Failed to clean up race-loser engine frontend %v", req.Name)
 		}
