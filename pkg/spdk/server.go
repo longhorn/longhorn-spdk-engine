@@ -2679,22 +2679,37 @@ func (s *Server) EngineFrontendCreate(ctx context.Context, req *spdkrpc.EngineFr
 	// raced through the same window.
 	duplicateName := false
 	duplicateVolume := false
-	if _, exists := s.engineFrontendMap[req.Name]; exists {
+	var winner *EngineFrontend
+	if existing, exists := s.engineFrontendMap[req.Name]; exists {
 		duplicateName = true
+		winner = existing
 	} else if existing := s.engineFrontendByVolumeName(req.VolumeName); existing != nil {
 		duplicateVolume = true
+		winner = existing
 	}
 	if duplicateName || duplicateVolume {
 		s.Unlock()
 		// The race loser holds a fully-created frontend with real SPDK
 		// resources (bdevs, NVMe controllers, etc.). Clean them up so
 		// they don't leak.
-		// Clear metadataDir so Delete() won't remove the persistence
-		// record that belongs to the winning frontend (both share the
-		// same volumeName-based directory).
-		ef.metadataDir = ""
+		// Only clear metadataDir when the loser shares the same
+		// volumeName as the winner — they use the same persistence
+		// directory, so the loser's Delete() must not remove it.
+		// When volumeNames differ, each has its own directory and the
+		// loser should clean up its own record.
+		if winner != nil && ef.VolumeName == winner.VolumeName {
+			ef.metadataDir = ""
+		}
 		if deleteErr := ef.Delete(spdkClient); deleteErr != nil {
 			logrus.WithError(deleteErr).Warnf("Failed to clean up race-loser engine frontend %v", req.Name)
+		}
+		// The loser's Create() may have overwritten the winner's
+		// persistence record (both share the same volumeName key).
+		// Re-persist the winner to restore correct on-disk state.
+		if winner != nil && winner.metadataDir != "" && ef.VolumeName == winner.VolumeName {
+			if err := saveEngineFrontendRecord(winner.metadataDir, winner); err != nil {
+				logrus.WithError(err).Warnf("Failed to re-persist winner engine frontend %v record after race", winner.Name)
+			}
 		}
 		if duplicateVolume {
 			return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "engine frontend already exists for volume %v", req.VolumeName)
