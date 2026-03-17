@@ -1051,27 +1051,6 @@ func (c *SPDKClient) EngineSnapshotClone(name, snapshotName, srcEngineName, srcE
 		name, snapshotName, srcEngineName, srcEngineAddress)
 }
 
-func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress string, fastSync bool) error {
-	if engineName == "" {
-		return fmt.Errorf("failed to add replica for engine: missing required parameter engineName")
-	}
-	if replicaName == "" || replicaAddress == "" {
-		return fmt.Errorf("failed to add replica for engine: missing required parameter replicaName or replicaAddress")
-	}
-
-	client := c.getSPDKServiceClient()
-	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
-	defer cancel()
-
-	_, err := client.EngineReplicaAdd(ctx, &spdkrpc.EngineReplicaAddRequest{
-		EngineName:     engineName,
-		ReplicaName:    replicaName,
-		ReplicaAddress: replicaAddress,
-		FastSync:       fastSync,
-	})
-	return errors.Wrapf(err, "failed to add replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
-}
-
 // EngineReplicaAddStart is a scaffold for the future dedicated RPC.
 // TODO: switch to spdkrpc.EngineReplicaAddStart once proto is extended.
 func (c *SPDKClient) EngineReplicaAddStart(engineName, replicaName, replicaAddress string, fastSync bool) error {
