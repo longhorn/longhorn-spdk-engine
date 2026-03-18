@@ -1594,6 +1594,10 @@ func (s *Server) EngineWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_EngineW
 	return nil
 }
 
+// Deprecated: EngineReplicaAdd is kept for backward compatibility with clients
+// that still multiplex phases via gRPC metadata. New clients should call
+// EngineReplicaAddStart, EngineReplicaAddShallowCopy, or EngineReplicaAddFinish
+// directly.
 func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
 	if req.ReplicaName == "" || req.ReplicaAddress == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and address are required")
@@ -1615,7 +1619,8 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 		return s.EngineReplicaAddFinish(ctx, req)
 	}
 
-	return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "replica add requires phase metadata and should be initiated via engine frontend")
+	return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		"replica add requires phase metadata (deprecated) or use the dedicated EngineReplicaAddStart/ShallowCopy/Finish RPCs")
 }
 
 func (s *Server) EngineReplicaAddStart(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
