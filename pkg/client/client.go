@@ -7,7 +7,6 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -16,13 +15,6 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
-)
-
-const (
-	replicaAddPhaseMetadataKey = "x-longhorn-replica-add-phase"
-	replicaAddPhaseStart       = "start"
-	replicaAddPhaseShallowCopy = "shallow-copy"
-	replicaAddPhaseFinish      = "finish"
 )
 
 func (c *SPDKServiceContext) Close() error {
@@ -1052,39 +1044,49 @@ func (c *SPDKClient) EngineSnapshotClone(name, snapshotName, srcEngineName, srcE
 }
 
 // Deprecated: EngineReplicaAdd is kept for backward compatibility.
-// The server now requires phase metadata, so this method delegates to
-// EngineReplicaAddStart. New callers should use the phase-specific
-// helpers (EngineReplicaAddStart, EngineReplicaAddShallowCopy,
+// New callers should use the phase-specific RPCs
+// (EngineReplicaAddStart, EngineReplicaAddShallowCopy,
 // EngineReplicaAddFinish) directly.
 func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress string, fastSync bool) error {
 	return c.EngineReplicaAddStart(engineName, replicaName, replicaAddress, fastSync)
 }
 
-// EngineReplicaAddStart is a scaffold for the future dedicated RPC.
-// TODO: switch to spdkrpc.EngineReplicaAddStart once proto is extended.
 func (c *SPDKClient) EngineReplicaAddStart(engineName, replicaName, replicaAddress string, fastSync bool) error {
-	return c.engineReplicaAddWithPhase(engineName, replicaName, replicaAddress, replicaAddPhaseStart, fastSync, GRPCServiceTimeout)
+	return c.engineReplicaAddCall(engineName, replicaName, replicaAddress, fastSync, GRPCServiceTimeout,
+		func(ctx context.Context, client spdkrpc.SPDKServiceClient, req *spdkrpc.EngineReplicaAddRequest) error {
+			_, err := client.EngineReplicaAddStart(ctx, req)
+			return err
+		})
 }
 
-// EngineReplicaAddFinish is a scaffold for the future dedicated RPC.
-// TODO: switch to spdkrpc.EngineReplicaAddFinish once proto is extended.
 func (c *SPDKClient) EngineReplicaAddFinish(engineName, replicaName, replicaAddress string, fastSync bool) error {
-	return c.engineReplicaAddWithPhase(engineName, replicaName, replicaAddress, replicaAddPhaseFinish, fastSync, GRPCServiceTimeout)
+	return c.engineReplicaAddCall(engineName, replicaName, replicaAddress, fastSync, GRPCServiceTimeout,
+		func(ctx context.Context, client spdkrpc.SPDKServiceClient, req *spdkrpc.EngineReplicaAddRequest) error {
+			_, err := client.EngineReplicaAddFinish(ctx, req)
+			return err
+		})
 }
 
-// EngineReplicaAddShallowCopy is a scaffold for the future dedicated RPC.
-// TODO: switch to spdkrpc.EngineReplicaAddShallowCopy once proto is extended.
 func (c *SPDKClient) EngineReplicaAddShallowCopy(engineName, replicaName, replicaAddress string, fastSync bool) error {
-	return c.engineReplicaAddWithPhase(engineName, replicaName, replicaAddress, replicaAddPhaseShallowCopy, fastSync, GRPCServiceLongTimeout)
+	return c.engineReplicaAddCall(engineName, replicaName, replicaAddress, fastSync, GRPCServiceLongTimeout,
+		func(ctx context.Context, client spdkrpc.SPDKServiceClient, req *spdkrpc.EngineReplicaAddRequest) error {
+			_, err := client.EngineReplicaAddShallowCopy(ctx, req)
+			return err
+		})
 }
 
-func (c *SPDKClient) engineReplicaAddWithPhase(engineName, replicaName, replicaAddress, phase string, fastSync bool, timeout time.Duration) error {
+func (c *SPDKClient) engineReplicaAddCall(engineName, replicaName, replicaAddress string, fastSync bool, timeout time.Duration,
+	invoke func(context.Context, spdkrpc.SPDKServiceClient, *spdkrpc.EngineReplicaAddRequest) error) error {
 	if engineName == "" {
 		return fmt.Errorf("failed to add replica for engine: missing required parameter engineName")
 	}
 	if replicaName == "" || replicaAddress == "" {
 		return fmt.Errorf("failed to add replica for engine: missing required parameter replicaName or replicaAddress")
 	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	req := &spdkrpc.EngineReplicaAddRequest{
 		EngineName:     engineName,
@@ -1093,13 +1095,7 @@ func (c *SPDKClient) engineReplicaAddWithPhase(engineName, replicaName, replicaA
 		FastSync:       fastSync,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	ctx = metadata.AppendToOutgoingContext(ctx, replicaAddPhaseMetadataKey, phase)
-
-	resp := &emptypb.Empty{}
-	err := c.cc.Invoke(ctx, "/spdkrpc.SPDKService/EngineReplicaAdd", req, resp)
-	return errors.Wrapf(err, "failed to add replica %s with address %s to engine %s in %s phase", replicaName, replicaAddress, engineName, phase)
+	return errors.Wrapf(invoke(ctx, client, req), "failed to add replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
 }
 
 func (c *SPDKClient) EngineFrontendReplicaAdd(engineFrontendName, replicaName, replicaAddress string, fastSync bool) error {
