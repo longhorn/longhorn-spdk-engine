@@ -76,6 +76,9 @@ const (
 	SPDKService_EngineWatch_FullMethodName                               = "/spdkrpc.SPDKService/EngineWatch"
 	SPDKService_EngineReplicaList_FullMethodName                         = "/spdkrpc.SPDKService/EngineReplicaList"
 	SPDKService_EngineReplicaAdd_FullMethodName                          = "/spdkrpc.SPDKService/EngineReplicaAdd"
+	SPDKService_EngineReplicaAddStart_FullMethodName                     = "/spdkrpc.SPDKService/EngineReplicaAddStart"
+	SPDKService_EngineReplicaAddShallowCopy_FullMethodName               = "/spdkrpc.SPDKService/EngineReplicaAddShallowCopy"
+	SPDKService_EngineReplicaAddFinish_FullMethodName                    = "/spdkrpc.SPDKService/EngineReplicaAddFinish"
 	SPDKService_EngineReplicaDelete_FullMethodName                       = "/spdkrpc.SPDKService/EngineReplicaDelete"
 	SPDKService_EngineBackupCreate_FullMethodName                        = "/spdkrpc.SPDKService/EngineBackupCreate"
 	SPDKService_EngineBackupStatus_FullMethodName                        = "/spdkrpc.SPDKService/EngineBackupStatus"
@@ -175,6 +178,9 @@ type SPDKServiceClient interface {
 	EngineWatch(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (SPDKService_EngineWatchClient, error)
 	EngineReplicaList(ctx context.Context, in *EngineReplicaListRequest, opts ...grpc.CallOption) (*EngineReplicaListResponse, error)
 	EngineReplicaAdd(ctx context.Context, in *EngineReplicaAddRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	EngineReplicaAddStart(ctx context.Context, in *EngineReplicaAddRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	EngineReplicaAddShallowCopy(ctx context.Context, in *EngineReplicaAddRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	EngineReplicaAddFinish(ctx context.Context, in *EngineReplicaAddRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	EngineReplicaDelete(ctx context.Context, in *EngineReplicaDeleteRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	EngineBackupCreate(ctx context.Context, in *BackupCreateRequest, opts ...grpc.CallOption) (*BackupCreateResponse, error)
 	EngineBackupStatus(ctx context.Context, in *BackupStatusRequest, opts ...grpc.CallOption) (*BackupStatusResponse, error)
@@ -774,6 +780,33 @@ func (c *sPDKServiceClient) EngineReplicaAdd(ctx context.Context, in *EngineRepl
 	return out, nil
 }
 
+func (c *sPDKServiceClient) EngineReplicaAddStart(ctx context.Context, in *EngineReplicaAddRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, SPDKService_EngineReplicaAddStart_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sPDKServiceClient) EngineReplicaAddShallowCopy(ctx context.Context, in *EngineReplicaAddRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, SPDKService_EngineReplicaAddShallowCopy_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sPDKServiceClient) EngineReplicaAddFinish(ctx context.Context, in *EngineReplicaAddRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, SPDKService_EngineReplicaAddFinish_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *sPDKServiceClient) EngineReplicaDelete(ctx context.Context, in *EngineReplicaDeleteRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, SPDKService_EngineReplicaDelete_FullMethodName, in, out, opts...)
@@ -1213,6 +1246,9 @@ type SPDKServiceServer interface {
 	EngineWatch(*emptypb.Empty, SPDKService_EngineWatchServer) error
 	EngineReplicaList(context.Context, *EngineReplicaListRequest) (*EngineReplicaListResponse, error)
 	EngineReplicaAdd(context.Context, *EngineReplicaAddRequest) (*emptypb.Empty, error)
+	EngineReplicaAddStart(context.Context, *EngineReplicaAddRequest) (*emptypb.Empty, error)
+	EngineReplicaAddShallowCopy(context.Context, *EngineReplicaAddRequest) (*emptypb.Empty, error)
+	EngineReplicaAddFinish(context.Context, *EngineReplicaAddRequest) (*emptypb.Empty, error)
 	EngineReplicaDelete(context.Context, *EngineReplicaDeleteRequest) (*emptypb.Empty, error)
 	EngineBackupCreate(context.Context, *BackupCreateRequest) (*BackupCreateResponse, error)
 	EngineBackupStatus(context.Context, *BackupStatusRequest) (*BackupStatusResponse, error)
@@ -1426,6 +1462,15 @@ func (UnimplementedSPDKServiceServer) EngineReplicaList(context.Context, *Engine
 }
 func (UnimplementedSPDKServiceServer) EngineReplicaAdd(context.Context, *EngineReplicaAddRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method EngineReplicaAdd not implemented")
+}
+func (UnimplementedSPDKServiceServer) EngineReplicaAddStart(context.Context, *EngineReplicaAddRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method EngineReplicaAddStart not implemented")
+}
+func (UnimplementedSPDKServiceServer) EngineReplicaAddShallowCopy(context.Context, *EngineReplicaAddRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method EngineReplicaAddShallowCopy not implemented")
+}
+func (UnimplementedSPDKServiceServer) EngineReplicaAddFinish(context.Context, *EngineReplicaAddRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method EngineReplicaAddFinish not implemented")
 }
 func (UnimplementedSPDKServiceServer) EngineReplicaDelete(context.Context, *EngineReplicaDeleteRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method EngineReplicaDelete not implemented")
@@ -2565,6 +2610,60 @@ func _SPDKService_EngineReplicaAdd_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SPDKService_EngineReplicaAddStart_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EngineReplicaAddRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SPDKServiceServer).EngineReplicaAddStart(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SPDKService_EngineReplicaAddStart_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SPDKServiceServer).EngineReplicaAddStart(ctx, req.(*EngineReplicaAddRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SPDKService_EngineReplicaAddShallowCopy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EngineReplicaAddRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SPDKServiceServer).EngineReplicaAddShallowCopy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SPDKService_EngineReplicaAddShallowCopy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SPDKServiceServer).EngineReplicaAddShallowCopy(ctx, req.(*EngineReplicaAddRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SPDKService_EngineReplicaAddFinish_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EngineReplicaAddRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SPDKServiceServer).EngineReplicaAddFinish(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SPDKService_EngineReplicaAddFinish_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SPDKServiceServer).EngineReplicaAddFinish(ctx, req.(*EngineReplicaAddRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SPDKService_EngineReplicaDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EngineReplicaDeleteRequest)
 	if err := dec(in); err != nil {
@@ -3459,6 +3558,18 @@ var SPDKService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "EngineReplicaAdd",
 			Handler:    _SPDKService_EngineReplicaAdd_Handler,
+		},
+		{
+			MethodName: "EngineReplicaAddStart",
+			Handler:    _SPDKService_EngineReplicaAddStart_Handler,
+		},
+		{
+			MethodName: "EngineReplicaAddShallowCopy",
+			Handler:    _SPDKService_EngineReplicaAddShallowCopy_Handler,
+		},
+		{
+			MethodName: "EngineReplicaAddFinish",
+			Handler:    _SPDKService_EngineReplicaAddFinish_Handler,
 		},
 		{
 			MethodName: "EngineReplicaDelete",
