@@ -574,19 +574,44 @@ type replicaAddTask struct {
 
 type replicaAddFinishWrapper func(finish func() error) error
 
+// replicaAddOnComplete is called by Engine.ReplicaAdd's background goroutine
+// after replicaAddFinalize completes (success or failure). It allows the caller
+// (typically the server) to notify the EngineFrontend that replica add finished
+// so it can clear its isReplicaAdding guard and, on failure, transition to error state.
+type replicaAddOnComplete func(err error)
+
 const (
 	replicaAddTaskStaleTimeout       = 10 * time.Minute
 	replicaAddTaskStaleCheckInterval = time.Minute
 )
 
-func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string, fastSync bool) (err error) {
+// ReplicaAdd starts the full replica-add flow asynchronously.
+// Engine owns the entire lifecycle: start → shallow copy → finishWrapper → finish.
+// If finishWrapper is non-nil, it is called around the finish step
+// (typically to suspend/resume the frontend via gRPC callback).
+// If onComplete is non-nil, it is called after the finalize goroutine finishes
+// (success or failure) to notify the caller (e.g. clear EngineFrontend.isReplicaAdding).
+// The call returns after replicaAddStart completes synchronously;
+// the finalize phase (shallow copy + finish) runs in a background goroutine.
+func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string, fastSync bool, finishWrapper replicaAddFinishWrapper, onComplete replicaAddOnComplete) error {
 	task, err := e.replicaAddStart(spdkClient, dstReplicaName, dstReplicaAddress, fastSync)
 	if err != nil {
 		return err
 	}
 	go func() {
-		if finalizeErr := e.replicaAddFinalize(task, nil); finalizeErr != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				e.log.Errorf("Recovered panic during engine %s replica %s add: %v", e.Name, dstReplicaName, r)
+			}
+		}()
+
+		finalizeErr := e.replicaAddFinalize(task, finishWrapper)
+		if finalizeErr != nil {
 			e.log.WithError(finalizeErr).Errorf("Engine %s failed to finalize replica %s add", e.Name, dstReplicaName)
+		}
+
+		if onComplete != nil {
+			onComplete(finalizeErr)
 		}
 	}()
 	return nil

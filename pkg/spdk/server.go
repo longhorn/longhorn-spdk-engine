@@ -40,6 +40,16 @@ const (
 	replicaAddPhaseStart       = "start"
 	replicaAddPhaseShallowCopy = "shallow-copy"
 	replicaAddPhaseFinish      = "finish"
+
+	// Metadata keys used by EngineFrontendReplicaAdd to pass EF callback info
+	// so that EngineReplicaAdd can call back for suspend/resume via gRPC.
+	replicaAddEFNameMetadata    = "x-longhorn-engine-frontend-name"
+	replicaAddEFAddressMetadata = "x-longhorn-engine-frontend-address"
+
+	// Metadata keys for the replica-add completion callback.
+	// Engine → EngineFrontend notification that the async replica add finished.
+	replicaAddCompleteMetadata      = "x-longhorn-replica-add-complete"
+	replicaAddCompleteErrorMetadata = "x-longhorn-replica-add-complete-error"
 )
 
 type Server struct {
@@ -1597,12 +1607,51 @@ func (s *Server) EngineWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_EngineW
 // Deprecated: EngineReplicaAdd is kept for backward compatibility with clients
 // that still multiplex phases via gRPC metadata. New clients should call
 // EngineReplicaAddStart, EngineReplicaAddShallowCopy, or EngineReplicaAddFinish
-// directly.
+// directly — or use EngineFrontendReplicaAdd which delegates here with EF
+// callback metadata for suspend/resume.
 func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
 	if req.ReplicaName == "" || req.ReplicaAddress == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and address are required")
 	}
 
+	// Check for EF callback metadata — if present, this is a full-flow
+	// ReplicaAdd request from EngineFrontendReplicaAdd.
+	var efName, efAddress string
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if values := md.Get(replicaAddEFNameMetadata); len(values) > 0 {
+			efName = values[0]
+		}
+		if values := md.Get(replicaAddEFAddressMetadata); len(values) > 0 {
+			efAddress = values[0]
+		}
+	}
+
+	if efName != "" && efAddress != "" {
+		// Full-flow path: Engine owns start → shallow copy → finish
+		// with gRPC callback to EngineFrontend for suspend/resume.
+		s.RLock()
+		e := s.engineMap[req.EngineName]
+		spdkClient := s.spdkClient
+		s.RUnlock()
+
+		if e == nil {
+			return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s with address %s add", req.EngineName, req.ReplicaName, req.ReplicaAddress)
+		}
+
+		callbackLog := logrus.WithFields(logrus.Fields{
+			"engineName":     req.EngineName,
+			"replicaName":    req.ReplicaName,
+			"engineFrontend": efName,
+		})
+		finishWrapper := buildGRPCReplicaAddFinishWrapper(efName, efAddress, callbackLog)
+		onComplete := buildGRPCReplicaAddOnComplete(efName, efAddress, callbackLog)
+		if err := e.ReplicaAdd(spdkClient, req.ReplicaName, req.ReplicaAddress, req.FastSync, finishWrapper, onComplete); err != nil {
+			return nil, err
+		}
+		return &emptypb.Empty{}, nil
+	}
+
+	// Legacy path: phase-based routing via metadata.
 	phase := ""
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		if values := md.Get(replicaAddPhaseMetadata); len(values) > 0 {
@@ -1621,6 +1670,84 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 
 	return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 		"replica add requires phase metadata (deprecated) or use the dedicated EngineReplicaAddStart/ShallowCopy/Finish RPCs")
+}
+
+// buildGRPCReplicaAddFinishWrapper builds a replicaAddFinishWrapper that
+// calls back to the EngineFrontend on a (potentially remote) node via gRPC
+// for suspend/resume around the finish step.
+// If the frontend does not support suspend (e.g. NVMf frontend), the suspend
+// error is treated as non-fatal and the finish proceeds without suspension.
+func buildGRPCReplicaAddFinishWrapper(efName, efAddress string, log *logrus.Entry) replicaAddFinishWrapper {
+	return func(finish func() error) error {
+		efClient, err := GetServiceClient(efAddress)
+		if err != nil {
+			return errors.Wrapf(err, "failed to get SPDK client for engine frontend %s at %s for suspend", efName, efAddress)
+		}
+		defer func() {
+			if errClose := efClient.Close(); errClose != nil {
+				log.WithError(errClose).Warnf("Failed to close engine frontend SPDK client for %s", efName)
+			}
+		}()
+
+		// Suspend the frontend before finish.
+		// If suspend is not supported (e.g. NVMf or empty frontend), treat as non-fatal.
+		suspended := false
+		if err := efClient.EngineFrontendSuspend(efName); err != nil {
+			if isGRPCUnimplemented(err) {
+				log.Infof("Engine frontend %s does not support suspend, proceeding without suspension", efName)
+			} else {
+				return errors.Wrapf(err, "failed to suspend engine frontend %s before replica add finish", efName)
+			}
+		} else {
+			suspended = true
+		}
+
+		finishErr := finish()
+
+		// Resume the frontend after finish.
+		if suspended {
+			if resumeErr := efClient.EngineFrontendResume(efName); resumeErr != nil {
+				resumeErr = errors.Wrapf(resumeErr, "failed to resume engine frontend %s after replica add finish", efName)
+				if finishErr != nil {
+					return errors.Wrap(finishErr, resumeErr.Error())
+				}
+				return resumeErr
+			}
+		}
+
+		return finishErr
+	}
+}
+
+// buildGRPCReplicaAddOnComplete builds a replicaAddOnComplete callback that
+// notifies the EngineFrontend on a (potentially remote) node via gRPC when
+// Engine's async replica-add goroutine finishes. The notification clears
+// the EF's isReplicaAdding guard and, on failure, transitions it to error state.
+func buildGRPCReplicaAddOnComplete(efName, efAddress string, log *logrus.Entry) replicaAddOnComplete {
+	return func(replicaAddErr error) {
+		efClient, err := GetServiceClient(efAddress)
+		if err != nil {
+			log.WithError(err).Errorf("Failed to get SPDK client for engine frontend %s at %s for replica add completion", efName, efAddress)
+			return
+		}
+		defer func() {
+			if errClose := efClient.Close(); errClose != nil {
+				log.WithError(errClose).Warnf("Failed to close engine frontend SPDK client for %s", efName)
+			}
+		}()
+
+		if notifyErr := efClient.EngineFrontendReplicaAddComplete(efName, replicaAddErr); notifyErr != nil {
+			log.WithError(notifyErr).Errorf("Failed to notify engine frontend %s of replica add completion", efName)
+		}
+	}
+}
+
+// isGRPCUnimplemented checks if the error is a gRPC Unimplemented status.
+func isGRPCUnimplemented(err error) bool {
+	if st, ok := grpcstatus.FromError(err); ok {
+		return st.Code() == grpccodes.Unimplemented
+	}
+	return false
 }
 
 func (s *Server) EngineReplicaAddStart(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
@@ -1669,14 +1796,22 @@ func (s *Server) EngineReplicaAddFinish(ctx context.Context, req *spdkrpc.Engine
 	return &emptypb.Empty{}, e.ReplicaAddFinish(req.ReplicaName, nil)
 }
 
-// EngineFrontendReplicaAdd adds a replica to an engine frontend. The engine frontend should be in normal state before replica add.
+// EngineFrontendReplicaAdd adds a replica to an engine frontend, or handles
+// the async completion callback from Engine's background goroutine.
+// When the request carries x-longhorn-replica-add-complete metadata, it is
+// treated as a completion notification that clears EF's isReplicaAdding guard.
 func (s *Server) EngineFrontendReplicaAdd(ctx context.Context, req *spdkrpc.EngineFrontendReplicaAddRequest) (ret *emptypb.Empty, err error) {
+	// Check for completion callback from Engine's async replica add.
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if values := md.Get(replicaAddCompleteMetadata); len(values) > 0 && values[0] == "true" {
+			return s.handleReplicaAddComplete(req.EngineFrontendName, md)
+		}
+	}
+
 	if req.ReplicaName == "" || req.ReplicaAddress == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and address are required")
 	}
 	s.RLock()
-	// Look up the engine frontend by matching EngineName, since the frontend
-	// may have a different name from the engine it manages.
 	var ef *EngineFrontend
 	ef, ok := s.engineFrontendMap[req.EngineFrontendName]
 	if !ok {
@@ -1693,6 +1828,26 @@ func (s *Server) EngineFrontendReplicaAdd(ctx context.Context, req *spdkrpc.Engi
 	log.Info("Starting frontend-aware replica add")
 
 	return &emptypb.Empty{}, ef.ReplicaAdd(spdkClient, req.ReplicaName, req.ReplicaAddress, req.FastSync)
+}
+
+// handleReplicaAddComplete processes the completion callback from Engine's
+// background replica-add goroutine. It clears the EngineFrontend's
+// isReplicaAdding guard and sets error state if the replica add failed.
+func (s *Server) handleReplicaAddComplete(efName string, md metadata.MD) (*emptypb.Empty, error) {
+	s.RLock()
+	ef, ok := s.engineFrontendMap[efName]
+	s.RUnlock()
+	if !ok {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine frontend %v for replica add completion", efName)
+	}
+
+	var replicaAddErr error
+	if errValues := md.Get(replicaAddCompleteErrorMetadata); len(errValues) > 0 && errValues[0] != "" {
+		replicaAddErr = fmt.Errorf("%s", errValues[0])
+	}
+
+	ef.completeReplicaAdd(replicaAddErr)
+	return &emptypb.Empty{}, nil
 }
 
 // EngineReplicaList returns all replicas for an engine
