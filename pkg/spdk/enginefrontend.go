@@ -1434,24 +1434,6 @@ func (ef *EngineFrontend) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaNa
 	return nil
 }
 
-// completeReplicaAdd is called by the Engine's async completion callback
-// (via gRPC) when the background replica-add goroutine finishes.
-// It clears isReplicaAdding and, on failure, transitions to error state.
-func (ef *EngineFrontend) completeReplicaAdd(replicaAddErr error) {
-	ef.Lock()
-	ef.isReplicaAdding = false
-	if replicaAddErr != nil {
-		if ef.State != types.InstanceStateError {
-			ef.log.WithError(replicaAddErr).Error("Replica add completed with error")
-			ef.State = types.InstanceStateError
-		}
-		ef.ErrorMsg = replicaAddErr.Error()
-	}
-	ef.Unlock()
-
-	ef.UpdateCh <- nil
-}
-
 func (ef *EngineFrontend) suspendForReplicaAddFinish() (bool, error) {
 	ef.Lock()
 	defer ef.Unlock()
@@ -1491,6 +1473,24 @@ func (ef *EngineFrontend) setReplicaAddError(err error) {
 	if requireUpdate {
 		ef.UpdateCh <- nil
 	}
+}
+
+// completeReplicaAdd is called by the Engine's async completion callback
+// (via gRPC) when the background replica-add goroutine finishes.
+// It clears isReplicaAdding and, on failure, transitions to error state.
+func (ef *EngineFrontend) completeReplicaAdd(replicaAddErr error) {
+	ef.Lock()
+	ef.isReplicaAdding = false
+	if replicaAddErr != nil {
+		if ef.State != types.InstanceStateError {
+			ef.log.WithError(replicaAddErr).Error("Replica add completed with error")
+			ef.State = types.InstanceStateError
+		}
+		ef.ErrorMsg = replicaAddErr.Error()
+	}
+	ef.Unlock()
+
+	ef.UpdateCh <- nil
 }
 
 // ValidateAndUpdate validates the engine frontend (initiator-side) state and updates

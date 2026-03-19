@@ -1050,20 +1050,29 @@ func (e *Engine) replicaAddFinalize(task *replicaAddTask, finishWrapper replicaA
 
 	e.log.Infof("Starting to finish replica %s add for engine %s", task.dstReplicaName, e.Name)
 
+	finishCalled := false
+	trackedFinish := func() error {
+		finishCalled = true
+		return finish()
+	}
+
 	var finishErr error
 	if finishWrapper != nil {
 		e.log.Infof("Using finish wrapper for replica %s add finalize", task.dstReplicaName)
-		finishErr = finishWrapper(finish)
+		finishErr = finishWrapper(trackedFinish)
 	} else {
 		e.log.Infof("Using real finish function for replica %s add finalize", task.dstReplicaName)
-		finishErr = finish()
+		finishErr = trackedFinish()
 	}
 	if finishErr != nil {
 		e.log.WithError(finishErr).Errorf("Engine %s failed to finish replica %s add", e.Name, task.dstReplicaName)
-		// If a test hook was used for the finish step, we must still call the real
-		// replicaAddFinish for SPDK resource cleanup (detach external snapshot, stop expose).
-		if testFinishFn != nil {
-			e.log.Infof("Calling real replicaAddFinish for cleanup after finish failure for replica %s add", task.dstReplicaName)
+
+		// When finish was never called (e.g. finishWrapper suspend failure, stopCh),
+		// or when a test hook was used, we must still call the real replicaAddFinish
+		// for SPDK resource cleanup (detach external snapshot, stop expose).
+		needsCleanup := (!finishCalled && finishWrapper != nil) || testFinishFn != nil
+		if needsCleanup {
+			e.log.Infof("Calling real replicaAddFinish for cleanup after finish failure for replica %s add (finishCalled=%v)", task.dstReplicaName, finishCalled)
 			// Mark the dst replica as ERR before cleanup so that replicaAddFinish
 			// uses the correct cleanup order (SrcFinish first, then DstFinish).
 			e.Lock()
@@ -1071,7 +1080,22 @@ func (e *Engine) replicaAddFinalize(task *replicaAddTask, finishWrapper replicaA
 				dstStatus.Mode = types.ModeERR
 			}
 			e.Unlock()
-			if cleanupErr := e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, task.srcReplicaName, task.dstReplicaName, task.fastSync); cleanupErr != nil {
+
+			cleanupFn := func() error {
+				return e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, task.srcReplicaName, task.dstReplicaName, task.fastSync)
+			}
+			// When finishWrapper is available, run cleanup inside it
+			// (under suspend/resume) so SPDK resources are torn down
+			// while frontend I/O is quiesced — matching the pre-a9e1114
+			// behavior where EF held the dm device suspended for the
+			// entire finish+cleanup sequence.
+			var cleanupErr error
+			if finishWrapper != nil {
+				cleanupErr = finishWrapper(cleanupFn)
+			} else {
+				cleanupErr = cleanupFn()
+			}
+			if cleanupErr != nil {
 				e.log.WithError(cleanupErr).Errorf("Engine %s failed to clean up after finish failure for replica %s", e.Name, task.dstReplicaName)
 			}
 			if task.createdByReplicaAddStart {
