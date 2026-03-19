@@ -14,7 +14,7 @@ require (
 	github.com/longhorn/types v0.0.0-20260304051809-1002ef5005c7
 	github.com/sirupsen/logrus v1.9.4
 	go.uber.org/multierr v1.11.0
-	google.golang.org/grpc v1.79.2
+	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	k8s.io/apimachinery v0.35.2
