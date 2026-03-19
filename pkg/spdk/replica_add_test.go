@@ -17,15 +17,17 @@ func (s *TestSuite) TestReplicaAddFinalizeUsesFinishWrapper(c *C) {
 
 	order := []string{}
 
-	e.testReplicaShallowCopyFn = func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
-		order = append(order, "shallow")
-		return nil
+	mock := &ReplicaAddMock{
+		ShallowCopy: func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
+			order = append(order, "shallow")
+			return nil
+		},
+		Finish: func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
+			order = append(order, "finish")
+			return nil
+		},
 	}
-
-	e.testReplicaAddFinishFn = func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
-		order = append(order, "finish")
-		return nil
-	}
+	e.SetReplicaAddMock(mock)
 
 	wrapperCalled := false
 	wrapper := func(finish func() error) error {
@@ -59,15 +61,17 @@ func (s *TestSuite) TestReplicaAddFinalizeSkipsShallowCopyIfDone(c *C) {
 
 	order := []string{}
 
-	e.testReplicaShallowCopyFn = func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
-		order = append(order, "shallow")
-		return nil
+	mock := &ReplicaAddMock{
+		ShallowCopy: func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
+			order = append(order, "shallow")
+			return nil
+		},
+		Finish: func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
+			order = append(order, "finish")
+			return nil
+		},
 	}
-
-	e.testReplicaAddFinishFn = func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
-		order = append(order, "finish")
-		return nil
-	}
+	e.SetReplicaAddMock(mock)
 
 	wrapperCalled := false
 	wrapper := func(finish func() error) error {
@@ -101,15 +105,17 @@ func (s *TestSuite) TestReplicaAddFinalizeWithoutFinishWrapper(c *C) {
 
 	order := []string{}
 
-	e.testReplicaShallowCopyFn = func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
-		order = append(order, "shallow")
-		return nil
+	mock := &ReplicaAddMock{
+		ShallowCopy: func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
+			order = append(order, "shallow")
+			return nil
+		},
+		Finish: func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
+			order = append(order, "finish")
+			return nil
+		},
 	}
-
-	e.testReplicaAddFinishFn = func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
-		order = append(order, "finish")
-		return nil
-	}
+	e.SetReplicaAddMock(mock)
 
 	task := &replicaAddTask{
 		srcReplicaName:      "src-r-00000001",
@@ -134,15 +140,17 @@ func (s *TestSuite) TestReplicaAddFinalizeWithoutFinishWrapperAndShallowCopyDone
 
 	order := []string{}
 
-	e.testReplicaShallowCopyFn = func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
-		order = append(order, "shallow")
-		return nil
+	mock := &ReplicaAddMock{
+		ShallowCopy: func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
+			order = append(order, "shallow")
+			return nil
+		},
+		Finish: func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
+			order = append(order, "finish")
+			return nil
+		},
 	}
-
-	e.testReplicaAddFinishFn = func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
-		order = append(order, "finish")
-		return nil
-	}
+	e.SetReplicaAddMock(mock)
 
 	task := &replicaAddTask{
 		srcReplicaName:      "src-r-00000001",
@@ -165,18 +173,17 @@ func (s *TestSuite) TestReplicaAddFinishCanRetryAfterFailure(c *C) {
 
 	e := NewEngine("e1", "vol1", "", 1024, make(chan interface{}, 1))
 
-	e.testReplicaShallowCopyFn = func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
-		return nil
-	}
-
 	finishCallCount := 0
-	e.testReplicaAddFinishFn = func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
-		finishCallCount++
-		if finishCallCount == 1 {
-			return fmt.Errorf("injected finish error")
-		}
-		return nil
+	mock := &ReplicaAddMock{
+		Finish: func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
+			finishCallCount++
+			if finishCallCount == 1 {
+				return fmt.Errorf("injected finish error")
+			}
+			return nil
+		},
 	}
+	e.SetReplicaAddMock(mock)
 
 	const dstReplicaName = "dst-r-00000001"
 	task := &replicaAddTask{
@@ -205,18 +212,17 @@ func (s *TestSuite) TestReplicaAddFinishCanRetryAfterFailureAndShallowCopyDone(c
 
 	e := NewEngine("e1", "vol1", "", 1024, make(chan interface{}, 1))
 
-	e.testReplicaShallowCopyFn = func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
-		return nil
-	}
-
 	finishCallCount := 0
-	e.testReplicaAddFinishFn = func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
-		finishCallCount++
-		if finishCallCount == 1 {
-			return fmt.Errorf("injected finish error")
-		}
-		return nil
+	mock := &ReplicaAddMock{
+		Finish: func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
+			finishCallCount++
+			if finishCallCount == 1 {
+				return fmt.Errorf("injected finish error")
+			}
+			return nil
+		},
 	}
+	e.SetReplicaAddMock(mock)
 
 	const dstReplicaName = "dst-r-00000001"
 	task := &replicaAddTask{
@@ -247,12 +253,12 @@ func (s *TestSuite) TestReplicaAddFinishFailureCleansPendingTaskForStartFlow(c *
 
 	e := NewEngine("e1", "vol1", "", 1024, make(chan interface{}, 1))
 
-	e.testReplicaShallowCopyFn = func(_ *client.SPDKClient, _ string, _ string, _ []*api.Lvol, _ bool) error {
-		return nil
+	mock := &ReplicaAddMock{
+		Finish: func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
+			return fmt.Errorf("injected finish error")
+		},
 	}
-	e.testReplicaAddFinishFn = func(_ *client.SPDKClient, _ *client.SPDKClient, _ string, _ string, _ bool) error {
-		return fmt.Errorf("injected finish error")
-	}
+	e.SetReplicaAddMock(mock)
 
 	const dstReplicaName = "dst-r-00000001"
 	task := &replicaAddTask{
