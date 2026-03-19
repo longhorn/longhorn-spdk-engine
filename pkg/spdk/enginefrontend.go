@@ -18,6 +18,8 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 
+	commonnet "github.com/longhorn/go-common-libs/net"
+
 	safelog "github.com/longhorn/longhorn-spdk-engine/pkg/log"
 
 	"github.com/longhorn/go-spdk-helper/pkg/initiator"
@@ -1389,6 +1391,25 @@ func (ef *EngineFrontend) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaNa
 	}
 	ef.Unlock()
 
+	// Resolve the local node IP so Engine can call back to this EF
+	// for suspend/resume/completion. This is the EF node's IP, which
+	// may differ from engineIP when they run on different nodes.
+	localIP, err := commonnet.GetIPForPod()
+	if err != nil {
+		ef.Lock()
+		ef.isReplicaAdding = false
+		ef.Unlock()
+		return errors.Wrapf(err, "failed to get local IP for engine frontend %s replica add callback", ef.Name)
+	}
+	efAddress := net.JoinHostPort(localIP, strconv.Itoa(types.SPDKServicePort))
+
+	// Delegate to Engine via gRPC. Engine owns the full flow
+	// (start → shallow copy → suspend/resume via callback → finish)
+	// and all error handling. The gRPC call returns immediately after
+	// EngineReplicaAddStart succeeds; the finalize runs asynchronously.
+	//
+	// We pass the EF callback address and name via gRPC metadata so
+	// Engine can call back for suspend/resume via gRPC.
 	engineSpdkClient, err := GetServiceClient(net.JoinHostPort(engineIP, strconv.Itoa(types.SPDKServicePort)))
 	if err != nil {
 		ef.Lock()
@@ -1402,117 +1423,32 @@ func (ef *EngineFrontend) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaNa
 		}
 	}()
 
-	// NOTE: Engine and EngineFrontend may run on different nodes.
-	// Replica-add execution must happen on the Engine node.
-	if err := engineSpdkClient.EngineReplicaAddStart(engineName, dstReplicaName, dstReplicaAddress, fastSync); err != nil {
+	if err := engineSpdkClient.EngineReplicaAdd(engineName, dstReplicaName, dstReplicaAddress, fastSync,
+		ef.Name, efAddress); err != nil {
 		ef.Lock()
 		ef.isReplicaAdding = false
 		ef.Unlock()
 		return errors.Wrapf(err, "failed to start replica add %s on engine %s", dstReplicaName, engineName)
 	}
 
-	go ef.completeReplicaAdd(engineName, engineIP, dstReplicaName, dstReplicaAddress, fastSync)
 	return nil
 }
 
-func (ef *EngineFrontend) completeReplicaAdd(engineName, engineIP, dstReplicaName, dstReplicaAddress string, fastSync bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			ef.log.WithFields(logrus.Fields{
-				"panic": string(debug.Stack()),
-			}).Errorf("Recovered panic during engine frontend %s replica add: %v", ef.Name, r)
-			ef.setReplicaAddError(errors.Wrapf(fmt.Errorf("%v", r), "panic during engine frontend %s replica add", ef.Name))
+// completeReplicaAdd is called by the Engine's async completion callback
+// (via gRPC) when the background replica-add goroutine finishes.
+// It clears isReplicaAdding and, on failure, transitions to error state.
+func (ef *EngineFrontend) completeReplicaAdd(replicaAddErr error) {
+	ef.Lock()
+	ef.isReplicaAdding = false
+	if replicaAddErr != nil {
+		if ef.State != types.InstanceStateError {
+			ef.log.WithError(replicaAddErr).Error("Replica add completed with error")
+			ef.State = types.InstanceStateError
 		}
-
-		ef.Lock()
-		ef.isReplicaAdding = false
-		ef.Unlock()
-	}()
-
-	engineSpdkClient, err := GetServiceClient(net.JoinHostPort(engineIP, strconv.Itoa(types.SPDKServicePort)))
-	if err != nil {
-		ef.setReplicaAddError(errors.Wrapf(err, "failed to get SPDK client for engine frontend %v replica %s add finish", engineName, dstReplicaName))
-		return
+		ef.ErrorMsg = replicaAddErr.Error()
 	}
-	defer func() {
-		if errClose := engineSpdkClient.Close(); errClose != nil {
-			ef.log.WithError(errClose).Error("Failed to close SPDK client")
-		}
-	}()
+	ef.Unlock()
 
-	var finishErr error
-
-	// Check if frontend is being deleted before starting shallow copy.
-	select {
-	case <-ef.stopCh:
-		ef.log.Warnf("Engine frontend %s is being deleted, aborting replica add for %s before shallow copy", ef.Name, dstReplicaName)
-		if cleanupErr := engineSpdkClient.EngineReplicaAddFinish(engineName, dstReplicaName, dstReplicaAddress, fastSync); cleanupErr != nil {
-			ef.log.WithError(cleanupErr).Warnf("Engine frontend %s failed to clean up replica %s add after stop", engineName, dstReplicaName)
-		}
-		return
-	default:
-	}
-
-	// 1. Shallow copy
-	if err := engineSpdkClient.EngineReplicaAddShallowCopy(engineName, dstReplicaName, dstReplicaAddress, fastSync); err != nil {
-		// Call EngineReplicaAddFinish to trigger proper SPDK resource cleanup:
-		// - replicaAddFinalize detects shallowCopyFailed flag and skips re-attempt,
-		//   then calls the real replicaAddFinish which detaches the external snapshot
-		//   NVMe controller and stops the source from exposing.
-		// This prevents bdev_nvme_detach_controller hangs on same-node NVMe-oF during
-		// subsequent ReplicaDelete.
-		if cleanupErr := engineSpdkClient.EngineReplicaAddFinish(engineName, dstReplicaName, dstReplicaAddress, fastSync); cleanupErr != nil {
-			ef.log.WithError(cleanupErr).Warnf("Engine frontend %s failed to clean up replica %s add after shallow copy failure", engineName, dstReplicaName)
-			err = multierr.Append(err, cleanupErr)
-		}
-		ef.setReplicaAddError(errors.Wrapf(err, "failed to shallow copy replica %s on engine %s", dstReplicaName, engineName))
-		return
-	}
-
-	// Check if frontend is being deleted before suspend/finish.
-	select {
-	case <-ef.stopCh:
-		ef.log.Warnf("Engine frontend %s is being deleted, aborting replica add for %s before finish", ef.Name, dstReplicaName)
-		if cleanupErr := engineSpdkClient.EngineReplicaAddFinish(engineName, dstReplicaName, dstReplicaAddress, fastSync); cleanupErr != nil {
-			ef.log.WithError(cleanupErr).Warnf("Engine frontend %s failed to clean up replica %s add after stop", engineName, dstReplicaName)
-		}
-		return
-	default:
-	}
-
-	// 2. Suspend
-	suspended, err := ef.suspendForReplicaAddFinish()
-	if err != nil {
-		// Shallow copy succeeded but suspend failed — still need to clean up SPDK resources
-		// (external snapshot NVMe controller, src replica exposing).
-		if cleanupErr := engineSpdkClient.EngineReplicaAddFinish(engineName, dstReplicaName, dstReplicaAddress, fastSync); cleanupErr != nil {
-			ef.log.WithError(cleanupErr).Warnf("Engine frontend %s failed to clean up replica %s add after suspend failure", engineName, dstReplicaName)
-			err = multierr.Append(err, cleanupErr)
-		}
-		ef.setReplicaAddError(errors.Wrapf(err, "failed to suspend engine frontend %s before replica add finish", engineName))
-		return
-	}
-	if suspended {
-		defer func() {
-			// 4. Resume
-			if resumeErr := ef.resumeForReplicaAddFinish(); resumeErr != nil {
-				resumeErr = errors.Wrapf(resumeErr, "failed to resume engine frontend %s after replica add finish", engineName)
-				finishErr = multierr.Append(finishErr, resumeErr)
-				// Only mark frontend as error when resume fails — the frontend is stuck in suspended state
-				ef.setReplicaAddError(finishErr)
-			} else if finishErr != nil {
-				ef.setReplicaAddError(finishErr)
-			}
-		}()
-	}
-
-	// 3. Finish
-	if err := engineSpdkClient.EngineReplicaAddFinish(engineName, dstReplicaName, dstReplicaAddress, fastSync); err != nil {
-		finishErr = errors.Wrapf(err, "failed to finish replica add %s on engine %s", dstReplicaName, engineName)
-		return
-	}
-
-	ef.log.Infof("Successfully completed replica add %s(%s) on engine %s", dstReplicaName, dstReplicaAddress, engineName)
 	ef.UpdateCh <- nil
 }
 
