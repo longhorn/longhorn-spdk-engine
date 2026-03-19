@@ -8,9 +8,9 @@ require (
 	github.com/cockroachdb/errors v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20260306105805-ea08687ca2cd
-	github.com/longhorn/go-common-libs v0.0.0-20260307044012-ae36fc92e72e
-	github.com/longhorn/go-spdk-helper v0.5.0
+	github.com/longhorn/backupstore v0.0.0-20260304025831-03d9bbc06a99
+	github.com/longhorn/go-common-libs v0.0.0-20260316031529-b1112faa59bd
+	github.com/longhorn/go-spdk-helper v0.5.1-0.20260316031502-fc65c71d099a
 	github.com/longhorn/types v0.0.0-20260304051809-1002ef5005c7
 	github.com/sirupsen/logrus v1.9.4
 	go.uber.org/multierr v1.11.0
@@ -71,7 +71,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
+	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect; sindirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
@@ -79,3 +79,5 @@ require (
 	k8s.io/mount-utils v0.31.3 // indirect
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 // indirect
 )
+
+replace github.com/longhorn/types => ../longhorn-types

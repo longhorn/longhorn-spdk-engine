@@ -60,6 +60,8 @@ func fakeGetDevNameFromBDF(bdf string) (string, error) {
 }
 
 func (s *TestSuite) TestGetDevNameFromBDF(c *C) {
+	fmt.Println("Testing GetDevNameFromBDF with various BDF inputs and mocked sysfs entries")
+
 	type testCase struct {
 		name        string
 		bdf         string
