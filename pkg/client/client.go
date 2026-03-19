@@ -7,6 +7,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -1043,12 +1044,38 @@ func (c *SPDKClient) EngineSnapshotClone(name, snapshotName, srcEngineName, srcE
 		name, snapshotName, srcEngineName, srcEngineAddress)
 }
 
-// Deprecated: EngineReplicaAdd is kept for backward compatibility.
-// New callers should use the phase-specific RPCs
-// (EngineReplicaAddStart, EngineReplicaAddShallowCopy,
-// EngineReplicaAddFinish) directly.
-func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress string, fastSync bool) error {
-	return c.EngineReplicaAddStart(engineName, replicaName, replicaAddress, fastSync)
+// EngineReplicaAdd calls the full-flow EngineReplicaAdd gRPC on the Engine node.
+// When efName and efAddress are non-empty, they are passed as gRPC metadata so
+// Engine can call back to the EngineFrontend for suspend/resume.
+func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress string, fastSync bool, efName, efAddress string) error {
+	if engineName == "" {
+		return fmt.Errorf("failed to add replica for engine: missing required parameter engineName")
+	}
+	if replicaName == "" || replicaAddress == "" {
+		return fmt.Errorf("failed to add replica for engine: missing required parameter replicaName or replicaAddress")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	if efName != "" && efAddress != "" {
+		md := metadata.Pairs(
+			"x-longhorn-engine-frontend-name", efName,
+			"x-longhorn-engine-frontend-address", efAddress,
+		)
+		ctx = metadata.NewOutgoingContext(ctx, md)
+	}
+
+	req := &spdkrpc.EngineReplicaAddRequest{
+		EngineName:     engineName,
+		ReplicaName:    replicaName,
+		ReplicaAddress: replicaAddress,
+		FastSync:       fastSync,
+	}
+
+	_, err := client.EngineReplicaAdd(ctx, req)
+	return errors.Wrapf(err, "failed to add replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
 }
 
 func (c *SPDKClient) EngineReplicaAddStart(engineName, replicaName, replicaAddress string, fastSync bool) error {
@@ -1117,6 +1144,31 @@ func (c *SPDKClient) EngineFrontendReplicaAdd(engineFrontendName, replicaName, r
 		FastSync:           fastSync,
 	})
 	return errors.Wrapf(err, "failed to add replica %s with address %s by engine frontend %s", replicaName, replicaAddress, engineFrontendName)
+}
+
+// EngineFrontendReplicaAddComplete notifies the EngineFrontend that the Engine's
+// async replica-add goroutine has finished. This clears the EF's isReplicaAdding
+// guard and, on failure, transitions it to error state.
+// It reuses the EngineFrontendReplicaAdd gRPC endpoint with completion metadata.
+func (c *SPDKClient) EngineFrontendReplicaAddComplete(efName string, replicaAddErr error) error {
+	if efName == "" {
+		return fmt.Errorf("failed to complete replica add for engine frontend: missing required parameter efName")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	md := metadata.Pairs("x-longhorn-replica-add-complete", "true")
+	if replicaAddErr != nil {
+		md.Append("x-longhorn-replica-add-complete-error", replicaAddErr.Error())
+	}
+	ctx = metadata.NewOutgoingContext(ctx, md)
+
+	_, err := client.EngineFrontendReplicaAdd(ctx, &spdkrpc.EngineFrontendReplicaAddRequest{
+		EngineFrontendName: efName,
+	})
+	return errors.Wrapf(err, "failed to notify engine frontend %s of replica add completion", efName)
 }
 
 func (c *SPDKClient) EngineReplicaList(engineName string) (map[string]*api.Replica, error) {
