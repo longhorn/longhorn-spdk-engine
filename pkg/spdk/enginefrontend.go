@@ -839,8 +839,6 @@ func (ef *EngineFrontend) prepareExpansion(spdkClient *spdkclient.Client) (engin
 func (ef *EngineFrontend) Suspend(_ *spdkclient.Client) (err error) {
 	ef.Lock()
 	defer func() {
-		ef.Unlock()
-
 		if err != nil {
 			if ef.State != types.InstanceStateError {
 				ef.log.WithError(err).Warn("Failed to suspend engine frontend")
@@ -854,6 +852,8 @@ func (ef *EngineFrontend) Suspend(_ *spdkclient.Client) (err error) {
 
 			ef.log.Info("Suspended engine frontend")
 		}
+
+		ef.Unlock()
 
 		ef.UpdateCh <- nil
 	}()
@@ -888,8 +888,6 @@ func (ef *EngineFrontend) Suspend(_ *spdkclient.Client) (err error) {
 func (ef *EngineFrontend) Resume(_ *spdkclient.Client) (err error) {
 	ef.Lock()
 	defer func() {
-		ef.Unlock()
-
 		if err != nil {
 			if ef.State != types.InstanceStateError {
 				ef.log.WithError(err).Warn("Failed to resume engine frontend")
@@ -903,6 +901,8 @@ func (ef *EngineFrontend) Resume(_ *spdkclient.Client) (err error) {
 
 			ef.log.Infof("Resumed engine frontend")
 		}
+
+		ef.Unlock()
 
 		ef.UpdateCh <- nil
 	}()

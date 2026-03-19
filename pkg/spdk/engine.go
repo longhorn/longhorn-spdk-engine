@@ -902,11 +902,17 @@ func (e *Engine) replicaAddStart(spdkClient *spdkclient.Client, dstReplicaName, 
 }
 
 func (e *Engine) replicaAddShallowCopy(task *replicaAddTask) error {
+	// Snapshot test hooks under lock to avoid data races with test setters.
+	e.RLock()
+	testShallowCopyFn := e.testReplicaShallowCopyFn
+	testFinishFn := e.testReplicaAddFinishFn
+	e.RUnlock()
+
 	srcReplicaServiceCli := task.srcReplicaServiceCli
 	dstReplicaServiceCli := task.dstReplicaServiceCli
 	usesTaskClients := srcReplicaServiceCli != nil && dstReplicaServiceCli != nil
 
-	if e.testReplicaShallowCopyFn == nil || e.testReplicaAddFinishFn == nil {
+	if testShallowCopyFn == nil || testFinishFn == nil {
 		if !usesTaskClients {
 			var err error
 			srcReplicaServiceCli, dstReplicaServiceCli, err = e.getSrcAndDstReplicaClients(task.srcReplicaName, task.srcReplicaAddress, task.dstReplicaName, task.dstReplicaAddress)
@@ -925,8 +931,8 @@ func (e *Engine) replicaAddShallowCopy(task *replicaAddTask) error {
 	}
 
 	shallowCopyFn := e.replicaShallowCopy
-	if e.testReplicaShallowCopyFn != nil {
-		shallowCopyFn = e.testReplicaShallowCopyFn
+	if testShallowCopyFn != nil {
+		shallowCopyFn = testShallowCopyFn
 	}
 	if err := shallowCopyFn(dstReplicaServiceCli, task.srcReplicaName, task.dstReplicaName, task.rebuildingSnapshots, task.fastSync); err != nil {
 		e.log.WithError(err).Errorf("Engine %s failed to do the shallow copy for replica %s add", e.Name, task.dstReplicaName)
@@ -936,6 +942,11 @@ func (e *Engine) replicaAddShallowCopy(task *replicaAddTask) error {
 }
 
 func (e *Engine) replicaAddFinalize(task *replicaAddTask, finishWrapper replicaAddFinishWrapper) error {
+	// Snapshot test hooks under lock to avoid data races with test setters.
+	e.RLock()
+	testShallowCopyFn := e.testReplicaShallowCopyFn
+	testFinishFn := e.testReplicaAddFinishFn
+	e.RUnlock()
 	var shallowCopyErr error
 	if task.shallowCopyFailed {
 		// Shallow copy already failed in a previous ReplicaAddShallowCopy call.
@@ -957,7 +968,7 @@ func (e *Engine) replicaAddFinalize(task *replicaAddTask, finishWrapper replicaA
 	dstReplicaServiceCli := task.dstReplicaServiceCli
 	usesTaskClients := srcReplicaServiceCli != nil && dstReplicaServiceCli != nil
 
-	if e.testReplicaShallowCopyFn == nil || e.testReplicaAddFinishFn == nil {
+	if testShallowCopyFn == nil || testFinishFn == nil {
 		if !usesTaskClients {
 			var err error
 			srcReplicaServiceCli, dstReplicaServiceCli, err = e.getSrcAndDstReplicaClients(task.srcReplicaName, task.srcReplicaAddress, task.dstReplicaName, task.dstReplicaAddress)
@@ -979,8 +990,8 @@ func (e *Engine) replicaAddFinalize(task *replicaAddTask, finishWrapper replicaA
 	}
 
 	finishFn := e.replicaAddFinish
-	if e.testReplicaAddFinishFn != nil {
-		finishFn = e.testReplicaAddFinishFn
+	if testFinishFn != nil {
+		finishFn = testFinishFn
 	}
 	finish := func() error {
 		return finishFn(srcReplicaServiceCli, dstReplicaServiceCli, task.srcReplicaName, task.dstReplicaName, task.fastSync)
@@ -1026,7 +1037,7 @@ func (e *Engine) replicaAddFinalize(task *replicaAddTask, finishWrapper replicaA
 		e.log.WithError(finishErr).Errorf("Engine %s failed to finish replica %s add", e.Name, task.dstReplicaName)
 		// If a test hook was used for the finish step, we must still call the real
 		// replicaAddFinish for SPDK resource cleanup (detach external snapshot, stop expose).
-		if e.testReplicaAddFinishFn != nil {
+		if testFinishFn != nil {
 			e.log.Infof("Calling real replicaAddFinish for cleanup after finish failure for replica %s add", task.dstReplicaName)
 			// Mark the dst replica as ERR before cleanup so that replicaAddFinish
 			// uses the correct cleanup order (SrcFinish first, then DstFinish).
@@ -1229,8 +1240,11 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 	// These calls may be slow (e.g. bdev_nvme_detach_controller returning ETIMEDOUT).
 	// By releasing the lock, other Engine operations (status queries, other replica
 	// operations) are not blocked during these potentially slow RPCs.
-	if e.testReplicaAddFinishPhase2Hook != nil {
-		e.testReplicaAddFinishPhase2Hook()
+	e.RLock()
+	phase2Hook := e.testReplicaAddFinishPhase2Hook
+	e.RUnlock()
+	if phase2Hook != nil {
+		phase2Hook()
 	}
 	//
 	// The cleanup order depends on whether the rebuild succeeded or failed:
@@ -3128,12 +3142,16 @@ func validateControllerName(replicaName, bdevName, namespaceBdevName string) err
 // SetTestReplicaShallowCopyFn sets a hook function for testing the shallow copy phase of replica addition.
 // If set, this function will be called instead of the actual `ReplicaAddShallowCopy` RPC.
 func (e *Engine) SetTestReplicaShallowCopyFn(fn func(srcReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, snapshots []*api.Lvol, fastSync bool) error) {
+	e.Lock()
+	defer e.Unlock()
 	e.testReplicaShallowCopyFn = fn
 }
 
 // SetTestReplicaAddFinishFn sets a hook function for testing the finish phase of replica addition.
 // If set, this function will be called instead of the actual `ReplicaAddFinish` RPC.
 func (e *Engine) SetTestReplicaAddFinishFn(fn func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error) {
+	e.Lock()
+	defer e.Unlock()
 	e.testReplicaAddFinishFn = fn
 }
 
@@ -3141,5 +3159,7 @@ func (e *Engine) SetTestReplicaAddFinishFn(fn func(srcReplicaServiceCli *client.
 // (when the Engine lock is released for RPC calls). Tests use this to verify the Engine lock
 // is not held during potentially slow RPC operations.
 func (e *Engine) SetTestReplicaAddFinishPhase2Hook(fn func()) {
+	e.Lock()
+	defer e.Unlock()
 	e.testReplicaAddFinishPhase2Hook = fn
 }
