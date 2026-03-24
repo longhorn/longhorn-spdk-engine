@@ -315,6 +315,12 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 		"replica add requires phase metadata (deprecated) or use the dedicated EngineReplicaAddStart/ShallowCopy/Finish RPCs")
 }
 
+// EngineReplicaAddStart initiates the replica-add process by preparing the
+// engine's internal state for the new replica. This is an internal SPDK engine
+// operation that is part of the replica-add lifecycle managed by the engine
+// itself. It should NOT be called directly by the longhorn-manager control
+// plane; the control plane should use EngineFrontendReplicaAdd instead, which
+// coordinates suspend/resume and delegates to the engine.
 func (s *Server) EngineReplicaAddStart(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
 	if req.ReplicaName == "" || req.ReplicaAddress == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and address are required")
@@ -331,6 +337,12 @@ func (s *Server) EngineReplicaAddStart(ctx context.Context, req *spdkrpc.EngineR
 	return &emptypb.Empty{}, e.ReplicaAddStart(spdkClient, req.ReplicaName, req.ReplicaAddress, req.FastSync)
 }
 
+// EngineReplicaAddShallowCopy performs the data-copying phase of replica-add,
+// shallow-copying snapshot data from the source replica to the destination.
+// This is an internal SPDK engine operation that is part of the replica-add
+// lifecycle managed by the engine itself. It should NOT be called directly by
+// the longhorn-manager control plane; the control plane should use
+// EngineFrontendReplicaAdd instead.
 func (s *Server) EngineReplicaAddShallowCopy(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
 	if req.ReplicaName == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
@@ -346,6 +358,12 @@ func (s *Server) EngineReplicaAddShallowCopy(ctx context.Context, req *spdkrpc.E
 	return &emptypb.Empty{}, e.ReplicaAddShallowCopy(req.ReplicaName)
 }
 
+// EngineReplicaAddFinish finalizes the replica-add process by integrating the
+// newly copied replica into the engine's active replica set. This is an
+// internal SPDK engine operation that is part of the replica-add lifecycle
+// managed by the engine itself. It should NOT be called directly by the
+// longhorn-manager control plane; the control plane should use
+// EngineFrontendReplicaAdd instead.
 func (s *Server) EngineReplicaAddFinish(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
 	if req.ReplicaName == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name is required")
