@@ -6,6 +6,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 
 	safelog "github.com/longhorn/longhorn-spdk-engine/pkg/log"
 
@@ -84,6 +85,30 @@ func (s *TestSuite) TestcheckInitiatorAndTargetCreationRequirementsForNvmeTcpFro
 			expectedInitiatorCreationRequired: false,
 			expectedTargetCreationRequired:    false,
 			expectedError:                     fmt.Errorf("invalid initiator and target addresses for engine test-engine creation with initiator address 192.168.1.2 and target address 192.168.1.3"),
+		},
+		{
+			name:                              "Create both initiator and target instances (IPv6)",
+			podIP:                             "fd00::1",
+			initiatorIP:                       "fd00::1",
+			targetIP:                          "fd00::1",
+			port:                              0,
+			targetPort:                        0,
+			standbyTargetPort:                 0,
+			expectedInitiatorCreationRequired: true,
+			expectedTargetCreationRequired:    true,
+			expectedError:                     nil,
+		},
+		{
+			name:                              "Create local initiator instance only (IPv6 cross-node)",
+			podIP:                             "fd00::1",
+			initiatorIP:                       "fd00::1",
+			targetIP:                          "fd00::2",
+			port:                              0,
+			targetPort:                        0,
+			standbyTargetPort:                 0,
+			expectedInitiatorCreationRequired: true,
+			expectedTargetCreationRequired:    false,
+			expectedError:                     nil,
 		},
 		{
 			name:                              "Standby target instance is already created",
@@ -250,5 +275,70 @@ func (s *TestSuite) TestReleaseTargetAndStandbyTargetPorts(c *C) {
 		c.Assert(err, DeepEquals, testCase.expectedError, Commentf("Test case '%s': unexpected error result", testCase.name))
 		c.Assert(testCase.engine.NvmeTcpFrontend.TargetPort, Equals, testCase.expectedTargetPort, Commentf("Test case '%s': unexpected target port", testCase.name))
 		c.Assert(testCase.engine.NvmeTcpFrontend.StandbyTargetPort, Equals, testCase.expectedStandbyTargetPort, Commentf("Test case '%s': unexpected standby target port", testCase.name))
+	}
+}
+
+func (s *TestSuite) TestGetExposedPort(c *C) {
+	testCases := []struct {
+		name         string
+		subsystem    spdktypes.NvmfSubsystem
+		expectedPort int32
+		expectError  bool
+	}{
+		{
+			name: "IPv4 TCP listener returns correct port",
+			subsystem: spdktypes.NvmfSubsystem{
+				ListenAddresses: []spdktypes.NvmfSubsystemListenAddress{{
+					Trtype:  spdktypes.NvmeTransportTypeTCP,
+					Adrfam:  spdktypes.NvmeAddressFamilyIPv4,
+					Trsvcid: "20001",
+				}},
+			},
+			expectedPort: 20001,
+			expectError:  false,
+		},
+		{
+			name: "IPv6 TCP listener returns correct port",
+			subsystem: spdktypes.NvmfSubsystem{
+				ListenAddresses: []spdktypes.NvmfSubsystemListenAddress{{
+					Trtype:  spdktypes.NvmeTransportTypeTCP,
+					Adrfam:  spdktypes.NvmeAddressFamilyIPv6,
+					Trsvcid: "20002",
+				}},
+			},
+			expectedPort: 20002,
+			expectError:  false,
+		},
+		{
+			name: "non-TCP listener is rejected",
+			subsystem: spdktypes.NvmfSubsystem{
+				ListenAddresses: []spdktypes.NvmfSubsystemListenAddress{{
+					Trtype:  spdktypes.NvmeTransportTypeRDMA,
+					Adrfam:  spdktypes.NvmeAddressFamilyIPv4,
+					Trsvcid: "20003",
+				}},
+			},
+			expectedPort: 0,
+			expectError:  true,
+		},
+		{
+			name: "empty listeners returns error",
+			subsystem: spdktypes.NvmfSubsystem{
+				ListenAddresses: nil,
+			},
+			expectedPort: 0,
+			expectError:  true,
+		},
+	}
+	for testName, tc := range testCases {
+		c.Logf("testing getExposedPort.%v", testName)
+		port, err := getExposedPort(&tc.subsystem)
+		if tc.expectError {
+			c.Assert(err, NotNil, Commentf("Test case '%s': expected error", tc.name))
+		} else {
+			c.Assert(err, IsNil, Commentf("Test case '%s': unexpected error", tc.name))
+			c.Assert(port, Equals, tc.expectedPort,
+				Commentf("Test case '%s': unexpected port", tc.name))
+		}
 	}
 }
