@@ -193,17 +193,17 @@ func (s *TestSuite) TestReplicaAddFinishCanRetryAfterFailure(c *C) {
 		dstReplicaAddress: "127.0.0.1:8504",
 		lastActivityAt:    time.Now(),
 	}
-	e.pendingReplicaAddTasks[dstReplicaName] = task
+	e.pendingReplicaAddTask = task
 
 	err := e.ReplicaAddFinish(dstReplicaName, nil)
 	c.Assert(err, NotNil)
-	c.Assert(e.hasPendingReplicaAddTask(dstReplicaName), Equals, true)
+	c.Assert(e.HasPendingReplicaAddTask(), Equals, true)
 	c.Assert(task.inProgress, Equals, false)
 	c.Assert(task.lastError, Matches, ".*injected finish error.*")
 
 	err = e.ReplicaAddFinish(dstReplicaName, nil)
 	c.Assert(err, IsNil)
-	c.Assert(e.hasPendingReplicaAddTask(dstReplicaName), Equals, false)
+	c.Assert(e.HasPendingReplicaAddTask(), Equals, false)
 	c.Assert(finishCallCount, Equals, 2)
 }
 
@@ -233,18 +233,18 @@ func (s *TestSuite) TestReplicaAddFinishCanRetryAfterFailureAndShallowCopyDone(c
 		lastActivityAt:    time.Now(),
 		shallowCopyDone:   true,
 	}
-	e.pendingReplicaAddTasks[dstReplicaName] = task
+	e.pendingReplicaAddTask = task
 
 	err := e.ReplicaAddFinish(dstReplicaName, nil)
 	c.Assert(err, NotNil)
-	c.Assert(e.hasPendingReplicaAddTask(dstReplicaName), Equals, true)
+	c.Assert(e.HasPendingReplicaAddTask(), Equals, true)
 	c.Assert(task.inProgress, Equals, false)
 	c.Assert(task.lastError, Matches, ".*injected finish error.*")
 	c.Assert(task.shallowCopyDone, Equals, true)
 
 	err = e.ReplicaAddFinish(dstReplicaName, nil)
 	c.Assert(err, IsNil)
-	c.Assert(e.hasPendingReplicaAddTask(dstReplicaName), Equals, false)
+	c.Assert(e.HasPendingReplicaAddTask(), Equals, false)
 	c.Assert(finishCallCount, Equals, 2)
 }
 
@@ -269,9 +269,9 @@ func (s *TestSuite) TestReplicaAddFinishFailureCleansPendingTaskForStartFlow(c *
 		lastActivityAt:           time.Now(),
 		createdByReplicaAddStart: true,
 	}
-	e.pendingReplicaAddTasks[dstReplicaName] = task
+	e.pendingReplicaAddTask = task
 
 	err := e.ReplicaAddFinish(dstReplicaName, nil)
 	c.Assert(err, NotNil)
-	c.Assert(e.hasPendingReplicaAddTask(dstReplicaName), Equals, false)
+	c.Assert(e.HasPendingReplicaAddTask(), Equals, false)
 }

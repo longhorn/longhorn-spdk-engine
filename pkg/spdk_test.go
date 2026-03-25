@@ -4718,19 +4718,11 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
 	c.Assert(err, IsNil)
 
-	createFrontend := func() {
-		engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
-		c.Assert(err, IsNil)
-		c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
-	}
-	deleteFrontend := func() {
-		err := spdkCli.EngineFrontendDelete(engineFrontendName)
-		c.Assert(err, IsNil)
-	}
-
 	// 3. Create Engine Frontend
-	createFrontend()
+	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 
 	endpoint := helperutil.GetLonghornDevicePath(volumeName)
 
@@ -4744,25 +4736,25 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	replicas[replicaNames[1]] = replica2
 	replica2Address := net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
 
-	// Helper to wait for frontend error
-	waitForError := func(errorFragment string) {
+	// Helper to wait for engine replica to reach ERR mode
+	// (indicates the async replica add goroutine on the Engine side has failed).
+	// The Engine sets the mode to ERR before running SPDK cleanup, so this
+	// returns quickly without waiting for detach timeouts.
+	waitForReplicaERR := func(replicaName string) {
 		err = retry.Do(func() error {
-			efs, err := spdkCli.EngineFrontendList()
+			e, err := spdkCli.EngineGet(engineName)
 			if err != nil {
 				return err
 			}
-			ef, ok := efs[engineFrontendName]
+			mode, ok := e.ReplicaModeMap[replicaName]
 			if !ok {
-				return fmt.Errorf("engine frontend %s not found", engineFrontendName)
+				return fmt.Errorf("replica %s not found in engine mode map", replicaName)
 			}
-			if ef.State != types.InstanceStateError {
-				return fmt.Errorf("frontend state is %s, expected Error. Msg: %v", ef.State, ef.ErrorMsg)
-			}
-			if !strings.Contains(ef.ErrorMsg, errorFragment) {
-				return fmt.Errorf("error msg %s does not contain %s", ef.ErrorMsg, errorFragment)
+			if mode != types.ModeERR {
+				return fmt.Errorf("replica %s mode is %v, expected ERR", replicaName, mode)
 			}
 			return nil
-		}, retry.Delay(500*time.Millisecond), retry.Attempts(20))
+		}, retry.Delay(500*time.Millisecond), retry.Attempts(30))
 		c.Assert(err, IsNil)
 	}
 
@@ -4777,20 +4769,10 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
 	c.Assert(err, IsNil) // Should be nil as it returns immediately
 
-	waitForError("injected shallow copy error")
+	waitForReplicaERR(replicaNames[1])
 
 	// Reset mock
 	internalEngine.SetReplicaAddMock(nil)
-
-	// Clean up the partial state in Engine
-	// Validate that the engine's internal state for the failed replica is correct (ERR)
-	// BEFORE the fix, this would likely be RW because RebuildingDstFinish returned success.
-	internalEngine.RLock()
-	internalReplicaStatus := internalEngine.ReplicaStatusMap[replicaNames[1]]
-	internalEngine.RUnlock()
-	c.Assert(internalReplicaStatus, NotNil)
-	// We expect the replica to be in ERR state because the rebuild failed.
-	c.Assert(internalReplicaStatus.Mode, Equals, types.ModeERR)
 
 	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
 	c.Assert(err, IsNil)
@@ -4804,10 +4786,6 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	replica2, err = spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
 	c.Assert(err, IsNil)
 	replica2Address = net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
-
-	// Reset Frontend to clear error state
-	deleteFrontend()
-	createFrontend()
 
 	// 5b. Test Shallow Copy Error with Replica in Error State
 	// This tests the production scenario where a real shallow copy failure sets the
@@ -4831,7 +4809,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
 	c.Assert(err, IsNil)
 
-	waitForError("injected shallow copy error with replica error state")
+	waitForReplicaERR(replicaNames[1])
 
 	// Reset mock
 	internalEngine.SetReplicaAddMock(nil)
@@ -4850,10 +4828,6 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	c.Assert(err, IsNil)
 	replica2Address = net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
 
-	// Reset Frontend to clear error state
-	deleteFrontend()
-	createFrontend()
-
 	// 6. Test Finish Error
 	internalEngine.SetReplicaAddMock(&server.ReplicaAddMock{
 		Finish: func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error {
@@ -4864,7 +4838,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
 	c.Assert(err, IsNil)
 
-	waitForError("injected finish error")
+	waitForReplicaERR(replicaNames[1])
 
 	// Reset mock
 	internalEngine.SetReplicaAddMock(nil)
@@ -4880,10 +4854,6 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	replica2, err = spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
 	c.Assert(err, IsNil)
 	replica2Address = net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
-
-	// Reset Frontend
-	deleteFrontend()
-	createFrontend()
 
 	// 6b. Test Engine Lock is Released During replicaAddFinish Phase 2 (RPC calls)
 	// This verifies the 3-phase lock refactoring: the Engine lock should NOT be held
