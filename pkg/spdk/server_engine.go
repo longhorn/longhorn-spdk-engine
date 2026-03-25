@@ -2,12 +2,10 @@ package spdk
 
 import (
 	"context"
-	"strings"
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	grpccodes "google.golang.org/grpc/codes"
@@ -247,72 +245,42 @@ func (s *Server) EngineWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_EngineW
 	return nil
 }
 
-// Deprecated: EngineReplicaAdd is kept for backward compatibility with clients
-// that still multiplex phases via gRPC metadata. New clients should call
-// EngineReplicaAddStart, EngineReplicaAddShallowCopy, or EngineReplicaAddFinish
-// directly — or use EngineFrontendReplicaAdd which delegates here with EF
-// callback metadata for suspend/resume.
+// EngineReplicaAdd handles the full replica-add lifecycle. The request must
+// include EngineFrontendName and EngineFrontendAddress so the Engine can call
+// back to the EngineFrontend for suspend/resume around the finish step.
+// It builds a finishWrapper and delegates to Engine.ReplicaAdd which runs
+// asynchronously (start → shallow copy → finishWrapper(finish)).
 func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
 	if req.ReplicaName == "" || req.ReplicaAddress == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and address are required")
 	}
 
-	// Check for EF callback metadata — if present, this is a full-flow
-	// ReplicaAdd request from EngineFrontendReplicaAdd.
-	var efName, efAddress string
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if values := md.Get(replicaAddEFNameMetadata); len(values) > 0 {
-			efName = values[0]
-		}
-		if values := md.Get(replicaAddEFAddressMetadata); len(values) > 0 {
-			efAddress = values[0]
-		}
+	efName := req.EngineFrontendName
+	efAddress := req.EngineFrontendAddress
+	if efName == "" || efAddress == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine frontend name and address are required")
 	}
 
-	if efName != "" && efAddress != "" {
-		// Full-flow path: Engine owns start → shallow copy → finish
-		// with gRPC callback to EngineFrontend for suspend/resume.
-		s.RLock()
-		e := s.engineMap[req.EngineName]
-		spdkClient := s.spdkClient
-		s.RUnlock()
+	s.RLock()
+	e := s.engineMap[req.EngineName]
+	spdkClient := s.spdkClient
+	s.RUnlock()
 
-		if e == nil {
-			return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s with address %s add", req.EngineName, req.ReplicaName, req.ReplicaAddress)
-		}
-
-		callbackLog := logrus.WithFields(logrus.Fields{
-			"engineName":     req.EngineName,
-			"replicaName":    req.ReplicaName,
-			"engineFrontend": efName,
-		})
-		finishWrapper := buildGRPCReplicaAddFinishWrapper(efName, efAddress, callbackLog)
-		onComplete := buildGRPCReplicaAddOnComplete(efName, efAddress, callbackLog)
-		if err := e.ReplicaAdd(spdkClient, req.ReplicaName, req.ReplicaAddress, req.FastSync, finishWrapper, onComplete); err != nil {
-			return nil, err
-		}
-		return &emptypb.Empty{}, nil
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s add", req.EngineName, req.ReplicaName)
 	}
 
-	// Legacy path: phase-based routing via metadata.
-	phase := ""
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if values := md.Get(replicaAddPhaseMetadata); len(values) > 0 {
-			phase = strings.ToLower(values[0])
-		}
-	}
+	log := logrus.WithFields(logrus.Fields{
+		"engineName":     req.EngineName,
+		"replicaName":    req.ReplicaName,
+		"engineFrontend": efName,
+	})
+	finishWrapper := buildGRPCReplicaAddFinishWrapper(efName, efAddress, log)
 
-	switch phase {
-	case replicaAddPhaseStart:
-		return s.EngineReplicaAddStart(ctx, req)
-	case replicaAddPhaseShallowCopy:
-		return s.EngineReplicaAddShallowCopy(ctx, req)
-	case replicaAddPhaseFinish:
-		return s.EngineReplicaAddFinish(ctx, req)
+	if err := e.ReplicaAdd(spdkClient, req.ReplicaName, req.ReplicaAddress, req.FastSync, finishWrapper); err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to add replica %s to engine %s: %v", req.ReplicaName, req.EngineName, err)
 	}
-
-	return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
-		"replica add requires phase metadata (deprecated) or use the dedicated EngineReplicaAddStart/ShallowCopy/Finish RPCs")
+	return &emptypb.Empty{}, nil
 }
 
 // EngineReplicaAddStart initiates the replica-add process by preparing the

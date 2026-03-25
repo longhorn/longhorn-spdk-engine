@@ -18,8 +18,6 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 
-	commonnet "github.com/longhorn/go-common-libs/net"
-
 	safelog "github.com/longhorn/longhorn-spdk-engine/pkg/log"
 
 	"github.com/longhorn/go-spdk-helper/pkg/initiator"
@@ -57,7 +55,6 @@ type EngineFrontend struct {
 
 	isCreating            bool
 	isSwitchingOver       bool
-	isReplicaAdding       bool
 	isExpanding           bool
 	lastExpansionFailedAt string
 	lastExpansionError    string
@@ -66,7 +63,7 @@ type EngineFrontend struct {
 	UpdateCh chan interface{}
 
 	// stopCh is closed when the engine frontend is deleted to signal
-	// background goroutines (e.g. completeReplicaAdd) to abort early.
+	// background goroutines to abort early.
 	stopCh chan struct{}
 
 	// Test hook for switchover target engine name resolution.
@@ -961,10 +958,6 @@ func (ef *EngineFrontend) SwitchOverTarget(spdkClient *spdkclient.Client, newEng
 		ef.Unlock()
 		return errors.Wrapf(ErrSwitchOverTargetPrecondition, "engine frontend %s target switchover is already in progress", ef.Name)
 	}
-	if ef.isReplicaAdding {
-		ef.Unlock()
-		return errors.Wrapf(ErrSwitchOverTargetPrecondition, "engine frontend %s replica add is in progress", ef.Name)
-	}
 	if ef.isExpanding {
 		ef.Unlock()
 		return errors.Wrapf(ErrSwitchOverTargetPrecondition, "engine frontend %s expansion is in progress", ef.Name)
@@ -1357,142 +1350,6 @@ func (ef *EngineFrontend) resume() error {
 	return ef.initiator.Resume()
 }
 
-func (ef *EngineFrontend) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string, fastSync bool) (err error) {
-	ef.Lock()
-	if ef.isCreating {
-		ef.Unlock()
-		return fmt.Errorf("engine frontend %s is still creating", ef.Name)
-	}
-	if ef.isSwitchingOver {
-		ef.Unlock()
-		return errors.Wrapf(ErrSwitchOverTargetPrecondition, "engine frontend %s is switching over target", ef.Name)
-	}
-	if ef.isReplicaAdding {
-		ef.Unlock()
-		return fmt.Errorf("engine frontend %s replica add is already in progress", ef.Name)
-	}
-	if ef.isExpanding {
-		ef.Unlock()
-		return fmt.Errorf("engine frontend %s expansion is in progress", ef.Name)
-	}
-	if ef.IsRestoring {
-		ef.Unlock()
-		return fmt.Errorf("engine frontend %s restore is in progress", ef.Name)
-	}
-	if ef.State != types.InstanceStateRunning {
-		ef.Unlock()
-		return fmt.Errorf("invalid state %v for engine frontend %s replica %s add", ef.State, ef.Name, dstReplicaName)
-	}
-	ef.isReplicaAdding = true
-	engineName := ef.EngineName
-	engineIP := ef.EngineIP
-	if ef.State != types.InstanceStateError {
-		ef.ErrorMsg = ""
-	}
-	ef.Unlock()
-
-	// Resolve the local node IP so Engine can call back to this EF
-	// for suspend/resume/completion. This is the EF node's IP, which
-	// may differ from engineIP when they run on different nodes.
-	localIP, err := commonnet.GetIPForPod()
-	if err != nil {
-		ef.Lock()
-		ef.isReplicaAdding = false
-		ef.Unlock()
-		return errors.Wrapf(err, "failed to get local IP for engine frontend %s replica add callback", ef.Name)
-	}
-	efAddress := net.JoinHostPort(localIP, strconv.Itoa(types.SPDKServicePort))
-
-	// Delegate to Engine via gRPC. Engine owns the full flow
-	// (start → shallow copy → suspend/resume via callback → finish)
-	// and all error handling. The gRPC call returns immediately after
-	// EngineReplicaAddStart succeeds; the finalize runs asynchronously.
-	//
-	// We pass the EF callback address and name via gRPC metadata so
-	// Engine can call back for suspend/resume via gRPC.
-	engineSpdkClient, err := GetServiceClient(net.JoinHostPort(engineIP, strconv.Itoa(types.SPDKServicePort)))
-	if err != nil {
-		ef.Lock()
-		ef.isReplicaAdding = false
-		ef.Unlock()
-		return errors.Wrapf(err, "failed to get SPDK client for engine frontend %v replica add", engineName)
-	}
-	defer func() {
-		if errClose := engineSpdkClient.Close(); errClose != nil {
-			ef.log.WithError(errClose).Error("Failed to close SPDK client")
-		}
-	}()
-
-	if err := engineSpdkClient.EngineReplicaAdd(engineName, dstReplicaName, dstReplicaAddress, fastSync,
-		ef.Name, efAddress); err != nil {
-		ef.Lock()
-		ef.isReplicaAdding = false
-		ef.Unlock()
-		return errors.Wrapf(err, "failed to start replica add %s on engine %s", dstReplicaName, engineName)
-	}
-
-	return nil
-}
-
-func (ef *EngineFrontend) suspendForReplicaAddFinish() (bool, error) {
-	ef.Lock()
-	defer ef.Unlock()
-
-	if !ef.isSuspendSupported() {
-		return false, nil
-	}
-
-	if err := ef.suspend(true, true); err != nil {
-		return false, err
-	}
-
-	return true, nil
-}
-
-func (ef *EngineFrontend) resumeForReplicaAddFinish() error {
-	ef.Lock()
-	defer ef.Unlock()
-
-	return ef.resume()
-}
-
-func (ef *EngineFrontend) setReplicaAddError(err error) {
-	requireUpdate := false
-
-	ef.Lock()
-	if err != nil {
-		if ef.State != types.InstanceStateError {
-			ef.log.WithError(err).Error("Setting engine frontend to error state due to replica add failure")
-			ef.State = types.InstanceStateError
-			requireUpdate = true
-		}
-		ef.ErrorMsg = err.Error()
-	}
-	ef.Unlock()
-
-	if requireUpdate {
-		ef.UpdateCh <- nil
-	}
-}
-
-// completeReplicaAdd is called by the Engine's async completion callback
-// (via gRPC) when the background replica-add goroutine finishes.
-// It clears isReplicaAdding and, on failure, transitions to error state.
-func (ef *EngineFrontend) completeReplicaAdd(replicaAddErr error) {
-	ef.Lock()
-	ef.isReplicaAdding = false
-	if replicaAddErr != nil {
-		if ef.State != types.InstanceStateError {
-			ef.log.WithError(replicaAddErr).Error("Replica add completed with error")
-			ef.State = types.InstanceStateError
-		}
-		ef.ErrorMsg = replicaAddErr.Error()
-	}
-	ef.Unlock()
-
-	ef.UpdateCh <- nil
-}
-
 // ValidateAndUpdate validates the engine frontend (initiator-side) state and updates
 // fields (e.g., Endpoint) as needed. Called periodically by the server verify loop.
 // This only validates the local initiator/device state — target-side subsystem
@@ -1538,11 +1395,6 @@ func (ef *EngineFrontend) ValidateAndUpdate(spdkClient *spdkclient.Client) (err 
 
 	if ef.IsRestoring {
 		ef.log.Debug("Engine frontend is restoring, will skip the validation and update")
-		return nil
-	}
-
-	if ef.isReplicaAdding {
-		ef.log.Debug("Engine frontend is adding replica, will skip the validation and update")
 		return nil
 	}
 

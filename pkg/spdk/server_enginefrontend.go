@@ -2,16 +2,18 @@ package spdk
 
 import (
 	"context"
+	"net"
+	"strconv"
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	commonnet "github.com/longhorn/go-common-libs/net"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
@@ -63,38 +65,139 @@ func (s *Server) EngineFrontendResume(ctx context.Context, req *spdkrpc.EngineFr
 	return &emptypb.Empty{}, nil
 }
 
-// EngineFrontendReplicaAdd adds a replica to an engine frontend, or handles
-// the async completion callback from Engine's background goroutine.
-// When the request carries x-longhorn-replica-add-complete metadata, it is
-// treated as a completion notification that clears EF's isReplicaAdding guard.
+// EngineFrontendReplicaAdd initiates a replica-add (rebuild) for the Engine
+// that this EngineFrontend is connected to. It is the entry point called by
+// the longhorn-manager control plane.
+//
+// # Design
+//
+// EngineFrontend (EF) and Engine may reside on different nodes, so this
+// handler is a thin proxy:
+//
+//  1. Validate EF preconditions (not creating, switching over, expanding,
+//     restoring, and in Running state).
+//  2. Resolve the local pod IP so the Engine can call back to this EF for
+//     suspend/resume during the finish step.
+//  3. Create a gRPC client to the (potentially remote) Engine node.
+//  4. Delegate to Server.EngineReplicaAdd on the Engine node, passing the
+//     EF name and address in the request fields.
+//
+// # Engine-side flow (Server.EngineReplicaAdd → Engine.ReplicaAdd)
+//
+// Server.EngineReplicaAdd reads the EF fields from the request, then
+// calls buildGRPCReplicaAddFinishWrapper to create a replicaAddFinishWrapper
+// — a callback that will call back to this EF for suspend/resume during the
+// finish step. It then delegates to Engine.ReplicaAdd(finishWrapper).
+//
+// Engine.ReplicaAdd runs replicaAddStart synchronously, and if successful
+// spawns a background goroutine that executes the remaining phases:
+//
+//  1. replicaAddStart (sync): validate engine state, connect to src/dst
+//     replica SPDK services, add the dst replica to ReplicaStatusMap as
+//     ModeWO, and return a replicaAddTask containing all connection state.
+//  2. replicaAddShallowCopy (async): iterate over snapshots and copy data
+//     from the source replica to the destination replica via SPDK shallow
+//     copy.
+//  3. replicaAddFinalize (async): orchestrates the finish step with the
+//     finishWrapper:
+//     a. If shallow copy failed, mark dst replica as ModeERR, call the
+//     real replicaAddFinish for SPDK resource cleanup (detach external
+//     snapshot controller, stop expose), and clear pendingReplicaAddTask.
+//     b. If shallow copy succeeded, call finishWrapper(finish):
+//     - finishWrapper (buildGRPCReplicaAddFinishWrapper) calls back to
+//     EF via gRPC: Suspend → finish() → Resume
+//     - finish() (replicaAddFinish) detaches the external snapshot
+//     NVMe controller on the dst replica, stops the src replica from
+//     exposing, and promotes the dst replica from ModeWO to ModeRW.
+//     c. If finish fails and was never called (e.g. suspend failure in
+//     finishWrapper), replicaAddFinalize calls the real replicaAddFinish
+//     inside finishWrapper for SPDK resource cleanup.
+//
+// This call returns as soon as replicaAddStart succeeds (step 1); the
+// remaining phases run in the background goroutine. The caller can monitor
+// progress by polling the Engine's ReplicaModeMap — the rebuilding replica
+// appears as ModeWO until finished (ModeRW) or failed (ModeERR).
+//
+// # Error handling
+//
+// EF is stateless with respect to replica-add. Engine owns all state via a
+// single pendingReplicaAddTask pointer. If the Engine's async goroutine
+// fails at any phase, it sets the replica to ModeERR, cleans up SPDK
+// resources, and clears pendingReplicaAddTask — without notifying EF.
+//
+// The finishWrapper (buildGRPCReplicaAddFinishWrapper) handles EF-unreachable
+// scenarios gracefully:
+//   - EF node down / pod deleted (GetServiceClient fails) → proceed with
+//     finish without suspension (no active I/O = suspension unnecessary).
+//   - Suspend fails → proceed with finish without suspension (data already
+//     copied; not finishing would leak SPDK resources).
+//   - Resume fails → log error but do not override the finish result;
+//     longhorn-manager will detect the stuck-suspended EF and recover.
 func (s *Server) EngineFrontendReplicaAdd(ctx context.Context, req *spdkrpc.EngineFrontendReplicaAddRequest) (ret *emptypb.Empty, err error) {
-	// Check for completion callback from Engine's async replica add.
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if values := md.Get(replicaAddCompleteMetadata); len(values) > 0 && values[0] == "true" {
-			return s.handleReplicaAddComplete(req.EngineFrontendName, md)
-		}
-	}
-
 	if req.ReplicaName == "" || req.ReplicaAddress == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and address are required")
 	}
+
 	s.RLock()
-	var ef *EngineFrontend
 	ef, ok := s.engineFrontendMap[req.EngineFrontendName]
 	if !ok {
 		s.RUnlock()
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine frontend %v for replica %s with address %s add", req.EngineFrontendName, req.ReplicaName, req.ReplicaAddress)
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine frontend %v for replica %s add", req.EngineFrontendName, req.ReplicaName)
 	}
-	spdkClient := s.spdkClient
 	s.RUnlock()
 
-	log := logrus.WithFields(logrus.Fields{
-		"engineFrontend": req.EngineFrontendName,
-		"replicaName":    req.ReplicaName,
-	})
-	log.Info("Starting frontend-aware replica add")
+	// Validate EF state and capture engine connection info under lock.
+	ef.RLock()
+	if ef.isCreating {
+		ef.RUnlock()
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "engine frontend %s is still creating", ef.Name)
+	}
+	if ef.isSwitchingOver {
+		ef.RUnlock()
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "engine frontend %s is switching over target", ef.Name)
+	}
+	if ef.isExpanding {
+		ef.RUnlock()
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "engine frontend %s expansion is in progress", ef.Name)
+	}
+	if ef.IsRestoring {
+		ef.RUnlock()
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "engine frontend %s restore is in progress", ef.Name)
+	}
+	if ef.State != types.InstanceStateRunning {
+		ef.RUnlock()
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %v for engine frontend %s replica %s add", ef.State, ef.Name, req.ReplicaName)
+	}
+	engineIP := ef.EngineIP
+	engineName := ef.EngineName
+	ef.RUnlock()
 
-	return &emptypb.Empty{}, ef.ReplicaAdd(spdkClient, req.ReplicaName, req.ReplicaAddress, req.FastSync)
+	// Resolve the local node IP so Engine can call back to this EF
+	// for suspend/resume during the finish step.
+	localIP, err := commonnet.GetIPForPod()
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to get local IP for engine frontend %s: %v", ef.Name, err)
+	}
+	efAddress := net.JoinHostPort(localIP, strconv.Itoa(types.SPDKServicePort))
+
+	// Create a gRPC client to the (potentially remote) Engine node.
+	engineAddress := net.JoinHostPort(engineIP, strconv.Itoa(types.SPDKServicePort))
+	engineClient, err := GetServiceClient(engineAddress)
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to get SPDK client for engine %s at %s: %v", engineName, engineAddress, err)
+	}
+	defer func() {
+		if errClose := engineClient.Close(); errClose != nil {
+			logrus.WithError(errClose).Warnf("Failed to close engine SPDK client for %s", engineName)
+		}
+	}()
+
+	// Delegate to EngineReplicaAdd on the Engine node, passing EF info for callback.
+	if err := engineClient.EngineReplicaAdd(engineName, req.ReplicaName, req.ReplicaAddress, req.FastSync, ef.Name, efAddress); err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to add replica %s on engine %s: %v", req.ReplicaName, engineName, err)
+	}
+
+	return &emptypb.Empty{}, nil
 }
 
 // EngineFrontendCreate creates a new engine frontend.

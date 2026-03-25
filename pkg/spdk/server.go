@@ -10,7 +10,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	grpccodes "google.golang.org/grpc/codes"
@@ -29,21 +28,7 @@ import (
 )
 
 const (
-	MonitorInterval            = 3 * time.Second
-	replicaAddPhaseMetadata    = "x-longhorn-replica-add-phase"
-	replicaAddPhaseStart       = "start"
-	replicaAddPhaseShallowCopy = "shallow-copy"
-	replicaAddPhaseFinish      = "finish"
-
-	// Metadata keys used by EngineFrontendReplicaAdd to pass EF callback info
-	// so that EngineReplicaAdd can call back for suspend/resume via gRPC.
-	replicaAddEFNameMetadata    = "x-longhorn-engine-frontend-name"
-	replicaAddEFAddressMetadata = "x-longhorn-engine-frontend-address"
-
-	// Metadata keys for the replica-add completion callback.
-	// Engine → EngineFrontend notification that the async replica add finished.
-	replicaAddCompleteMetadata      = "x-longhorn-replica-add-complete"
-	replicaAddCompleteErrorMetadata = "x-longhorn-replica-add-complete-error"
+	MonitorInterval = 3 * time.Second
 )
 
 type Server struct {
@@ -637,13 +622,18 @@ func toSwitchOverGRPCError(err error, format string, args ...interface{}) error 
 // buildGRPCReplicaAddFinishWrapper builds a replicaAddFinishWrapper that
 // calls back to the EngineFrontend on a (potentially remote) node via gRPC
 // for suspend/resume around the finish step.
-// If the frontend does not support suspend (e.g. NVMf frontend), the suspend
-// error is treated as non-fatal and the finish proceeds without suspension.
+//
+// If the EngineFrontend is unreachable (node down, pod deleted, etc.), the
+// wrapper proceeds with finish() without suspension. This is safe because an
+// unreachable frontend means there is no active I/O to quiesce, and not
+// finishing would leak SPDK resources (detach controller, stop expose).
 func buildGRPCReplicaAddFinishWrapper(efName, efAddress string, log *logrus.Entry) replicaAddFinishWrapper {
 	return func(finish func() error) error {
 		efClient, err := GetServiceClient(efAddress)
 		if err != nil {
-			return errors.Wrapf(err, "failed to get SPDK client for engine frontend %s at %s for suspend", efName, efAddress)
+			// Cannot connect to the EF node at all — proceed without suspension.
+			log.WithError(err).Warnf("Engine frontend %s at %s is unreachable, proceeding with finish without suspension", efName, efAddress)
+			return finish()
 		}
 		defer func() {
 			if errClose := efClient.Close(); errClose != nil {
@@ -652,14 +642,13 @@ func buildGRPCReplicaAddFinishWrapper(efName, efAddress string, log *logrus.Entr
 		}()
 
 		// Suspend the frontend before finish.
-		// If suspend is not supported (e.g. NVMf or empty frontend), treat as non-fatal.
+		// If suspend fails for any reason (EF deleted, node down, unimplemented
+		// frontend type), proceed without suspension rather than aborting. The
+		// data has already been copied; not finishing is worse than a brief I/O
+		// disruption.
 		suspended := false
 		if err := efClient.EngineFrontendSuspend(efName); err != nil {
-			if isGRPCUnimplemented(err) {
-				log.Infof("Engine frontend %s does not support suspend, proceeding without suspension", efName)
-			} else {
-				return errors.Wrapf(err, "failed to suspend engine frontend %s before replica add finish", efName)
-			}
+			log.WithError(err).Warnf("Failed to suspend engine frontend %s before replica add finish, proceeding without suspension", efName)
 		} else {
 			suspended = true
 		}
@@ -667,69 +656,18 @@ func buildGRPCReplicaAddFinishWrapper(efName, efAddress string, log *logrus.Entr
 		finishErr := finish()
 
 		// Resume the frontend after finish.
+		// If resume fails (EF disappeared during finish, or internal error),
+		// log a warning but do not override finishErr — the replica-add result
+		// is determined by finish(), not by resume. longhorn-manager will
+		// detect the stuck-suspended EF and handle recovery.
 		if suspended {
 			if resumeErr := efClient.EngineFrontendResume(efName); resumeErr != nil {
-				resumeErr = errors.Wrapf(resumeErr, "failed to resume engine frontend %s after replica add finish", efName)
-				if finishErr != nil {
-					return errors.Wrap(finishErr, resumeErr.Error())
-				}
-				return resumeErr
+				log.WithError(resumeErr).Errorf("Failed to resume engine frontend %s after replica add finish (finish succeeded: %v)", efName, finishErr == nil)
 			}
 		}
 
 		return finishErr
 	}
-}
-
-// buildGRPCReplicaAddOnComplete builds a replicaAddOnComplete callback that
-// notifies the EngineFrontend on a (potentially remote) node via gRPC when
-// Engine's async replica-add goroutine finishes. The notification clears
-// the EF's isReplicaAdding guard and, on failure, transitions it to error state.
-func buildGRPCReplicaAddOnComplete(efName, efAddress string, log *logrus.Entry) replicaAddOnComplete {
-	return func(replicaAddErr error) {
-		efClient, err := GetServiceClient(efAddress)
-		if err != nil {
-			log.WithError(err).Errorf("Failed to get SPDK client for engine frontend %s at %s for replica add completion", efName, efAddress)
-			return
-		}
-		defer func() {
-			if errClose := efClient.Close(); errClose != nil {
-				log.WithError(errClose).Warnf("Failed to close engine frontend SPDK client for %s", efName)
-			}
-		}()
-
-		if notifyErr := efClient.EngineFrontendReplicaAddComplete(efName, replicaAddErr); notifyErr != nil {
-			log.WithError(notifyErr).Errorf("Failed to notify engine frontend %s of replica add completion", efName)
-		}
-	}
-}
-
-// isGRPCUnimplemented checks if the error is a gRPC Unimplemented status.
-func isGRPCUnimplemented(err error) bool {
-	if st, ok := grpcstatus.FromError(err); ok {
-		return st.Code() == grpccodes.Unimplemented
-	}
-	return false
-}
-
-// handleReplicaAddComplete processes the completion callback from Engine's
-// background replica-add goroutine. It clears the EngineFrontend's
-// isReplicaAdding guard and sets error state if the replica add failed.
-func (s *Server) handleReplicaAddComplete(efName string, md metadata.MD) (*emptypb.Empty, error) {
-	s.RLock()
-	ef, ok := s.engineFrontendMap[efName]
-	s.RUnlock()
-	if !ok {
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine frontend %v for replica add completion", efName)
-	}
-
-	var replicaAddErr error
-	if errValues := md.Get(replicaAddCompleteErrorMetadata); len(errValues) > 0 && errValues[0] != "" {
-		replicaAddErr = fmt.Errorf("%s", errValues[0])
-	}
-
-	ef.completeReplicaAdd(replicaAddErr)
-	return &emptypb.Empty{}, nil
 }
 
 func (s *Server) VersionDetailGet(context.Context, *emptypb.Empty) (*spdkrpc.VersionDetailGetReply, error) {

@@ -474,30 +474,6 @@ func (s *TestSuite) TestEngineFrontendDeleteRejectedDuringSwitchOver(c *C) {
 	}
 }
 
-func (s *TestSuite) TestEngineFrontendReplicaAddRejectedDuringSwitchOver(c *C) {
-	fmt.Println("Testing EngineFrontend.ReplicaAdd is rejected while switch over is in progress")
-
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
-	ef.State = lhtypes.InstanceStateRunning
-	ef.isSwitchingOver = true
-
-	err := ef.ReplicaAdd(nil, "replica-b", "10.0.0.2:8500", true)
-	c.Assert(err, NotNil)
-	c.Assert(strings.Contains(err.Error(), "switching over target"), Equals, true)
-}
-
-func (s *TestSuite) TestEngineFrontendSwitchOverTargetRejectedDuringReplicaAdd(c *C) {
-	fmt.Println("Testing EngineFrontend.SwitchOverTarget is rejected while replica add is in progress")
-
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
-	ef.State = lhtypes.InstanceStateRunning
-	ef.isReplicaAdding = true
-
-	err := ef.SwitchOverTarget(nil, "engine-b", "10.0.0.2:3000")
-	c.Assert(err, NotNil)
-	c.Assert(strings.Contains(err.Error(), "replica add is in progress"), Equals, true)
-}
-
 func (s *TestSuite) TestEngineFrontendSwitchOverTargetRejectedDuringExpand(c *C) {
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget is rejected while expansion is in progress")
 

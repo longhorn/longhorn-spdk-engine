@@ -97,8 +97,10 @@ type Engine struct {
 	// When nil (production), Engine uses its own replicaShallowCopy / replicaAddFinish.
 	replicaAddMock *ReplicaAddMock
 
-	// pendingReplicaAddTasks caches replica-add tasks between Start and Finish phases.
-	pendingReplicaAddTasks map[string]*replicaAddTask
+	// pendingReplicaAddTask caches the single in-flight replica-add task
+	// between Start and Finish phases. Longhorn supports only one replica
+	// rebuild per volume at a time.
+	pendingReplicaAddTask *replicaAddTask
 }
 
 type EngineReplicaStatus struct {
@@ -140,8 +142,6 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		UpdateCh: engineUpdateCh,
 
 		log: safelog.NewSafeLogger(log),
-
-		pendingReplicaAddTasks: map[string]*replicaAddTask{},
 	}
 }
 
@@ -582,12 +582,6 @@ type replicaAddTask struct {
 
 type replicaAddFinishWrapper func(finish func() error) error
 
-// replicaAddOnComplete is called by Engine.ReplicaAdd's background goroutine
-// after replicaAddFinalize completes (success or failure). It allows the caller
-// (typically the server) to notify the EngineFrontend that replica add finished
-// so it can clear its isReplicaAdding guard and, on failure, transition to error state.
-type replicaAddOnComplete func(err error)
-
 const (
 	replicaAddTaskStaleTimeout       = 10 * time.Minute
 	replicaAddTaskStaleCheckInterval = time.Minute
@@ -597,11 +591,9 @@ const (
 // Engine owns the entire lifecycle: start → shallow copy → finishWrapper → finish.
 // If finishWrapper is non-nil, it is called around the finish step
 // (typically to suspend/resume the frontend via gRPC callback).
-// If onComplete is non-nil, it is called after the finalize goroutine finishes
-// (success or failure) to notify the caller (e.g. clear EngineFrontend.isReplicaAdding).
 // The call returns after replicaAddStart completes synchronously;
 // the finalize phase (shallow copy + finish) runs in a background goroutine.
-func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string, fastSync bool, finishWrapper replicaAddFinishWrapper, onComplete replicaAddOnComplete) error {
+func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string, fastSync bool, finishWrapper replicaAddFinishWrapper) error {
 	task, err := e.replicaAddStart(spdkClient, dstReplicaName, dstReplicaAddress, fastSync)
 	if err != nil {
 		return err
@@ -617,10 +609,6 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 		if finalizeErr != nil {
 			e.log.WithError(finalizeErr).Errorf("Engine %s failed to finalize replica %s add", e.Name, dstReplicaName)
 		}
-
-		if onComplete != nil {
-			onComplete(finalizeErr)
-		}
 	}()
 	return nil
 }
@@ -632,42 +620,39 @@ func (e *Engine) ReplicaAddStart(spdkClient *spdkclient.Client, dstReplicaName, 
 	}
 
 	e.Lock()
-	if existingTask, exists := e.pendingReplicaAddTasks[dstReplicaName]; exists {
+	if e.pendingReplicaAddTask != nil {
 		e.Unlock()
-		return fmt.Errorf("pending replica add task already exists for replica %s and is %s old", dstReplicaName, time.Since(existingTask.lastActivityAt).Round(time.Second))
+		return fmt.Errorf("pending replica add task already exists for replica %s and is %s old", e.pendingReplicaAddTask.dstReplicaName, time.Since(e.pendingReplicaAddTask.lastActivityAt).Round(time.Second))
 	}
-	e.pendingReplicaAddTasks[dstReplicaName] = task
+	e.pendingReplicaAddTask = task
 	e.Unlock()
-	e.startReplicaAddTaskStaleCleanupLoop(dstReplicaName)
+	e.startReplicaAddTaskStaleCleanupLoop()
 
 	return nil
 }
 
 func (e *Engine) ReplicaAddShallowCopy(dstReplicaName string) error {
 	e.Lock()
-	task := e.pendingReplicaAddTasks[dstReplicaName]
-	if task != nil && task.inProgress {
+	task := e.pendingReplicaAddTask
+	if task == nil || task.dstReplicaName != dstReplicaName {
+		e.Unlock()
+		return fmt.Errorf("cannot find pending replica add task for replica %s", dstReplicaName)
+	}
+	if task.inProgress {
 		e.Unlock()
 		return fmt.Errorf("pending replica add task for replica %s is being processed", dstReplicaName)
 	}
-	if task != nil {
-		task.inProgress = true
-		task.lastActivityAt = time.Now()
-		task.lastError = ""
-	}
+	task.inProgress = true
+	task.lastActivityAt = time.Now()
+	task.lastError = ""
 	e.Unlock()
-
-	if task == nil {
-		return fmt.Errorf("cannot find pending replica add task for replica %s", dstReplicaName)
-	}
 
 	shallowCopyErr := e.replicaAddShallowCopy(task)
 
 	e.Lock()
 	defer e.Unlock()
 
-	currentTask := e.pendingReplicaAddTasks[dstReplicaName]
-	if currentTask != task {
+	if e.pendingReplicaAddTask != task {
 		return shallowCopyErr
 	}
 
@@ -686,29 +671,26 @@ func (e *Engine) ReplicaAddShallowCopy(dstReplicaName string) error {
 
 func (e *Engine) ReplicaAddFinish(dstReplicaName string, finishWrapper replicaAddFinishWrapper) error {
 	e.Lock()
-	task := e.pendingReplicaAddTasks[dstReplicaName]
-	if task != nil && task.inProgress {
+	task := e.pendingReplicaAddTask
+	if task == nil || task.dstReplicaName != dstReplicaName {
+		e.Unlock()
+		return fmt.Errorf("cannot find pending replica add task for replica %s", dstReplicaName)
+	}
+	if task.inProgress {
 		e.Unlock()
 		return fmt.Errorf("pending replica add task for replica %s is being finalized", dstReplicaName)
 	}
-	if task != nil {
-		task.inProgress = true
-		task.lastActivityAt = time.Now()
-		task.lastError = ""
-	}
+	task.inProgress = true
+	task.lastActivityAt = time.Now()
+	task.lastError = ""
 	e.Unlock()
-
-	if task == nil {
-		return fmt.Errorf("cannot find pending replica add task for replica %s", dstReplicaName)
-	}
 
 	finalizeErr := e.replicaAddFinalize(task, finishWrapper)
 
 	e.Lock()
 	defer e.Unlock()
 
-	currentTask := e.pendingReplicaAddTasks[dstReplicaName]
-	if currentTask != task {
+	if e.pendingReplicaAddTask != task {
 		return finalizeErr
 	}
 
@@ -719,17 +701,18 @@ func (e *Engine) ReplicaAddFinish(dstReplicaName string, finishWrapper replicaAd
 		return finalizeErr
 	}
 
-	delete(e.pendingReplicaAddTasks, dstReplicaName)
+	e.pendingReplicaAddTask = nil
 	return nil
 }
 
-func (e *Engine) hasPendingReplicaAddTask(dstReplicaName string) bool {
+// HasPendingReplicaAddTask returns true if there is a pending replica add task.
+func (e *Engine) HasPendingReplicaAddTask() bool {
 	e.RLock()
 	defer e.RUnlock()
-	return e.pendingReplicaAddTasks[dstReplicaName] != nil
+	return e.pendingReplicaAddTask != nil
 }
 
-func (e *Engine) startReplicaAddTaskStaleCleanupLoop(dstReplicaName string) {
+func (e *Engine) startReplicaAddTaskStaleCleanupLoop() {
 	go func() {
 		ticker := time.NewTicker(replicaAddTaskStaleCheckInterval)
 		defer ticker.Stop()
@@ -738,7 +721,7 @@ func (e *Engine) startReplicaAddTaskStaleCleanupLoop(dstReplicaName string) {
 			var staleTask *replicaAddTask
 
 			e.Lock()
-			task := e.pendingReplicaAddTasks[dstReplicaName]
+			task := e.pendingReplicaAddTask
 			if task == nil {
 				e.Unlock()
 				return
@@ -749,10 +732,10 @@ func (e *Engine) startReplicaAddTaskStaleCleanupLoop(dstReplicaName string) {
 			}
 
 			staleTask = task
-			delete(e.pendingReplicaAddTasks, dstReplicaName)
+			e.pendingReplicaAddTask = nil
 			e.Unlock()
 
-			e.log.Warnf("Cleaning up stale pending replica add task for replica %s that has been idle for %s", dstReplicaName, time.Since(staleTask.lastActivityAt).Round(time.Second))
+			e.log.Warnf("Cleaning up stale pending replica add task for replica %s that has been idle for %s", staleTask.dstReplicaName, time.Since(staleTask.lastActivityAt).Round(time.Second))
 			e.bestEffortReplicaAddTaskCleanup(staleTask, "stale pending task timeout")
 			return
 		}
@@ -1047,10 +1030,12 @@ func (e *Engine) replicaAddFinalize(task *replicaAddTask, finishWrapper replicaA
 		if cleanupErr := e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, task.srcReplicaName, task.dstReplicaName, task.fastSync); cleanupErr != nil {
 			e.log.WithError(cleanupErr).Errorf("Engine %s failed to clean up after shallow copy failure for replica %s", e.Name, task.dstReplicaName)
 		}
-		// Remove the task from the pending map so that subsequent retry attempts
+		// Remove the pending task so that subsequent retry attempts
 		// via EngineReplicaAddStart don't fail with "pending replica add task already exists"
 		e.Lock()
-		delete(e.pendingReplicaAddTasks, task.dstReplicaName)
+		if e.pendingReplicaAddTask == task {
+			e.pendingReplicaAddTask = nil
+		}
 		e.Unlock()
 		return shallowCopyErr
 	}
@@ -1108,7 +1093,9 @@ func (e *Engine) replicaAddFinalize(task *replicaAddTask, finishWrapper replicaA
 			if task.createdByReplicaAddStart {
 				// Allow a fresh EngineReplicaAddStart retry in frontend/start-driven flows.
 				e.Lock()
-				delete(e.pendingReplicaAddTasks, task.dstReplicaName)
+				if e.pendingReplicaAddTask == task {
+					e.pendingReplicaAddTask = nil
+				}
 				e.Unlock()
 			}
 		}
