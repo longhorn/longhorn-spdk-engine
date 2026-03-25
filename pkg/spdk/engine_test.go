@@ -1,5 +1,76 @@
 package spdk
 
+import (
+	. "gopkg.in/check.v1"
+
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
+)
+
+func (s *TestSuite) TestGetExposedPort(c *C) {
+	testCases := []struct {
+		name         string
+		subsystem    spdktypes.NvmfSubsystem
+		expectedPort int32
+		expectError  bool
+	}{
+		{
+			name: "IPv4 TCP listener returns correct port",
+			subsystem: spdktypes.NvmfSubsystem{
+				ListenAddresses: []spdktypes.NvmfSubsystemListenAddress{{
+					Trtype:  spdktypes.NvmeTransportTypeTCP,
+					Adrfam:  spdktypes.NvmeAddressFamilyIPv4,
+					Trsvcid: "20001",
+				}},
+			},
+			expectedPort: 20001,
+			expectError:  false,
+		},
+		{
+			name: "IPv6 TCP listener returns correct port",
+			subsystem: spdktypes.NvmfSubsystem{
+				ListenAddresses: []spdktypes.NvmfSubsystemListenAddress{{
+					Trtype:  spdktypes.NvmeTransportTypeTCP,
+					Adrfam:  spdktypes.NvmeAddressFamilyIPv6,
+					Trsvcid: "20002",
+				}},
+			},
+			expectedPort: 20002,
+			expectError:  false,
+		},
+		{
+			name: "non-TCP listener is rejected",
+			subsystem: spdktypes.NvmfSubsystem{
+				ListenAddresses: []spdktypes.NvmfSubsystemListenAddress{{
+					Trtype:  spdktypes.NvmeTransportTypeRDMA,
+					Adrfam:  spdktypes.NvmeAddressFamilyIPv4,
+					Trsvcid: "20003",
+				}},
+			},
+			expectedPort: 0,
+			expectError:  true,
+		},
+		{
+			name: "empty listeners returns error",
+			subsystem: spdktypes.NvmfSubsystem{
+				ListenAddresses: nil,
+			},
+			expectedPort: 0,
+			expectError:  true,
+		},
+	}
+	for _, tc := range testCases {
+		c.Logf("testing getExposedPort.%s", tc.name)
+		port, err := getExposedPort(&tc.subsystem)
+		if tc.expectError {
+			c.Assert(err, NotNil, Commentf("Test case '%s': expected error", tc.name))
+		} else {
+			c.Assert(err, IsNil, Commentf("Test case '%s': unexpected error", tc.name))
+			c.Assert(port, Equals, tc.expectedPort,
+				Commentf("Test case '%s': unexpected port", tc.name))
+		}
+	}
+}
+
 //	. "gopkg.in/check.v1"
 
 // func (s *TestSuite) xxTestcheckInitiatorAndTargetCreationRequirementsForNvmeTcpFrontend(c *C) {
