@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc"
@@ -1069,53 +1068,6 @@ func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress st
 
 	_, err := client.EngineReplicaAdd(ctx, req)
 	return errors.Wrapf(err, "failed to add replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
-}
-
-func (c *SPDKClient) EngineReplicaAddStart(engineName, replicaName, replicaAddress string, fastSync bool) error {
-	return c.engineReplicaAddCall(engineName, replicaName, replicaAddress, fastSync, GRPCServiceTimeout,
-		func(ctx context.Context, client spdkrpc.SPDKServiceClient, req *spdkrpc.EngineReplicaAddRequest) error {
-			_, err := client.EngineReplicaAddStart(ctx, req)
-			return err
-		})
-}
-
-func (c *SPDKClient) EngineReplicaAddFinish(engineName, replicaName, replicaAddress string, fastSync bool) error {
-	return c.engineReplicaAddCall(engineName, replicaName, replicaAddress, fastSync, GRPCServiceTimeout,
-		func(ctx context.Context, client spdkrpc.SPDKServiceClient, req *spdkrpc.EngineReplicaAddRequest) error {
-			_, err := client.EngineReplicaAddFinish(ctx, req)
-			return err
-		})
-}
-
-func (c *SPDKClient) EngineReplicaAddShallowCopy(engineName, replicaName, replicaAddress string, fastSync bool) error {
-	return c.engineReplicaAddCall(engineName, replicaName, replicaAddress, fastSync, GRPCServiceLongTimeout,
-		func(ctx context.Context, client spdkrpc.SPDKServiceClient, req *spdkrpc.EngineReplicaAddRequest) error {
-			_, err := client.EngineReplicaAddShallowCopy(ctx, req)
-			return err
-		})
-}
-
-func (c *SPDKClient) engineReplicaAddCall(engineName, replicaName, replicaAddress string, fastSync bool, timeout time.Duration,
-	invoke func(context.Context, spdkrpc.SPDKServiceClient, *spdkrpc.EngineReplicaAddRequest) error) error {
-	if engineName == "" {
-		return fmt.Errorf("failed to add replica for engine: missing required parameter engineName")
-	}
-	if replicaName == "" || replicaAddress == "" {
-		return fmt.Errorf("failed to add replica for engine: missing required parameter replicaName or replicaAddress")
-	}
-
-	client := c.getSPDKServiceClient()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	req := &spdkrpc.EngineReplicaAddRequest{
-		EngineName:     engineName,
-		ReplicaName:    replicaName,
-		ReplicaAddress: replicaAddress,
-		FastSync:       fastSync,
-	}
-
-	return errors.Wrapf(invoke(ctx, client, req), "failed to add replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
 }
 
 func (c *SPDKClient) EngineFrontendReplicaAdd(engineFrontendName, replicaName, replicaAddress string, fastSync bool) error {
