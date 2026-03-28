@@ -468,6 +468,7 @@ func (ef *EngineFrontend) getWithoutLock() (res *spdkrpc.EngineFrontend) {
 	res = &spdkrpc.EngineFrontend{
 		Name:       ef.Name,
 		VolumeName: ef.VolumeName,
+		EngineName: ef.EngineName,
 		SpecSize:   ef.SpecSize,
 		ActualSize: ef.ActualSize,
 		Frontend:   ef.Frontend,

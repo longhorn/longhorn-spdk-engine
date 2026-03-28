@@ -196,6 +196,7 @@ func ProtoEngineToEngine(e *spdkrpc.Engine) *Engine {
 type EngineFrontend struct {
 	Name                  string `json:"name"`
 	VolumeName            string `json:"volumeName"`
+	EngineName            string `json:"engine_name"`
 	SpecSize              uint64 `json:"spec_size"`
 	ActualSize            uint64 `json:"actual_size"`
 	TargetIP              string `json:"target_ip"`
@@ -215,6 +216,7 @@ func ProtoEngineFrontendToEngineFrontend(ef *spdkrpc.EngineFrontend) *EngineFron
 	res := &EngineFrontend{
 		Name:                  ef.Name,
 		VolumeName:            ef.VolumeName,
+		EngineName:            ef.EngineName,
 		SpecSize:              ef.SpecSize,
 		ActualSize:            ef.ActualSize,
 		TargetIP:              ef.TargetIp,
