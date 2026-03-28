@@ -1070,6 +1070,9 @@ func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress st
 	return errors.Wrapf(err, "failed to add replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
 }
 
+// EngineFrontendReplicaAdd asks the EngineFrontend to add a replica.
+// Callers should invoke this method to
+// initiate the replica-add flow.
 func (c *SPDKClient) EngineFrontendReplicaAdd(engineFrontendName, replicaName, replicaAddress string, fastSync bool) error {
 	if engineFrontendName == "" {
 		return fmt.Errorf("failed to add replica for engine frontend: missing required parameter engineFrontendName")
