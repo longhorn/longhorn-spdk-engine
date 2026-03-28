@@ -45,16 +45,48 @@ type NvmeTcpTarget struct {
 	Nguid string
 }
 
-// ReplicaAddMock allows tests to override specific replica-add operations.
-// Set individual fields to non-nil to mock that operation; nil fields
-// fall through to the real Engine implementation.
-// When both ShallowCopy and Finish are set, SPDK client creation is skipped
-// (unit-test mode). When only some fields are set, real clients are still
-// created so unmocked operations work against a live SPDK server.
-type ReplicaAddMock struct {
-	ShallowCopy      func(dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, rebuildingSnapshots []*api.Lvol, fastSync bool) error
-	Finish           func(srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error
-	FinishPhase2Hook func()
+// ReplicaAdder abstracts the two pluggable steps of the replica-add flow:
+// shallow copy and finish. Production code uses realReplicaAdder; tests
+// can supply a MockReplicaAdder via Engine.SetReplicaAdder().
+type ReplicaAdder interface {
+	ReplicaShallowCopy(dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, rebuildingSnapshots []*api.Lvol, fastSync bool) error
+	ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error
+}
+
+// realReplicaAdder is the production ReplicaAdder that delegates to Engine methods.
+type realReplicaAdder struct {
+	e *Engine
+}
+
+func (ra *realReplicaAdder) ReplicaShallowCopy(dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, rebuildingSnapshots []*api.Lvol, fastSync bool) error {
+	return ra.e.replicaShallowCopy(dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshots, fastSync)
+}
+
+func (ra *realReplicaAdder) ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error {
+	return ra.e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, dstReplicaName, fastSync)
+}
+
+// MockReplicaAdder allows tests to override specific replica-add operations.
+// Set individual function fields to non-nil to mock that operation; nil fields
+// fall through to the real Engine implementation via the embedded real adder.
+type MockReplicaAdder struct {
+	real            ReplicaAdder
+	ShallowCopyFunc func(dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, rebuildingSnapshots []*api.Lvol, fastSync bool) error
+	FinishFunc      func(srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error
+}
+
+func (m *MockReplicaAdder) ReplicaShallowCopy(dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, rebuildingSnapshots []*api.Lvol, fastSync bool) error {
+	if m.ShallowCopyFunc != nil {
+		return m.ShallowCopyFunc(dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshots, fastSync)
+	}
+	return m.real.ReplicaShallowCopy(dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshots, fastSync)
+}
+
+func (m *MockReplicaAdder) ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error {
+	if m.FinishFunc != nil {
+		return m.FinishFunc(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, dstReplicaName, fastSync)
+	}
+	return m.real.ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, dstReplicaName, fastSync)
 }
 
 type Engine struct {
@@ -93,9 +125,14 @@ type Engine struct {
 
 	log *safelog.SafeLogger
 
-	// replicaAddMock overrides the replica-add operations for testing.
-	// When nil (production), Engine uses its own replicaShallowCopy / replicaAddFinish.
-	replicaAddMock *ReplicaAddMock
+	// replicaAdder provides the pluggable replica-add operations (shallow copy + finish).
+	// Production uses realReplicaAdder; tests can supply MockReplicaAdder.
+	replicaAdder ReplicaAdder
+
+	// finishPhase2Hook is an optional test hook called between phase 2 (RPC calls)
+	// and phase 3 (lock + state update) of replicaAddFinish. Used to verify that
+	// the Engine lock is released during slow RPCs (3-phase lock pattern).
+	finishPhase2Hook func()
 }
 
 type EngineReplicaStatus struct {
@@ -137,6 +174,12 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		UpdateCh: engineUpdateCh,
 
 		log: safelog.NewSafeLogger(log),
+	}
+}
+
+func (e *Engine) initReplicaAdder() {
+	if e.replicaAdder == nil {
+		e.replicaAdder = &realReplicaAdder{e: e}
 	}
 }
 
@@ -665,23 +708,15 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 				return
 			}
 
-			// Resolve mock functions under lock
+			// Resolve the replica adder under lock
 			e.RLock()
-			mock := e.replicaAddMock
+			e.initReplicaAdder()
+			adder := e.replicaAdder
 			e.RUnlock()
-
-			shallowCopyFn := e.replicaShallowCopy
-			if mock != nil && mock.ShallowCopy != nil {
-				shallowCopyFn = mock.ShallowCopy
-			}
-			finishFn := e.replicaAddFinish
-			if mock != nil && mock.Finish != nil {
-				finishFn = mock.Finish
-			}
 
 			// Shallow copy phase
 			var shallowCopyErr error
-			if scErr := shallowCopyFn(dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshotList, fastSync); scErr != nil {
+			if scErr := adder.ReplicaShallowCopy(dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshotList, fastSync); scErr != nil {
 				e.log.WithError(scErr).Errorf("Engine %s failed to do the shallow copy for replica %s add", e.Name, dstReplicaName)
 				shallowCopyErr = scErr
 			}
@@ -704,7 +739,7 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 			e.log.Infof("Starting to finish replica %s add for engine %s", dstReplicaName, e.Name)
 
 			finish := func() error {
-				return finishFn(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, dstReplicaName, fastSync)
+				return adder.ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, dstReplicaName, fastSync)
 			}
 
 			finishCalled := false
@@ -722,7 +757,11 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 			if finishErr != nil {
 				e.log.WithError(finishErr).Errorf("Engine %s failed to finish replica %s add", e.Name, dstReplicaName)
 
-				needsCleanup := (!finishCalled && finishWrapper != nil) || (mock != nil && mock.Finish != nil)
+				// When finish was never called (e.g. finishWrapper suspend failure),
+				// or when a mock adder overrides finish, we must still call the real
+				// replicaAddFinish for SPDK resource cleanup.
+				mockAdder, isMock := adder.(*MockReplicaAdder)
+				needsCleanup := (!finishCalled && finishWrapper != nil) || (isMock && mockAdder.FinishFunc != nil)
 				if needsCleanup {
 					e.log.Infof("Calling real replicaAddFinish for cleanup after finish failure for replica %s add (finishCalled=%v)", dstReplicaName, finishCalled)
 					e.Lock()
@@ -993,10 +1032,10 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 	// By releasing the lock, other Engine operations (status queries, other replica
 	// operations) are not blocked during these potentially slow RPCs.
 	e.RLock()
-	mock := e.replicaAddMock
+	phase2Hook := e.finishPhase2Hook
 	e.RUnlock()
-	if mock != nil && mock.FinishPhase2Hook != nil {
-		mock.FinishPhase2Hook()
+	if phase2Hook != nil {
+		phase2Hook()
 	}
 	//
 	// The cleanup order depends on whether the rebuild succeeded or failed:
@@ -2891,10 +2930,27 @@ func validateControllerName(replicaName, bdevName, namespaceBdevName string) err
 	return nil
 }
 
-// SetReplicaAddMock injects a ReplicaAddMock for testing.
-// Pass nil to restore production behavior.
-func (e *Engine) SetReplicaAddMock(m *ReplicaAddMock) {
+// SetReplicaAdder replaces the ReplicaAdder used by ReplicaAdd.
+// For testing, pass a *MockReplicaAdder. Pass nil to restore production behavior.
+func (e *Engine) SetReplicaAdder(adder ReplicaAdder) {
 	e.Lock()
 	defer e.Unlock()
-	e.replicaAddMock = m
+	if adder == nil {
+		e.replicaAdder = &realReplicaAdder{e: e}
+	} else {
+		// If substituting a MockReplicaAdder, inject the real adder for fallback.
+		if m, ok := adder.(*MockReplicaAdder); ok && m.real == nil {
+			e.initReplicaAdder()
+			m.real = e.replicaAdder
+		}
+		e.replicaAdder = adder
+	}
+}
+
+// SetFinishPhase2Hook injects a test hook called between phase 2 (RPC calls)
+// and phase 3 (lock + state update) of replicaAddFinish. Pass nil to clear.
+func (e *Engine) SetFinishPhase2Hook(hook func()) {
+	e.Lock()
+	defer e.Unlock()
+	e.finishPhase2Hook = hook
 }

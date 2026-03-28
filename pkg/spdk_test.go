@@ -4759,8 +4759,8 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	}
 
 	// 5. Test Shallow Copy Error
-	internalEngine.SetReplicaAddMock(&server.ReplicaAddMock{
-		ShallowCopy: func(srcReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, snapshots []*api.Lvol, fastSync bool) error {
+	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{
+		ShallowCopyFunc: func(srcReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, snapshots []*api.Lvol, fastSync bool) error {
 			return fmt.Errorf("injected shallow copy error")
 		},
 	})
@@ -4771,8 +4771,8 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 
 	waitForReplicaERR(replicaNames[1])
 
-	// Reset mock
-	internalEngine.SetReplicaAddMock(nil)
+	// Reset adder
+	internalEngine.SetReplicaAdder(nil)
 
 	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
 	c.Assert(err, IsNil)
@@ -4795,8 +4795,8 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	// Without the P0 fix, RebuildingDstFinish would reject error-state replicas,
 	// causing doCleanupForRebuildingDst to never run, leaving the external snapshot
 	// NVMe controller attached and causing bdev_nvme_detach_controller to hang.
-	internalEngine.SetReplicaAddMock(&server.ReplicaAddMock{
-		ShallowCopy: func(dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, snapshots []*api.Lvol, fastSync bool) error {
+	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{
+		ShallowCopyFunc: func(dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, snapshots []*api.Lvol, fastSync bool) error {
 			// Simulate what happens in production: the per-replica error state is set
 			// by RebuildingDstShallowCopyStart's defer when the actual shallow copy fails.
 			internalReplica := srv.GetReplicaStruct(dstReplicaName)
@@ -4811,8 +4811,8 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 
 	waitForReplicaERR(replicaNames[1])
 
-	// Reset mock
-	internalEngine.SetReplicaAddMock(nil)
+	// Reset adder
+	internalEngine.SetReplicaAdder(nil)
 
 	// Clean up the partial state in Engine
 	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
@@ -4829,8 +4829,8 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	replica2Address = net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
 
 	// 6. Test Finish Error
-	internalEngine.SetReplicaAddMock(&server.ReplicaAddMock{
-		Finish: func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error {
+	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{
+		FinishFunc: func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error {
 			return fmt.Errorf("injected finish error")
 		},
 	})
@@ -4840,8 +4840,8 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 
 	waitForReplicaERR(replicaNames[1])
 
-	// Reset mock
-	internalEngine.SetReplicaAddMock(nil)
+	// Reset adder
+	internalEngine.SetReplicaAdder(nil)
 
 	// Clean up the partial state in Engine
 	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
@@ -4861,19 +4861,17 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	// are executed. Without this refactoring, these RPCs would block all Engine operations
 	// for 10+ seconds on ETIMEDOUT.
 	phase2LockReleased := make(chan bool, 1)
-	internalEngine.SetReplicaAddMock(&server.ReplicaAddMock{
-		FinishPhase2Hook: func() {
-			// This hook runs inside Phase 2 of replicaAddFinish, where the Engine lock
-			// should be released. Verify by trying to acquire the lock.
-			if internalEngine.TryLock() {
-				// Lock was free — 3-phase pattern is working correctly
-				internalEngine.Unlock()
-				phase2LockReleased <- true
-			} else {
-				// Lock was held — 3-phase pattern is NOT working (old behavior)
-				phase2LockReleased <- false
-			}
-		},
+	internalEngine.SetFinishPhase2Hook(func() {
+		// This hook runs inside Phase 2 of replicaAddFinish, where the Engine lock
+		// should be released. Verify by trying to acquire the lock.
+		if internalEngine.TryLock() {
+			// Lock was free — 3-phase pattern is working correctly
+			internalEngine.Unlock()
+			phase2LockReleased <- true
+		} else {
+			// Lock was held — 3-phase pattern is NOT working (old behavior)
+			phase2LockReleased <- false
+		}
 	})
 
 	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
@@ -4887,8 +4885,8 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 		c.Fatal("Timed out waiting for replicaAddFinish Phase 2 hook to fire")
 	}
 
-	// Reset mock
-	internalEngine.SetReplicaAddMock(nil)
+	// Reset hook
+	internalEngine.SetFinishPhase2Hook(nil)
 
 	// Wait for Replica Add to Complete
 	err = retry.Do(func() error {
