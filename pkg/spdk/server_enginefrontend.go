@@ -86,23 +86,27 @@ func (s *Server) EngineFrontendResume(ctx context.Context, req *spdkrpc.EngineFr
 //
 // Server.EngineReplicaAdd reads the EF fields from the request, then
 // calls buildGRPCReplicaAddFinishWrapper to create a replicaAddFinishWrapper
-// — a callback that will call back to this EF for suspend/resume during the
-// finish step. It then delegates to Engine.ReplicaAdd(finishWrapper).
+// — a callback that will call back to this EF for suspend/resume during both
+// the snapshot-creation step and the finish step. It then delegates to
+// Engine.ReplicaAdd(finishWrapper).
 //
-// Engine.ReplicaAdd runs replicaAddStart synchronously, and if successful
-// spawns a background goroutine that executes the remaining phases:
+// Engine.ReplicaAdd runs the synchronous part under the Engine lock:
 //
-//  1. replicaAddStart (sync): validate engine state, connect to src/dst
-//     replica SPDK services, add the dst replica to ReplicaStatusMap as
-//     ModeWO, and return a replicaAddTask containing all connection state.
-//  2. replicaAddShallowCopy (async): iterate over snapshots and copy data
-//     from the source replica to the destination replica via SPDK shallow
-//     copy.
-//  3. replicaAddFinalize (async): orchestrates the finish step with the
-//     finishWrapper:
+//  0. Snapshot + setup (sync, under finishWrapper): suspend frontend via
+//     finishWrapper → create rebuild snapshot, connect to src/dst replica
+//     SPDK services, add dst replica head bdev to RAID, mark dst as ModeWO
+//     → resume frontend. This matches the original c6292c0 behaviour where
+//     the local NVMe initiator was suspended for the snapshot creation.
+//
+// On return (with lock released), a deferred goroutine runs the remaining
+// phases:
+//
+//  1. Shallow copy (async): iterate over snapshots and copy data from the
+//     source replica to the destination replica via SPDK shallow copy.
+//  2. Finish (async): orchestrates the finish step with the finishWrapper:
 //     a. If shallow copy failed, mark dst replica as ModeERR, call the
 //     real replicaAddFinish for SPDK resource cleanup (detach external
-//     snapshot controller, stop expose), and clear pendingReplicaAddTask.
+//     snapshot controller, stop expose).
 //     b. If shallow copy succeeded, call finishWrapper(finish):
 //     - finishWrapper (buildGRPCReplicaAddFinishWrapper) calls back to
 //     EF via gRPC: Suspend → finish() → Resume
@@ -110,28 +114,27 @@ func (s *Server) EngineFrontendResume(ctx context.Context, req *spdkrpc.EngineFr
 //     NVMe controller on the dst replica, stops the src replica from
 //     exposing, and promotes the dst replica from ModeWO to ModeRW.
 //     c. If finish fails and was never called (e.g. suspend failure in
-//     finishWrapper), replicaAddFinalize calls the real replicaAddFinish
+//     finishWrapper), a cleanup call to the real replicaAddFinish runs
 //     inside finishWrapper for SPDK resource cleanup.
 //
-// This call returns as soon as replicaAddStart succeeds (step 1); the
+// This call returns as soon as the synchronous part succeeds; the
 // remaining phases run in the background goroutine. The caller can monitor
 // progress by polling the Engine's ReplicaModeMap — the rebuilding replica
 // appears as ModeWO until finished (ModeRW) or failed (ModeERR).
 //
 // # Error handling
 //
-// EF is stateless with respect to replica-add. Engine owns all state via a
-// single pendingReplicaAddTask pointer. If the Engine's async goroutine
-// fails at any phase, it sets the replica to ModeERR, cleans up SPDK
-// resources, and clears pendingReplicaAddTask — without notifying EF.
+// EF is stateless with respect to replica-add. Engine owns all state.
+// If the Engine's async goroutine fails at any phase, it sets the replica
+// to ModeERR and cleans up SPDK resources — without notifying EF.
 //
 // The finishWrapper (buildGRPCReplicaAddFinishWrapper) handles EF-unreachable
 // scenarios gracefully:
 //   - EF node down / pod deleted (GetServiceClient fails) → proceed with
-//     finish without suspension (no active I/O = suspension unnecessary).
-//   - Suspend fails → proceed with finish without suspension (data already
-//     copied; not finishing would leak SPDK resources).
-//   - Resume fails → log error but do not override the finish result;
+//     the operation without suspension (no active I/O = suspension unnecessary).
+//   - Suspend fails → proceed without suspension (data integrity is not
+//     compromised; not proceeding would block the rebuild).
+//   - Resume fails → log error but do not override the operation result;
 //     longhorn-manager will detect the stuck-suspended EF and recover.
 func (s *Server) EngineFrontendReplicaAdd(ctx context.Context, req *spdkrpc.EngineFrontendReplicaAddRequest) (ret *emptypb.Empty, err error) {
 	if req.ReplicaName == "" || req.ReplicaAddress == "" {

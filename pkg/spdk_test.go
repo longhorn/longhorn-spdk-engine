@@ -4777,7 +4777,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
 	c.Assert(err, IsNil)
 
-	// The engine's replicaAddFinalize now internally calls replicaAddFinish on shallow copy
+	// The engine's ReplicaAdd goroutine internally calls replicaAddFinish on shallow copy
 	// failure, which detaches the external snapshot NVMe controller and stops the source from
 	// exposing. So we only need to delete/recreate the dst replica for a clean state.
 	err = spdkCli.ReplicaDelete(replicaNames[1], true)
@@ -4847,7 +4847,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
 	c.Assert(err, IsNil)
 
-	// The engine's replicaAddFinalize now internally calls the real replicaAddFinish
+	// The engine's ReplicaAdd goroutine internally calls the real replicaAddFinish
 	// for cleanup when the test hook fails, so SPDK resources are already cleaned up.
 	err = spdkCli.ReplicaDelete(replicaNames[1], true)
 	c.Assert(err, IsNil)
