@@ -1515,9 +1515,16 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyMixedValidAndInvalidLvolNames(c *
 			"matrix-r-123",
 			"matrix-r-123456789",
 		}
+
+		// Mismatching-size lvol: valid replica name but half the expected size.
+		// This passes the IsProbablyReplicaName filter and gets reconstructed by
+		// monitoring, but with a specSize that doesn't match defaultTestLvolSize.
+		mismatchSizeName := fmt.Sprintf("matrix-r-%s", strings.ReplaceAll(util.UUID(), "-", "")[:8])
+		mismatchSizeInMiB := util.BytesToMiB(defaultTestLvolSize) / 2
+
 		allNames := append([]string{validReplicaName}, invalidNames...)
 
-		// Create all lvols concurrently
+		// Create valid + invalid-name lvols with defaultTestLvolSize
 		var createWg sync.WaitGroup
 		createErrs := make([]error, len(allNames))
 		for i, name := range allNames {
@@ -1536,7 +1543,16 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyMixedValidAndInvalidLvolNames(c *
 			}(name)
 		}
 
-		err := retry.Do(func() error {
+		// Create mismatching-size lvol separately with half the expected size
+		_, err := env.rawSPDKCli.BdevLvolCreate("", env.disk.Uuid, mismatchSizeName, mismatchSizeInMiB, "", true)
+		c.Assert(err, IsNil)
+		defer func() {
+			_ = env.spdkCli.ReplicaDelete(mismatchSizeName, true)
+			_, _ = env.rawSPDKCli.BdevLvolDelete(fmt.Sprintf("%s/%s", env.disk.Name, mismatchSizeName))
+		}()
+
+		// Wait for both the valid replica and mismatching-size replica to be detected
+		err = retry.Do(func() error {
 			replica, err := env.spdkCli.ReplicaGet(validReplicaName)
 			if err != nil {
 				return err
@@ -1544,11 +1560,25 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyMixedValidAndInvalidLvolNames(c *
 			if replica.State != types.InstanceStateStopped {
 				return fmt.Errorf("replica %s state is %s, expected %s", replica.Name, replica.State, types.InstanceStateStopped)
 			}
+			mismatchReplica, err := env.spdkCli.ReplicaGet(mismatchSizeName)
+			if err != nil {
+				return err
+			}
+			if mismatchReplica.State != types.InstanceStateStopped {
+				return fmt.Errorf("replica %s state is %s, expected %s", mismatchReplica.Name, mismatchReplica.State, types.InstanceStateStopped)
+			}
 			return nil
 		}, monitoringRetryOpts(env.ctx, 8)...)
 		c.Assert(err, IsNil)
 
-		// Verify invalid lvols are not found concurrently
+		// Verify the mismatching-size replica is reconstructed with the wrong specSize.
+		// Monitoring derives specSize from the lvol itself, so it doesn't detect the mismatch.
+		mismatchReplica, err := env.spdkCli.ReplicaGet(mismatchSizeName)
+		c.Assert(err, IsNil)
+		c.Assert(mismatchReplica.SpecSize, Equals, mismatchSizeInMiB*1024*1024)
+		c.Assert(mismatchReplica.SpecSize, Not(Equals), defaultTestLvolSize)
+
+		// Verify invalid-name lvols are not found concurrently
 		var verifyWg sync.WaitGroup
 		verifyResults := make([]bool, len(invalidNames))
 		for i, invalidName := range invalidNames {
