@@ -314,9 +314,9 @@ func (e *Engine) createNVMeTCPTarget(spdkClient *spdkclient.Client, superiorPort
 	e.log.Infof("Starting to expose RAID bdev for engine target %v on %v:%v", e.Name, e.NvmeTcpTarget.IP, e.NvmeTcpTarget.Port)
 	if err := spdkClient.StartExposeBdev(e.NvmeTcpTarget.Nqn, e.Name, e.NvmeTcpTarget.Nguid,
 		e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port))); err != nil {
-		if releaseErr := e.releasePorts(superiorPortAllocator); releaseErr != nil {
-			e.log.WithError(releaseErr).Errorf("Failed to release ports for engine target %v on start expose failure", e.Name)
-		}
+		// No need to release ports here. The engine will be marked as ERR by
+		// Create's deferred error handler, and Delete will release the ports
+		// when the user cleans up this engine.
 		return errors.Wrapf(err, "failed to start exposing RAID bdev for engine target %v", e.Name)
 	}
 
