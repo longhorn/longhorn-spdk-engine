@@ -1045,6 +1045,12 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 	var dstReplicaErr error
 	if dstReplicaStatus == nil {
 		e.log.Infof("Engine skipped finishing rebuilding dst replica %s as it was already removed", dstReplicaName)
+	} else if srcReplicaServiceCli == nil || dstReplicaServiceCli == nil {
+		// The clients can be nil when replicaAddFinish is called for cleanup
+		// after an early failure in ReplicaAdd (e.g. getReplicaClients or
+		// getReplicaAddSrcReplica failed before clients were created).
+		// Skip RPC calls; Phase 3 will still update the replica mode.
+		e.log.Warnf("Engine skipping rebuilding RPC cleanup for replica %s because replica service clients are unavailable (src=%v, dst=%v)", dstReplicaName, srcReplicaServiceCli != nil, dstReplicaServiceCli != nil)
 	} else if dstMode == types.ModeERR {
 		// Cleanup path (failed rebuild): SrcFinish first, then DstFinish
 		e.log.Infof("Engine cleaning up failed rebuild for replica %s (mode ERR): will stop src exposing first, then detach dst controller", dstReplicaName)
