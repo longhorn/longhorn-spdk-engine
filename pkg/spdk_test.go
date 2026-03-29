@@ -4354,20 +4354,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
 	c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
 	// 4. Write Data to Volume (Pattern A)
-	offset := int64(0)
-	length := int64(4096)
-	dataA := make([]byte, length)
-	for i := 0; i < len(dataA); i++ {
-		dataA[i] = 'A'
-	}
-	f, err := os.OpenFile(endpoint, os.O_RDWR, 0666)
-	c.Assert(err, IsNil)
-	_, err = f.WriteAt(dataA, offset)
-	c.Assert(err, IsNil)
-	err = f.Sync()
-	c.Assert(err, IsNil)
-	err = f.Close()
-	c.Assert(err, IsNil)
+	dataA := writePatternToBlockDevice(c, endpoint, 'A', 0, 4096)
 
 	// 5. Take Snapshot
 	snapshotName := "snap1"
@@ -4375,19 +4362,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
 	c.Assert(err, IsNil)
 
 	// 6. Write Data to Volume (Pattern B)
-	offsetB := int64(4096)
-	dataB := make([]byte, length)
-	for i := 0; i < len(dataB); i++ {
-		dataB[i] = 'B'
-	}
-	f, err = os.OpenFile(endpoint, os.O_RDWR, 0666)
-	c.Assert(err, IsNil)
-	_, err = f.WriteAt(dataB, offsetB)
-	c.Assert(err, IsNil)
-	err = f.Sync()
-	c.Assert(err, IsNil)
-	err = f.Close()
-	c.Assert(err, IsNil)
+	dataB := writePatternToBlockDevice(c, endpoint, 'B', 4096, 4096)
 
 	// 7. Add Second Replica
 	replica2, err := spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
@@ -4431,23 +4406,9 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
 
 	replica2Endpoint := filepath.Join("/dev", devices[0].Namespaces[0].NameSpace)
 
-	// Read back Data A
-	readBuf := make([]byte, length)
-	f2, err := os.OpenFile(replica2Endpoint, os.O_RDONLY, 0666)
-	c.Assert(err, IsNil)
-	defer func() {
-		err = f2.Close()
-		c.Assert(err, IsNil)
-	}()
-
-	_, err = f2.ReadAt(readBuf, offset)
-	c.Assert(err, IsNil)
-	c.Assert(readBuf, DeepEquals, dataA)
-
-	// Read back Data B
-	_, err = f2.ReadAt(readBuf, offsetB)
-	c.Assert(err, IsNil)
-	c.Assert(readBuf, DeepEquals, dataB)
+	// Read back and verify Data A and B
+	readAndVerifyBlockDevicePattern(c, replica2Endpoint, dataA, 0)
+	readAndVerifyBlockDevicePattern(c, replica2Endpoint, dataB, 4096)
 }
 
 // TestSPDKEngineFrontendReplicaAddErrorHandling tests the error handling of replica addition.
@@ -4728,6 +4689,39 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	c.Assert(err, IsNil)
 	err = f.Close()
 	c.Assert(err, IsNil)
+}
+
+// writePatternToBlockDevice writes a repeated byte pattern to a block device at the given
+// byte offset and returns the written data slice for later verification.
+func writePatternToBlockDevice(c *C, endpoint string, pattern byte, offset, length int64) []byte {
+	data := make([]byte, length)
+	for i := range data {
+		data[i] = pattern
+	}
+	f, err := os.OpenFile(endpoint, os.O_RDWR, 0666)
+	c.Assert(err, IsNil)
+	_, err = f.WriteAt(data, offset)
+	c.Assert(err, IsNil)
+	err = f.Sync()
+	c.Assert(err, IsNil)
+	err = f.Close()
+	c.Assert(err, IsNil)
+	return data
+}
+
+// readAndVerifyBlockDevicePattern reads data from a block device and verifies it matches
+// the expected data using DeepEquals.
+func readAndVerifyBlockDevicePattern(c *C, endpoint string, expected []byte, offset int64) {
+	f, err := os.OpenFile(endpoint, os.O_RDONLY, 0666)
+	c.Assert(err, IsNil)
+	defer func() {
+		err = f.Close()
+		c.Assert(err, IsNil)
+	}()
+	readBuf := make([]byte, len(expected))
+	_, err = f.ReadAt(readBuf, offset)
+	c.Assert(err, IsNil)
+	c.Assert(readBuf, DeepEquals, expected)
 }
 
 func writeDataToBlockDevice(ne *commonns.Executor, endpoint string, offsetInMB, dataCountInMB int64) error {
