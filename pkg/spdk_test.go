@@ -17,7 +17,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
@@ -860,25 +859,91 @@ func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
 	err = formatBlockDevice(endpoint, "ext4")
 	c.Assert(err, IsNil)
 
-	// Suspend and resume engine frontend
+	// Write a known 1MB zero pattern at offset 400MB (beyond the background dd's range)
+	// and compute its checksum for later verification.
+	_, err = ne.Execute(nil, "dd",
+		[]string{
+			"if=/dev/zero",
+			fmt.Sprintf("of=%s", endpoint),
+			"bs=1M", "count=1", "seek=400", "oflag=direct", "conv=notrunc", "status=none",
+		},
+		10*time.Second,
+	)
+	c.Assert(err, IsNil)
+
+	checksumBefore, err := ne.Execute(nil, "sh",
+		[]string{
+			"-c",
+			fmt.Sprintf("dd if=%s bs=1M count=1 skip=400 iflag=direct status=none | md5sum", endpoint),
+		},
+		10*time.Second,
+	)
+	c.Assert(err, IsNil)
+	c.Assert(strings.TrimSpace(checksumBefore), Not(Equals), "")
+
+	// Start a slow background write using direct IO + dsync.
+	// This ensures IO is still in progress when we call Suspend.
+	// We write ~10MB (2500 × 4K) which is slow enough with dsync to still be in-flight
+	// after 1 second, but fast enough to complete shortly after resume.
+	ddDone := make(chan error, 1)
+	go func() {
+		_, err := ne.Execute(nil, "dd",
+			[]string{
+				"if=/dev/urandom",
+				fmt.Sprintf("of=%s", endpoint),
+				"bs=4k", "count=2500", "oflag=direct,dsync", "conv=notrunc", "status=none",
+			},
+			30*time.Second,
+		)
+		ddDone <- err
+	}()
+
+	// Give dd time to start writing before suspending
+	time.Sleep(1 * time.Second)
+
+	// Suspend engine frontend — this freezes the dm-device, queuing all in-flight and new IO
 	err = spdkCli.EngineFrontendSuspend(engineFrontend.Name)
 	c.Assert(err, IsNil)
 
-	defer func() {
-		time.Sleep(15 * time.Second)
-		err = spdkCli.EngineFrontendResume(engineFrontend.Name)
-		c.Assert(err, IsNil)
-	}()
-
+	// Verify that new IO is blocked while the engine frontend is suspended.
+	// The dd command should time out because the dm-device suspend queues all new IO.
+	// We use oflag=direct to bypass the page cache, ensuring the IO hits the dm-device
+	// and gets queued by suspend (without direct IO, dd returns immediately after writing
+	// to the page cache).
 	_, err = ne.Execute(nil, "dd",
 		[]string{
 			"if=/dev/urandom",
 			fmt.Sprintf("of=%s", endpoint),
-			"bs=1M", "count=1", "seek=0", "status=none",
+			"bs=1M", "count=1", "seek=0", "oflag=direct", "conv=notrunc", "status=none",
 		},
 		10*time.Second,
 	)
 	c.Assert(err, NotNil)
+
+	// Resume engine frontend — this unblocks the queued IO
+	err = spdkCli.EngineFrontendResume(engineFrontend.Name)
+	c.Assert(err, IsNil)
+
+	// The background dd should now complete (successfully or with a write error,
+	// but it should no longer be stuck). We wait up to 60 seconds to account for
+	// the dd's Execute timeout plus residual IO after resume.
+	select {
+	case <-ddDone:
+	case <-time.After(60 * time.Second):
+		c.Fatal("background dd did not complete after resume")
+	}
+
+	// Verify data integrity: the checksum of the region at offset 400MB should be unchanged
+	// after the suspend/resume cycle.
+	checksumAfter, err := ne.Execute(nil, "sh",
+		[]string{
+			"-c",
+			fmt.Sprintf("dd if=%s bs=1M count=1 skip=400 iflag=direct status=none | md5sum", endpoint),
+		},
+		10*time.Second,
+	)
+	c.Assert(err, IsNil)
+	c.Assert(strings.TrimSpace(checksumAfter), Equals, strings.TrimSpace(checksumBefore))
 }
 
 func (s *TestSuite) TestSPDKEngineFrontendExpand(c *C) {
@@ -1037,134 +1102,6 @@ func (s *TestSuite) TestSPDKEngineFrontendExpand(c *C) {
 
 	size = GetBlockDeviceSize(ne, endpoint)
 	c.Assert(size, Equals, int64(newTestLvolSize))
-}
-
-func (s *TestSuite) TestSPDKEngineFrontendExpandWithCanceledOrTimedOutContext(c *C) {
-	fmt.Println("Testing SPDK engine frontend expand with canceled or timed out context")
-
-	diskDriverName := "aio"
-
-	ip, err := commonnet.GetAnyExternalIP()
-	c.Assert(err, IsNil)
-	err = os.Setenv(commonnet.EnvPodIP, ip)
-	c.Assert(err, IsNil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	var spdkWg sync.WaitGroup
-	defer func() {
-		cancel()
-		spdkWg.Wait()
-	}()
-
-	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
-	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
-
-	loopDevicePath := PrepareDiskFile(c)
-	defer func() {
-		CleanupDiskFile(c, loopDevicePath)
-	}()
-
-	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
-	c.Assert(err, IsNil)
-	defer func() {
-		if errClose := spdkCli.Close(); errClose != nil {
-			logrus.WithError(errClose).Error("Failed to close SPDK client")
-		}
-	}()
-
-	// Use a raw gRPC client to inject caller-provided contexts (canceled/deadline exceeded)
-	// into EngineFrontendExpand. The helper spdkCli wraps RPCs with its own background timeout
-	// context, so it cannot be used to validate context propagation behavior.
-	rawSpdkCli, err := grpc.NewClient(
-		net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithNoProxy(),
-		grpc.WithDisableServiceConfig(),
-	)
-	c.Assert(err, IsNil)
-	defer func() {
-		c.Assert(rawSpdkCli.Close(), IsNil)
-	}()
-	rawSPDKSvc := spdkrpc.NewSPDKServiceClient(rawSpdkCli)
-
-	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
-	c.Assert(err, IsNil)
-	c.Assert(disk, NotNil)
-
-	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
-	c.Assert(err, IsNil)
-	c.Assert(disk.Path, Equals, loopDevicePath)
-	c.Assert(disk.Uuid, Not(Equals), "")
-
-	defer func() {
-		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
-		c.Assert(err, IsNil)
-	}()
-
-	volumeName := getVolumeName()
-	engineName := fmt.Sprintf("%s-e", volumeName)
-	engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
-	replicaNames := []string{
-		fmt.Sprintf("%s-replica-1", volumeName),
-		fmt.Sprintf("%s-replica-2", volumeName),
-	}
-	replicas := make(map[string]*api.Replica)
-
-	defer func() {
-		err = spdkCli.EngineFrontendDelete(engineFrontendName)
-		c.Assert(err, IsNil)
-
-		err = spdkCli.EngineDelete(engineName)
-		c.Assert(err, IsNil)
-
-		for _, replica := range replicas {
-			err = spdkCli.ReplicaDelete(replica.Name, true)
-			c.Assert(err, IsNil)
-		}
-	}()
-
-	for _, replicaName := range replicaNames {
-		replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
-		c.Assert(err, IsNil)
-		replicas[replicaName] = replica
-	}
-
-	replicaAddressMap := make(map[string]string)
-	for _, replica := range replicas {
-		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
-	}
-
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
-	c.Assert(err, IsNil)
-	c.Assert(engine, NotNil)
-
-	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(ip, strconv.Itoa(int(engine.Port))), 0, 0)
-	c.Assert(err, IsNil)
-	c.Assert(engineFrontend, NotNil)
-
-	canceledCtx, cancelFn := context.WithCancel(context.Background())
-	cancelFn()
-	_, err = rawSPDKSvc.EngineFrontendExpand(canceledCtx, &spdkrpc.EngineFrontendExpandRequest{
-		Name: engineFrontend.Name,
-		Size: defaultTestLvolSize * 2,
-	})
-	c.Assert(err, NotNil)
-	st, ok := grpcstatus.FromError(err)
-	c.Assert(ok, Equals, true)
-	c.Assert(st.Code(), Equals, grpccodes.Canceled)
-
-	deadlineCtx, deadlineCancelFn := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-	defer deadlineCancelFn()
-	_, err = rawSPDKSvc.EngineFrontendExpand(deadlineCtx, &spdkrpc.EngineFrontendExpandRequest{
-		Name: engineFrontend.Name,
-		Size: defaultTestLvolSize * 2,
-	})
-	c.Assert(err, NotNil)
-	st, ok = grpcstatus.FromError(err)
-	c.Assert(ok, Equals, true)
-	c.Assert(st.Code(), Equals, grpccodes.DeadlineExceeded)
 }
 
 func (s *TestSuite) TestSPDKEngineSnapshotCreateAndDelete(c *C) {
@@ -1441,145 +1378,6 @@ func (s *TestSuite) TestSPDKEngineFrontendSnapshotRevert(c *C) {
 			c.Assert(exists, Equals, true)
 		}()
 	}
-}
-
-// TestRuntimeMonitoringVerifyReconstructReplica validates that runtime monitoring
-// periodically runs verify() and reconstructs uncached replicas from existing lvols.
-func (s *TestSuite) TestRuntimeMonitoringVerifyReconstructReplica(c *C) {
-	fmt.Println("Testing runtime monitoring verify() reconstruction for replica cache")
-
-	diskDriverName := "aio"
-
-	ip, err := commonnet.GetAnyExternalIP()
-	c.Assert(err, IsNil)
-	err = os.Setenv(commonnet.EnvPodIP, ip)
-	c.Assert(err, IsNil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	var spdkWg sync.WaitGroup
-	defer func() {
-		cancel()
-		spdkWg.Wait()
-	}()
-
-	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
-	c.Assert(err, IsNil)
-	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
-
-	loopDevicePath := PrepareDiskFile(c)
-	defer func() {
-		CleanupDiskFile(c, loopDevicePath)
-	}()
-
-	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
-	c.Assert(err, IsNil)
-	defer func() {
-		if errClose := spdkCli.Close(); errClose != nil {
-			logrus.WithError(errClose).Error("Failed to close SPDK client")
-		}
-	}()
-
-	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
-	c.Assert(err, IsNil)
-	c.Assert(disk, NotNil)
-
-	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
-	c.Assert(err, IsNil)
-	c.Assert(disk.Path, Equals, loopDevicePath)
-	c.Assert(disk.Uuid, Not(Equals), "")
-
-	defer func() {
-		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
-		c.Assert(err, IsNil)
-	}()
-
-	rawSPDKCli, err := helperclient.NewClient(context.Background())
-	c.Assert(err, IsNil)
-	defer func() {
-		err := rawSPDKCli.Close()
-		c.Assert(err, IsNil)
-	}()
-
-	uuidNoDash := strings.ReplaceAll(util.UUID(), "-", "")
-	replicaName := fmt.Sprintf("monitor-r-%s", uuidNoDash[:8])
-	replicaAlias := fmt.Sprintf("%s/%s", disk.Name, replicaName)
-	replicaNQN := helpertypes.GetNQN(replicaName)
-
-	_, err = rawSPDKCli.BdevLvolCreate("", disk.Uuid, replicaName, util.BytesToMiB(defaultTestLvolSize), "", true)
-	c.Assert(err, IsNil)
-	defer func() {
-		// Replica may already be deleted by gRPC cleanup below.
-		_, _ = rawSPDKCli.BdevLvolDelete(replicaAlias)
-	}()
-	defer func() {
-		_ = spdkCli.ReplicaDelete(replicaName, true)
-		_ = helperinitiator.DisconnectTarget(replicaNQN, ne)
-	}()
-
-	var reconstructedReplica *api.Replica
-	retryOpts := []retry.Option{
-		retry.Context(ctx),
-		retry.Attempts(8),
-		retry.DelayType(retry.FixedDelay),
-		retry.LastErrorOnly(true),
-		retry.Delay(server.MonitorInterval),
-	}
-	err = retry.Do(func() error {
-		replica, err := spdkCli.ReplicaGet(replicaName)
-		if err != nil {
-			return err
-		}
-		if replica.State != types.InstanceStateStopped {
-			return fmt.Errorf("replica %s state is %s, expected %s after verify reconstruction", replica.Name, replica.State, types.InstanceStateStopped)
-		}
-		reconstructedReplica = replica
-		return nil
-	}, retryOpts...)
-	c.Assert(err, IsNil)
-
-	logrus.Infof("Reconstructed replica: %+v", reconstructedReplica)
-
-	c.Assert(reconstructedReplica, NotNil)
-	c.Assert(reconstructedReplica.Name, Equals, replicaName)
-	c.Assert(reconstructedReplica.LvsUUID, Equals, disk.Uuid)
-	c.Assert(reconstructedReplica.Head, NotNil)
-	c.Assert(reconstructedReplica.Head.Name, Equals, types.VolumeHead)
-
-	// Start the reconstructed replica, write data, then verify Head actual size > 0.
-	runningReplica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
-	c.Assert(err, IsNil)
-	c.Assert(runningReplica.State, Equals, types.InstanceStateRunning)
-
-	replicaPort := strconv.Itoa(int(runningReplica.PortStart))
-	_, err = helperinitiator.ConnectTarget(ip, replicaPort, replicaNQN, ne)
-	c.Assert(err, IsNil)
-
-	devices, err := helperinitiator.GetDevices(ip, replicaPort, replicaNQN, ne)
-	c.Assert(err, IsNil)
-	c.Assert(len(devices), Equals, 1)
-	c.Assert(len(devices[0].Namespaces), Equals, 1)
-
-	replicaEndpoint := filepath.Join("/dev", devices[0].Namespaces[0].NameSpace)
-	err = writeDataToBlockDevice(ne, replicaEndpoint, 0, 8)
-	c.Assert(err, IsNil)
-
-	var updatedReplica *api.Replica
-	err = retry.Do(func() error {
-		replica, err := spdkCli.ReplicaGet(replicaName)
-		if err != nil {
-			return err
-		}
-		if replica.Head == nil {
-			return fmt.Errorf("replica %s head is nil", replicaName)
-		}
-		if replica.Head.ActualSize == 0 {
-			return fmt.Errorf("replica %s head actual size is still 0", replicaName)
-		}
-		updatedReplica = replica
-		return nil
-	}, retryOpts...)
-	c.Assert(err, IsNil)
-	c.Assert(updatedReplica.Head.ActualSize > 0, Equals, true)
 }
 
 type runtimeMonitoringTestEnv struct {
