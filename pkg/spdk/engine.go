@@ -482,6 +482,13 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *co
 		}
 	}
 
+	if e.NvmeTcpTarget != nil {
+		e.NvmeTcpTarget.Nqn = ""
+		e.NvmeTcpTarget.Nguid = ""
+		e.NvmeTcpTarget.IP = ""
+		// Port is released by releasePorts below.
+	}
+
 	// Release the ports if they are allocated
 	if err := e.releasePorts(superiorPortAllocator); err != nil {
 		return err
