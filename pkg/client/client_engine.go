@@ -13,6 +13,7 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 )
 
+// EngineCreate creates and starts an engine instance with the requested replicas.
 func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool) (*api.Engine, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to start engine: missing required parameter name")
@@ -44,6 +45,7 @@ func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize ui
 	return api.ProtoEngineToEngine(resp), nil
 }
 
+// EngineDelete deletes an engine instance by name.
 func (c *SPDKClient) EngineDelete(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to delete engine: missing required parameter")
@@ -59,6 +61,7 @@ func (c *SPDKClient) EngineDelete(name string) error {
 	return errors.Wrapf(err, "failed to delete engine %v", name)
 }
 
+// EngineGet returns the current state of an engine.
 func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to get engine: missing required parameter")
@@ -77,6 +80,7 @@ func (c *SPDKClient) EngineGet(name string) (*api.Engine, error) {
 	return api.ProtoEngineToEngine(resp), nil
 }
 
+// EngineDeleteTarget deletes the exported target for an engine without deleting the engine object itself.
 func (c *SPDKClient) EngineDeleteTarget(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to delete target for engine: missing required parameter")
@@ -95,6 +99,7 @@ func (c *SPDKClient) EngineDeleteTarget(name string) error {
 	return nil
 }
 
+// EngineList returns all engines known to the SPDK service.
 func (c *SPDKClient) EngineList() (map[string]*api.Engine, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -112,6 +117,7 @@ func (c *SPDKClient) EngineList() (map[string]*api.Engine, error) {
 	return res, nil
 }
 
+// EngineWatch opens a watch stream for engine change events.
 func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error) {
 	client := c.getSPDKServiceClient()
 	stream, err := client.EngineWatch(ctx, &emptypb.Empty{})
@@ -122,6 +128,7 @@ func (c *SPDKClient) EngineWatch(ctx context.Context) (*api.EngineStream, error)
 	return api.NewEngineStream(stream), nil
 }
 
+// EngineExpand requests an online expansion of the specified engine.
 func (c *SPDKClient) EngineExpand(ctx context.Context, name string, size uint64) error {
 	if name == "" {
 		return fmt.Errorf("failed to expand engine: missing required parameter")
@@ -141,6 +148,7 @@ func (c *SPDKClient) EngineExpand(ctx context.Context, name string, size uint64)
 	return nil
 }
 
+// EngineExpandPrecheck validates whether the specified engine can be expanded to the requested size.
 func (c *SPDKClient) EngineExpandPrecheck(ctx context.Context, name string, size uint64) error {
 	if name == "" {
 		return fmt.Errorf("failed to expand engine precheck: missing required parameter")
@@ -160,6 +168,7 @@ func (c *SPDKClient) EngineExpandPrecheck(ctx context.Context, name string, size
 	return nil
 }
 
+// EngineSnapshotCreate creates a snapshot directly on the engine.
 func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("failed to create engine snapshot: missing required parameter name")
@@ -179,6 +188,7 @@ func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) (string, er
 	return resp.SnapshotName, nil
 }
 
+// EngineSnapshotDelete deletes a snapshot directly from the engine.
 func (c *SPDKClient) EngineSnapshotDelete(name, snapshotName string) error {
 	if name == "" || snapshotName == "" {
 		return fmt.Errorf("failed to delete engine snapshot: missing required parameter name or snapshotName")
@@ -195,6 +205,7 @@ func (c *SPDKClient) EngineSnapshotDelete(name, snapshotName string) error {
 	return errors.Wrapf(err, "failed to delete engine %s snapshot %s", name, snapshotName)
 }
 
+// EngineSnapshotRevert reverts an engine directly to the specified snapshot.
 func (c *SPDKClient) EngineSnapshotRevert(name, snapshotName string) error {
 	if name == "" || snapshotName == "" {
 		return fmt.Errorf("failed to revert engine snapshot: missing required parameter name or snapshotName")
@@ -211,6 +222,7 @@ func (c *SPDKClient) EngineSnapshotRevert(name, snapshotName string) error {
 	return errors.Wrapf(err, "failed to revert engine %s snapshot %s", name, snapshotName)
 }
 
+// EngineSnapshotPurge purges purgeable snapshots directly on the engine.
 func (c *SPDKClient) EngineSnapshotPurge(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to purge engine: missing required parameter name")
@@ -226,6 +238,7 @@ func (c *SPDKClient) EngineSnapshotPurge(name string) error {
 	return errors.Wrapf(err, "failed to purge engine %s", name)
 }
 
+// EngineSnapshotHash starts or re-runs checksum generation for an engine snapshot.
 func (c *SPDKClient) EngineSnapshotHash(name, snapshotName string, rehash bool) error {
 	if name == "" || snapshotName == "" {
 		return fmt.Errorf("failed to hash engine snapshot: missing required parameter name or snapshotName")
@@ -243,6 +256,7 @@ func (c *SPDKClient) EngineSnapshotHash(name, snapshotName string, rehash bool) 
 	return errors.Wrapf(err, "failed to hash engine %s snapshot %s", name, snapshotName)
 }
 
+// EngineSnapshotHashStatus returns the current checksum status for an engine snapshot.
 func (c *SPDKClient) EngineSnapshotHashStatus(name, snapshotName string) (response *spdkrpc.EngineSnapshotHashStatusResponse, err error) {
 	if name == "" || snapshotName == "" {
 		return nil, fmt.Errorf("failed to check hash status for engine snapshot: missing required parameter name or snapshotName")
@@ -258,6 +272,7 @@ func (c *SPDKClient) EngineSnapshotHashStatus(name, snapshotName string) (respon
 	})
 }
 
+// EngineSnapshotClone clones a snapshot from a source engine into the target engine.
 func (c *SPDKClient) EngineSnapshotClone(name, snapshotName, srcEngineName, srcEngineAddress string, cloneMode spdkrpc.CloneMode) error {
 	if err := util.VerifyParams(
 		util.Param{Name: "name", Value: name},
@@ -312,6 +327,7 @@ func (c *SPDKClient) EngineReplicaAdd(engineName, replicaName, replicaAddress st
 	return errors.Wrapf(err, "failed to add replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
 }
 
+// EngineReplicaList returns the replicas currently attached to an engine.
 func (c *SPDKClient) EngineReplicaList(engineName string) (map[string]*api.Replica, error) {
 	if engineName == "" {
 		return nil, fmt.Errorf("failed to list replica for engine: missing required parameter engineName")
@@ -334,6 +350,7 @@ func (c *SPDKClient) EngineReplicaList(engineName string) (map[string]*api.Repli
 	return res, nil
 }
 
+// EngineReplicaDelete detaches a replica from an engine.
 func (c *SPDKClient) EngineReplicaDelete(engineName, replicaName, replicaAddress string) error {
 	if engineName == "" {
 		return fmt.Errorf("failed to delete replica from engine: missing required parameter engineName")
@@ -354,6 +371,7 @@ func (c *SPDKClient) EngineReplicaDelete(engineName, replicaName, replicaAddress
 	return errors.Wrapf(err, "failed to delete replica %s with address %s to engine %s", replicaName, replicaAddress, engineName)
 }
 
+// EngineBackupCreate starts a backup from the specified engine snapshot.
 func (c *SPDKClient) EngineBackupCreate(req *BackupCreateRequest) (*spdkrpc.BackupCreateResponse, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -375,6 +393,7 @@ func (c *SPDKClient) EngineBackupCreate(req *BackupCreateRequest) (*spdkrpc.Back
 	})
 }
 
+// EngineBackupStatus returns the status of an engine backup.
 func (c *SPDKClient) EngineBackupStatus(backupName, engineName, replicaAddress string) (*spdkrpc.BackupStatusResponse, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -387,6 +406,7 @@ func (c *SPDKClient) EngineBackupStatus(backupName, engineName, replicaAddress s
 	})
 }
 
+// EngineBackupRestore restores backup data into an engine.
 func (c *SPDKClient) EngineBackupRestore(req *BackupRestoreRequest) error {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -416,6 +436,7 @@ func (c *SPDKClient) EngineBackupRestore(req *BackupRestoreRequest) error {
 	return taskErr
 }
 
+// EngineRestoreStatus returns the current restore status for an engine.
 func (c *SPDKClient) EngineRestoreStatus(engineName string) (*spdkrpc.RestoreStatusResponse, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)

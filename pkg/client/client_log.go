@@ -10,6 +10,7 @@ import (
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 )
 
+// LogSetLevel sets the server log level.
 func (c *SPDKClient) LogSetLevel(level string) error {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -21,6 +22,7 @@ func (c *SPDKClient) LogSetLevel(level string) error {
 	return err
 }
 
+// LogSetFlags enables the specified server log flags.
 func (c *SPDKClient) LogSetFlags(flags string) error {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -32,6 +34,7 @@ func (c *SPDKClient) LogSetFlags(flags string) error {
 	return err
 }
 
+// LogGetLevel returns the current server log level.
 func (c *SPDKClient) LogGetLevel() (string, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -44,6 +47,7 @@ func (c *SPDKClient) LogGetLevel() (string, error) {
 	return resp.Level, nil
 }
 
+// LogGetFlags returns the currently enabled server log flags.
 func (c *SPDKClient) LogGetFlags() (string, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -56,6 +60,7 @@ func (c *SPDKClient) LogGetFlags() (string, error) {
 	return resp.Flags, nil
 }
 
+// MetricsGet returns metrics for the specified object.
 func (c *SPDKClient) MetricsGet(name string) (*spdkrpc.Metrics, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to get engine metrics: missing required parameter")

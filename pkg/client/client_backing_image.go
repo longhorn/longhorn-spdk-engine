@@ -12,6 +12,7 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 )
 
+// BackingImageCreate creates a backing image in the specified lvstore.
 func (c *SPDKClient) BackingImageCreate(name, backingImageUUID, lvsUUID string, size uint64, checksum string, fromAddress string, srcLvsUUID string) (*api.BackingImage, error) {
 	if name == "" || backingImageUUID == "" || checksum == "" || lvsUUID == "" || size == 0 {
 		return nil, fmt.Errorf("failed to start SPDK backing image: missing required parameters")
@@ -35,6 +36,7 @@ func (c *SPDKClient) BackingImageCreate(name, backingImageUUID, lvsUUID string, 
 	return api.ProtoBackingImageToBackingImage(resp), nil
 }
 
+// BackingImageDelete deletes a backing image from the specified lvstore.
 func (c *SPDKClient) BackingImageDelete(name, lvsUUID string) error {
 	if name == "" || lvsUUID == "" {
 		return fmt.Errorf("failed to delete SPDK backingImage: missing required parameter")
@@ -51,6 +53,7 @@ func (c *SPDKClient) BackingImageDelete(name, lvsUUID string) error {
 	return errors.Wrapf(err, "failed to delete SPDK backing image %v", name)
 }
 
+// BackingImageGet returns the current state of a backing image.
 func (c *SPDKClient) BackingImageGet(name, lvsUUID string) (*api.BackingImage, error) {
 	if name == "" || lvsUUID == "" {
 		return nil, fmt.Errorf("failed to get SPDK BackingImage: missing required parameter")
@@ -70,6 +73,7 @@ func (c *SPDKClient) BackingImageGet(name, lvsUUID string) (*api.BackingImage, e
 	return api.ProtoBackingImageToBackingImage(resp), nil
 }
 
+// BackingImageList returns all backing images known to the SPDK service.
 func (c *SPDKClient) BackingImageList() (map[string]*api.BackingImage, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -87,6 +91,7 @@ func (c *SPDKClient) BackingImageList() (map[string]*api.BackingImage, error) {
 	return res, nil
 }
 
+// BackingImageWatch opens a watch stream for backing image change events.
 func (c *SPDKClient) BackingImageWatch(ctx context.Context) (*api.BackingImageStream, error) {
 	client := c.getSPDKServiceClient()
 	stream, err := client.BackingImageWatch(ctx, &emptypb.Empty{})
@@ -97,6 +102,7 @@ func (c *SPDKClient) BackingImageWatch(ctx context.Context) (*api.BackingImageSt
 	return api.NewBackingImageStream(stream), nil
 }
 
+// BackingImageExpose exposes a backing image as a snapshot lvol and returns its address.
 func (c *SPDKClient) BackingImageExpose(name, lvsUUID string) (exposedSnapshotLvolAddress string, err error) {
 	if name == "" || lvsUUID == "" {
 		return "", fmt.Errorf("failed to expose SPDK backing image: missing required parameter")
@@ -116,6 +122,7 @@ func (c *SPDKClient) BackingImageExpose(name, lvsUUID string) (exposedSnapshotLv
 	return resp.ExposedSnapshotLvolAddress, nil
 }
 
+// BackingImageUnexpose stops exposing a backing image in the specified lvstore.
 func (c *SPDKClient) BackingImageUnexpose(name, lvsUUID string) error {
 	if name == "" || lvsUUID == "" {
 		return fmt.Errorf("failed to unexpose SPDK backing image: missing required parameter")

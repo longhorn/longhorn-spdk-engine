@@ -13,6 +13,7 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 )
 
+// ReplicaCreate creates and starts a replica in the specified lvstore.
 func (c *SPDKClient) ReplicaCreate(name, lvsName, lvsUUID string, specSize uint64, portCount int32, backingImageName string) (*api.Replica, error) {
 	if name == "" || lvsName == "" || lvsUUID == "" {
 		return nil, fmt.Errorf("failed to start SPDK replica: missing required parameters")
@@ -37,6 +38,7 @@ func (c *SPDKClient) ReplicaCreate(name, lvsName, lvsUUID string, specSize uint6
 	return api.ProtoReplicaToReplica(resp), nil
 }
 
+// ReplicaDelete deletes a replica, optionally cleaning up related SPDK resources.
 func (c *SPDKClient) ReplicaDelete(name string, cleanupRequired bool) error {
 	if name == "" {
 		return fmt.Errorf("failed to delete SPDK replica: missing required parameter")
@@ -53,6 +55,7 @@ func (c *SPDKClient) ReplicaDelete(name string, cleanupRequired bool) error {
 	return errors.Wrapf(err, "failed to delete SPDK replica %v", name)
 }
 
+// ReplicaGet returns the current state of a replica.
 func (c *SPDKClient) ReplicaGet(name string) (*api.Replica, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to get SPDK replica: missing required parameter")
@@ -71,6 +74,7 @@ func (c *SPDKClient) ReplicaGet(name string) (*api.Replica, error) {
 	return api.ProtoReplicaToReplica(resp), nil
 }
 
+// ReplicaExpand requests an online expansion of the specified replica.
 func (c *SPDKClient) ReplicaExpand(name string, size uint64) error {
 	if name == "" {
 		return fmt.Errorf("failed to expand replica: missing required parameter")
@@ -87,6 +91,7 @@ func (c *SPDKClient) ReplicaExpand(name string, size uint64) error {
 	return errors.Wrapf(err, "failed to expand replica %v", name)
 }
 
+// ReplicaList returns all replicas known to the SPDK service.
 func (c *SPDKClient) ReplicaList() (map[string]*api.Replica, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -104,6 +109,7 @@ func (c *SPDKClient) ReplicaList() (map[string]*api.Replica, error) {
 	return res, nil
 }
 
+// ReplicaWatch opens a watch stream for replica change events.
 func (c *SPDKClient) ReplicaWatch(ctx context.Context) (*api.ReplicaStream, error) {
 	client := c.getSPDKServiceClient()
 	stream, err := client.ReplicaWatch(ctx, &emptypb.Empty{})
@@ -114,6 +120,7 @@ func (c *SPDKClient) ReplicaWatch(ctx context.Context) (*api.ReplicaStream, erro
 	return api.NewReplicaStream(stream), nil
 }
 
+// ReplicaSnapshotCreate creates a snapshot directly on a replica.
 func (c *SPDKClient) ReplicaSnapshotCreate(name, snapshotName string, opts *api.SnapshotOptions) error {
 	if name == "" || snapshotName == "" || opts == nil {
 		return fmt.Errorf("failed to create SPDK replica snapshot: missing required parameter name, snapshot name or opts")
@@ -135,6 +142,7 @@ func (c *SPDKClient) ReplicaSnapshotCreate(name, snapshotName string, opts *api.
 	return errors.Wrapf(err, "failed to create SPDK replica %s snapshot %s", name, snapshotName)
 }
 
+// ReplicaSnapshotDelete deletes a snapshot directly from a replica.
 func (c *SPDKClient) ReplicaSnapshotDelete(name, snapshotName string) error {
 	if name == "" || snapshotName == "" {
 		return fmt.Errorf("failed to delete SPDK replica snapshot: missing required parameter name or snapshot name")
@@ -151,6 +159,7 @@ func (c *SPDKClient) ReplicaSnapshotDelete(name, snapshotName string) error {
 	return errors.Wrapf(err, "failed to delete SPDK replica %s snapshot %s", name, snapshotName)
 }
 
+// ReplicaSnapshotRevert reverts a replica directly to the specified snapshot.
 func (c *SPDKClient) ReplicaSnapshotRevert(name, snapshotName string) error {
 	if name == "" || snapshotName == "" {
 		return fmt.Errorf("failed to revert SPDK replica snapshot: missing required parameter name or snapshot name")
@@ -167,6 +176,7 @@ func (c *SPDKClient) ReplicaSnapshotRevert(name, snapshotName string) error {
 	return errors.Wrapf(err, "failed to revert SPDK replica %s snapshot %s", name, snapshotName)
 }
 
+// ReplicaSnapshotPurge purges purgeable snapshots directly on a replica.
 func (c *SPDKClient) ReplicaSnapshotPurge(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to purge SPDK replica: missing required parameter name")
@@ -182,6 +192,7 @@ func (c *SPDKClient) ReplicaSnapshotPurge(name string) error {
 	return errors.Wrapf(err, "failed to purge SPDK replica %s", name)
 }
 
+// ReplicaSnapshotHash starts or re-runs checksum generation for a replica snapshot.
 func (c *SPDKClient) ReplicaSnapshotHash(name, snapshotName string, rehash bool) error {
 	if name == "" || snapshotName == "" {
 		return fmt.Errorf("failed to hash SPDK replica snapshot: missing required parameter name or snapshot name")
@@ -199,6 +210,7 @@ func (c *SPDKClient) ReplicaSnapshotHash(name, snapshotName string, rehash bool)
 	return errors.Wrapf(err, "failed to hash SPDK replica %s snapshot %s", name, snapshotName)
 }
 
+// ReplicaSnapshotHashStatus returns the current checksum status for a replica snapshot.
 func (c *SPDKClient) ReplicaSnapshotHashStatus(name, snapshotName string) (*spdkrpc.ReplicaSnapshotHashStatusResponse, error) {
 	if name == "" || snapshotName == "" {
 		return nil, fmt.Errorf("failed to check hash status for SPDK replica snapshot: missing required parameter name or snapshot name")
@@ -214,6 +226,7 @@ func (c *SPDKClient) ReplicaSnapshotHashStatus(name, snapshotName string) (*spdk
 	})
 }
 
+// ReplicaSnapshotCloneDstStart starts snapshot clone preparation on the destination replica.
 func (c *SPDKClient) ReplicaSnapshotCloneDstStart(name, snapshotName, srcReplicaName, srcReplicaAddress string, cloneMode spdkrpc.CloneMode) (err error) {
 	defer func() {
 		err = errors.Wrapf(err, "failed to do ReplicaSnapshotCloneDstStart: replica: %v, snapshot: %v", name, snapshotName)
@@ -241,6 +254,7 @@ func (c *SPDKClient) ReplicaSnapshotCloneDstStart(name, snapshotName, srcReplica
 	return err
 }
 
+// ReplicaSnapshotCloneDstStatusCheck returns snapshot clone progress on the destination replica.
 func (c *SPDKClient) ReplicaSnapshotCloneDstStatusCheck(name string) (resp *api.ReplicaSnapshotCloneDstStatus, err error) {
 	defer func() {
 		err = errors.Wrapf(err, "failed to do ReplicaSnapshotCloneDstStatusCheck: replica name %v", name)
@@ -264,6 +278,7 @@ func (c *SPDKClient) ReplicaSnapshotCloneDstStatusCheck(name string) (resp *api.
 	return api.ProtoReplicaSnapshotCloneDstStatusCheckResponseToSnapshotCloneDstStatus(rpcResp), nil
 }
 
+// ReplicaSnapshotCloneSrcStart starts snapshot clone work on the source replica.
 func (c *SPDKClient) ReplicaSnapshotCloneSrcStart(name, snapshotName, dstReplicaName, dstCloningLvolAddress string, mode spdkrpc.CloneMode) (err error) {
 	defer func() {
 		err = errors.Wrapf(err, "failed to do ReplicaSnapshotCloneSrcStart. Replica name: %v, snapshot name: %v", name, snapshotName)
@@ -290,6 +305,7 @@ func (c *SPDKClient) ReplicaSnapshotCloneSrcStart(name, snapshotName, dstReplica
 	return err
 }
 
+// ReplicaSnapshotCloneSrcStatusCheck returns snapshot clone progress on the source replica.
 func (c *SPDKClient) ReplicaSnapshotCloneSrcStatusCheck(name, snapshotName, dstReplicaName string) (resp *api.ReplicaSnapshotCloneSrcStatus, err error) {
 	defer func() {
 		err = errors.Wrapf(err, "failed to do ReplicaSnapshotCloneSrcStatusCheck. Replica name: %v, snapshot name: %v", name, snapshotName)
@@ -317,6 +333,7 @@ func (c *SPDKClient) ReplicaSnapshotCloneSrcStatusCheck(name, snapshotName, dstR
 	return api.ProtoReplicaSnapshotCloneSrcStatusCheckResponseToSnapshotCloneSrcStatus(rpcResp), nil
 }
 
+// ReplicaSnapshotCloneSrcFinish finalizes source-side snapshot clone state and cleans up clone metadata.
 func (c *SPDKClient) ReplicaSnapshotCloneSrcFinish(name, dstReplicaName string) (err error) {
 	defer func() {
 		err = errors.Wrapf(err, "failed to do ReplicaSnapshotCloneSrcFinish. replica: %v, src replica: %v", dstReplicaName, name)
@@ -339,6 +356,7 @@ func (c *SPDKClient) ReplicaSnapshotCloneSrcFinish(name, dstReplicaName string) 
 	return err
 }
 
+// ReplicaSnapshotRangeHashGet returns range hashes for the specified clusters of a replica snapshot.
 func (c *SPDKClient) ReplicaSnapshotRangeHashGet(name, snapshotName string, clusterStartIndex, clusterCount uint64) (*spdkrpc.ReplicaSnapshotRangeHashGetResponse, error) {
 	if name == "" || snapshotName == "" {
 		return nil, fmt.Errorf("failed to get range hash for SPDK replica snapshot: missing required parameter name or snapshot name")
@@ -386,8 +404,8 @@ func (c *SPDKClient) ReplicaRebuildingSrcStart(srcReplicaName, dstReplicaName, d
 	return resp.ExposedSnapshotLvolAddress, nil
 }
 
-// ReplicaRebuildingSrcFinish asks the source replica to stop exposing the parent snapshot of the head (if necessary) and clean up the dst replica related cache
-// It's not responsible for detaching rebuilding lvol of the dst replica
+// ReplicaRebuildingSrcFinish asks the source replica to stop exposing the parent snapshot of the head, if needed,
+// and to clean up destination-replica rebuild state. It does not detach the destination rebuilding lvol.
 func (c *SPDKClient) ReplicaRebuildingSrcFinish(srcReplicaName, dstReplicaName string) error {
 	if srcReplicaName == "" {
 		return fmt.Errorf("failed to finish replica rebuilding src: missing required parameter src replica name")
@@ -407,7 +425,7 @@ func (c *SPDKClient) ReplicaRebuildingSrcFinish(srcReplicaName, dstReplicaName s
 	return errors.Wrapf(err, "failed to finish replica rebuilding src %s for rebuilding replica %s", srcReplicaName, dstReplicaName)
 }
 
-// ReplicaRebuildingSrcShallowCopyStart asks the src replica to start a shallow copy from its snapshot lvol to the dst rebuilding lvol.
+// ReplicaRebuildingSrcShallowCopyStart starts a shallow copy from the source snapshot lvol to the destination rebuilding lvol.
 func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyStart(srcReplicaName, snapshotName, dstRebuildingLvolAddress string) error {
 	if srcReplicaName == "" || snapshotName == "" {
 		return fmt.Errorf("failed to start rebuilding src replica shallow copy: missing required parameter replica name or snapshot name")
@@ -431,7 +449,7 @@ func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyStart(srcReplicaName, snapsh
 	return nil
 }
 
-// ReplicaRebuildingSrcRangeShallowCopyStart asks the src replica to start a range/delta shallow copy from the specified clusters of its snapshot lvol to the dst rebuilding lvol.
+// ReplicaRebuildingSrcRangeShallowCopyStart starts a delta shallow copy for the specified source clusters.
 func (c *SPDKClient) ReplicaRebuildingSrcRangeShallowCopyStart(srcReplicaName, snapshotName, dstRebuildingLvolAddress string, mismatchingClusterList []uint64) error {
 	if srcReplicaName == "" || snapshotName == "" {
 		return fmt.Errorf("failed to start rebuilding src replica range shallow copy: missing required parameter replica name or snapshot name")
@@ -459,7 +477,7 @@ func (c *SPDKClient) ReplicaRebuildingSrcRangeShallowCopyStart(srcReplicaName, s
 	return nil
 }
 
-// ReplicaRebuildingSrcShallowCopyCheck asks the src replica to check the shallow copy progress and status via the snapshot name
+// ReplicaRebuildingSrcShallowCopyCheck returns source-side shallow copy progress for a rebuilding snapshot.
 func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyCheck(srcReplicaName, dstReplicaName, snapshotName string) (state string, handledClusters, totalClusters uint64, errorMsg string, err error) {
 	if srcReplicaName == "" || dstReplicaName == "" {
 		return "", 0, 0, "", fmt.Errorf("failed to check rebuilding src replica shallow copy: missing required parameter src replica name or dst replica name")
@@ -483,9 +501,10 @@ func (c *SPDKClient) ReplicaRebuildingSrcShallowCopyCheck(srcReplicaName, dstRep
 	return resp.State, resp.HandledClusters, resp.TotalClusters, resp.ErrorMsg, nil
 }
 
-// ReplicaRebuildingDstStart asks the dst replica to create a new head lvol based on the external snapshot of the src replica and blindly expose it as a NVMf bdev.
-// It returns the new head lvol address <IP>:<Port>.
-// Notice that input `externalSnapshotAddress` is the alias of the src snapshot lvol if src and dst have on the same IP, otherwise it's the NVMf address of the src snapshot lvol.
+// ReplicaRebuildingDstStart prepares the destination replica for rebuilding from a source snapshot.
+// It creates a new head lvol, exposes it as needed, and returns the destination head lvol address.
+// The external snapshot address is a local alias when source and destination share the same host,
+// otherwise it is the exported NVMf address of the source snapshot lvol.
 func (c *SPDKClient) ReplicaRebuildingDstStart(replicaName, srcReplicaName, srcReplicaAddress, externalSnapshotName, externalSnapshotAddress string, rebuildingSnapshotList []*api.Lvol) (dstHeadLvolAddress string, err error) {
 	if replicaName == "" {
 		return "", fmt.Errorf("failed to start replica rebuilding dst: missing required parameter replica name")
@@ -519,8 +538,9 @@ func (c *SPDKClient) ReplicaRebuildingDstStart(replicaName, srcReplicaName, srcR
 	return resp.DstHeadLvolAddress, nil
 }
 
-// ReplicaRebuildingDstFinish asks the dst replica to reconstruct its snapshot tree and active chain, then detach that external src snapshot (if necessary).
-// The engine should guarantee that there is no IO during the parent switch.
+// ReplicaRebuildingDstFinish finalizes rebuild state on the destination replica.
+// It reconstructs the snapshot tree and active chain, then detaches the external source snapshot if needed.
+// The caller must guarantee that there is no I/O during the parent switch.
 func (c *SPDKClient) ReplicaRebuildingDstFinish(replicaName string) error {
 	if replicaName == "" {
 		return fmt.Errorf("failed to finish replica rebuilding dst: missing required parameter replica name")
@@ -536,6 +556,7 @@ func (c *SPDKClient) ReplicaRebuildingDstFinish(replicaName string) error {
 	return errors.Wrapf(err, "failed to finish replica rebuilding dst %s", replicaName)
 }
 
+// ReplicaRebuildingDstShallowCopyStart starts shallow copy work on the destination replica.
 func (c *SPDKClient) ReplicaRebuildingDstShallowCopyStart(dstReplicaName, snapshotName string, fastSync bool) error {
 	if dstReplicaName == "" {
 		return fmt.Errorf("failed to start rebuilding dst replica shallow copy: missing required parameter dst replica name")
@@ -556,6 +577,7 @@ func (c *SPDKClient) ReplicaRebuildingDstShallowCopyStart(dstReplicaName, snapsh
 	return errors.Wrapf(err, "failed to start rebuilding dst replica %v shallow copy snapshot %v", dstReplicaName, snapshotName)
 }
 
+// ReplicaRebuildingDstShallowCopyCheck returns destination-side shallow copy progress.
 func (c *SPDKClient) ReplicaRebuildingDstShallowCopyCheck(dstReplicaName string) (resp *api.ReplicaRebuildingStatus, err error) {
 	if dstReplicaName == "" {
 		return nil, fmt.Errorf("failed to check rebuilding dst replica shallow copy: missing required parameter dst replica name")
@@ -574,6 +596,7 @@ func (c *SPDKClient) ReplicaRebuildingDstShallowCopyCheck(dstReplicaName string)
 	return api.ProtoShallowCopyStatusToReplicaRebuildingStatus(dstReplicaName, c.serviceURL, rpcResp), nil
 }
 
+// ReplicaRebuildingDstSnapshotCreate creates a rebuilding snapshot on the destination replica.
 func (c *SPDKClient) ReplicaRebuildingDstSnapshotCreate(name, snapshotName string, opts *api.SnapshotOptions) error {
 	if name == "" || snapshotName == "" || opts == nil {
 		return fmt.Errorf("failed to create dst SPDK replica rebuilding snapshot: missing required parameter name, snapshot name or opts")
@@ -620,6 +643,7 @@ func (c *SPDKClient) ReplicaRebuildingDstSetQosLimit(replicaName string, qosLimi
 	return nil
 }
 
+// ReplicaBackupCreate starts a backup from the specified replica snapshot.
 func (c *SPDKClient) ReplicaBackupCreate(req *BackupCreateRequest) (*spdkrpc.BackupCreateResponse, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -642,6 +666,7 @@ func (c *SPDKClient) ReplicaBackupCreate(req *BackupCreateRequest) (*spdkrpc.Bac
 	})
 }
 
+// ReplicaBackupStatus returns the status of a replica backup.
 func (c *SPDKClient) ReplicaBackupStatus(backupName string) (*spdkrpc.BackupStatusResponse, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -652,6 +677,7 @@ func (c *SPDKClient) ReplicaBackupStatus(backupName string) (*spdkrpc.BackupStat
 	})
 }
 
+// ReplicaBackupRestore restores backup data into a replica.
 func (c *SPDKClient) ReplicaBackupRestore(req *BackupRestoreRequest) error {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -667,6 +693,7 @@ func (c *SPDKClient) ReplicaBackupRestore(req *BackupRestoreRequest) error {
 	return err
 }
 
+// ReplicaRestoreStatus returns the current restore status for a replica.
 func (c *SPDKClient) ReplicaRestoreStatus(replicaName string) (*spdkrpc.ReplicaRestoreStatusResponse, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)

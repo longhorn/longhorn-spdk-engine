@@ -7,8 +7,8 @@ import (
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 )
 
-// DiskCreate creates a disk with the given name and path.
-// diskUUID is optional, if not provided, it indicates the disk is newly added.
+// DiskCreate creates or registers a disk with the given identity and path.
+// diskUUID is optional; when empty, the disk is treated as newly added.
 func (c *SPDKClient) DiskCreate(diskName, diskUUID, diskPath, diskDriver string, blockSize int64) (*spdkrpc.Disk, error) {
 	if diskName == "" || diskPath == "" {
 		return nil, fmt.Errorf("failed to create disk: missing required parameters")
@@ -27,6 +27,7 @@ func (c *SPDKClient) DiskCreate(diskName, diskUUID, diskPath, diskDriver string,
 	})
 }
 
+// DiskGet returns disk information for the specified disk.
 func (c *SPDKClient) DiskGet(diskName, diskPath, diskDriver string) (*spdkrpc.Disk, error) {
 	if diskName == "" {
 		return nil, fmt.Errorf("failed to get disk info: missing required parameter")
@@ -43,6 +44,7 @@ func (c *SPDKClient) DiskGet(diskName, diskPath, diskDriver string) (*spdkrpc.Di
 	})
 }
 
+// DiskDelete removes a disk from the SPDK service.
 func (c *SPDKClient) DiskDelete(diskName, diskUUID, diskPath, diskDriver string) error {
 	if diskName == "" {
 		return fmt.Errorf("failed to delete disk: missing required parameter disk name")
@@ -61,7 +63,7 @@ func (c *SPDKClient) DiskDelete(diskName, diskUUID, diskPath, diskDriver string)
 	return err
 }
 
-// DiskHealthGet retrieves the health info for a specified disk.
+// DiskHealthGet returns health information for a disk.
 func (c *SPDKClient) DiskHealthGet(diskName, diskPath, diskDriver string) (*spdkrpc.DiskHealthGetResponse, error) {
 	if diskName == "" {
 		return nil, fmt.Errorf("failed to get disk health: missing required parameter 'disk name'")

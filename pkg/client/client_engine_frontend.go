@@ -13,7 +13,7 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
-// EngineFrontendCreate creates a new engine frontend.
+// EngineFrontendCreate creates and starts an engine frontend for an existing engine.
 func (c *SPDKClient) EngineFrontendCreate(name, volumeName, engineName, frontend string, specSize uint64, targetAddress string,
 	ublkQueueDepth, ublkNumberOfQueue int32) (*api.EngineFrontend, error) {
 	if name == "" {
@@ -52,7 +52,7 @@ func (c *SPDKClient) EngineFrontendCreate(name, volumeName, engineName, frontend
 	return api.ProtoEngineFrontendToEngineFrontend(resp), nil
 }
 
-// EngineFrontendDelete deletes an engine frontend.
+// EngineFrontendDelete deletes an engine frontend by name.
 func (c *SPDKClient) EngineFrontendDelete(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to delete engine frontend: missing required parameter name")
@@ -68,7 +68,7 @@ func (c *SPDKClient) EngineFrontendDelete(name string) error {
 	return errors.Wrapf(err, "failed to delete engine frontend %v", name)
 }
 
-// EngineFrontendList lists all engine frontends.
+// EngineFrontendList returns all engine frontends known to the SPDK service.
 func (c *SPDKClient) EngineFrontendList() (map[string]*api.EngineFrontend, error) {
 	client := c.getSPDKServiceClient()
 	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
@@ -86,7 +86,7 @@ func (c *SPDKClient) EngineFrontendList() (map[string]*api.EngineFrontend, error
 	return res, nil
 }
 
-// EngineFrontendWatch watches engine frontends.
+// EngineFrontendWatch opens a watch stream for engine frontend change events.
 func (c *SPDKClient) EngineFrontendWatch(ctx context.Context) (*api.EngineFrontendStream, error) {
 	client := c.getSPDKServiceClient()
 	stream, err := client.EngineFrontendWatch(ctx, &emptypb.Empty{})
@@ -97,6 +97,7 @@ func (c *SPDKClient) EngineFrontendWatch(ctx context.Context) (*api.EngineFronte
 	return api.NewEngineFrontendStream(stream), nil
 }
 
+// EngineFrontendGet returns the current state of an engine frontend.
 func (c *SPDKClient) EngineFrontendGet(name string) (*api.EngineFrontend, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to get engine frontend: missing required parameter")
@@ -115,6 +116,7 @@ func (c *SPDKClient) EngineFrontendGet(name string) (*api.EngineFrontend, error)
 	return api.ProtoEngineFrontendToEngineFrontend(resp), nil
 }
 
+// EngineFrontendSwitchOver repoints an engine frontend to a new engine target.
 func (c *SPDKClient) EngineFrontendSwitchOver(name, newEngineName, newTargetAddress string) error {
 	if name == "" {
 		return fmt.Errorf("failed to switch over target for engine frontend: missing required parameter name")
@@ -139,6 +141,7 @@ func (c *SPDKClient) EngineFrontendSwitchOver(name, newEngineName, newTargetAddr
 	return nil
 }
 
+// EngineFrontendSuspend suspends I/O on an engine frontend.
 func (c *SPDKClient) EngineFrontendSuspend(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to suspend engine frontend: missing required parameter")
@@ -157,6 +160,7 @@ func (c *SPDKClient) EngineFrontendSuspend(name string) error {
 	return nil
 }
 
+// EngineFrontendResume resumes I/O on a suspended engine frontend.
 func (c *SPDKClient) EngineFrontendResume(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to resume engine frontend: missing required parameter")
@@ -175,6 +179,8 @@ func (c *SPDKClient) EngineFrontendResume(name string) error {
 	return nil
 }
 
+// EngineFrontendExpand expands an engine frontend and orchestrates the underlying engine expansion.
+// The EngineExpand path is for internal orchestration; external callers should use EngineFrontendExpand.
 func (c *SPDKClient) EngineFrontendExpand(ctx context.Context, name string, size uint64) error {
 	if name == "" {
 		return fmt.Errorf("failed to expand engine frontend: missing required parameter")
@@ -194,7 +200,8 @@ func (c *SPDKClient) EngineFrontendExpand(ctx context.Context, name string, size
 	return nil
 }
 
-// EngineFrontendSnapshotCreate creates a snapshot for an engine frontend.
+// EngineFrontendSnapshotCreate creates a snapshot through the engine frontend path.
+// The EngineSnapshotCreate path is for internal orchestration; external callers should use EngineFrontendSnapshotCreate.
 func (c *SPDKClient) EngineFrontendSnapshotCreate(name, snapshotName string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("failed to create snapshot: missing required parameter name")
@@ -214,6 +221,8 @@ func (c *SPDKClient) EngineFrontendSnapshotCreate(name, snapshotName string) (st
 	return resp.SnapshotName, nil
 }
 
+// EngineFrontendSnapshotDelete deletes a snapshot through the engine frontend path.
+// The EngineSnapshotDelete path is for internal orchestration; external callers should use EngineFrontendSnapshotDelete.
 func (c *SPDKClient) EngineFrontendSnapshotDelete(name, snapshotName string) error {
 	if name == "" || snapshotName == "" {
 		return fmt.Errorf("failed to delete engine frontend snapshot: missing required parameter name or snapshot name")
@@ -230,6 +239,7 @@ func (c *SPDKClient) EngineFrontendSnapshotDelete(name, snapshotName string) err
 	return errors.Wrapf(err, "failed to delete engine frontend %s snapshot %s", name, snapshotName)
 }
 
+// EngineFrontendSnapshotRevert reverts an engine frontend to the specified snapshot.
 func (c *SPDKClient) EngineFrontendSnapshotRevert(name, snapshotName string) error {
 	if name == "" || snapshotName == "" {
 		return fmt.Errorf("failed to revert engine frontend snapshot: missing required parameter name or snapshot name")
@@ -246,6 +256,8 @@ func (c *SPDKClient) EngineFrontendSnapshotRevert(name, snapshotName string) err
 	return errors.Wrapf(err, "failed to revert engine frontend %s snapshot %s", name, snapshotName)
 }
 
+// EngineFrontendSnapshotPurge purges snapshots through the engine frontend path.
+// The EngineSnapshotPurge path is for internal orchestration; external callers should use EngineFrontendSnapshotPurge.
 func (c *SPDKClient) EngineFrontendSnapshotPurge(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to purge engine frontend: missing required parameter name")
@@ -261,9 +273,8 @@ func (c *SPDKClient) EngineFrontendSnapshotPurge(name string) error {
 	return errors.Wrapf(err, "failed to purge engine frontend %s", name)
 }
 
-// EngineFrontendReplicaAdd asks the EngineFrontend to add a replica.
-// Callers should invoke this method to
-// initiate the replica-add flow.
+// EngineFrontendReplicaAdd adds a replica through the engine frontend path.
+// The EngineReplicaAdd path is for internal orchestration; external callers should use EngineFrontendReplicaAdd.
 func (c *SPDKClient) EngineFrontendReplicaAdd(engineFrontendName, replicaName, replicaAddress string, fastSync bool) error {
 	if engineFrontendName == "" {
 		return fmt.Errorf("failed to add replica for engine frontend: missing required parameter engineFrontendName")
