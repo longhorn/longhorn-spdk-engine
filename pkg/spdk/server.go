@@ -936,13 +936,23 @@ func (s *Server) recoverEngineFrontends() {
 
 		if err := ef.RecoverFromHost(spdkClient); err != nil {
 			if errors.Is(err, ErrRecoverDeviceNotFound) {
-				s.Lock()
-				delete(s.engineFrontendMap, record.Name)
-				s.Unlock()
-				logrus.Warnf("Removed engine frontend %s from map: device not found on host", record.Name)
-				continue
+				logrus.Warnf("Removing engine frontend %s from map: device not found on host", record.Name)
+			} else {
+				logrus.WithError(err).Warnf("Removing engine frontend %s from map: recovery failed", record.Name)
 			}
-			logrus.WithError(err).Warnf("Failed to recover engine frontend %s from host, setting error state", record.Name)
+
+			// Properly shut down the frontend instance (close stopCh,
+			// clean up any partially-recovered initiator, remove the
+			// persisted record) before removing it from the map.
+			// This follows the same pattern as the race-loser cleanup
+			// in EngineFrontendCreate.
+			if deleteErr := ef.Delete(spdkClient); deleteErr != nil {
+				logrus.WithError(deleteErr).Warnf("Failed to clean up engine frontend %s during recovery removal", record.Name)
+			}
+
+			s.Lock()
+			delete(s.engineFrontendMap, record.Name)
+			s.Unlock()
 		}
 	}
 }
