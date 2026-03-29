@@ -1049,9 +1049,11 @@ func (ef *EngineFrontend) SwitchOverTarget(spdkClient *spdkclient.Client, newEng
 		}).Info("Switched over engine frontend target")
 
 		// Persist updated record AFTER successful switchover.
+		ef.RLock()
 		if err := saveEngineFrontendRecord(ef.metadataDir, ef); err != nil {
 			ef.log.WithError(err).Warn("Failed to persist engine frontend record after switchover")
 		}
+		ef.RUnlock()
 
 		return nil
 
@@ -1146,9 +1148,11 @@ func (ef *EngineFrontend) SwitchOverTarget(spdkClient *spdkclient.Client, newEng
 		}).Info("Switched over engine frontend target")
 
 		// Persist updated record AFTER successful switchover.
+		ef.RLock()
 		if err := saveEngineFrontendRecord(ef.metadataDir, ef); err != nil {
 			ef.log.WithError(err).Warn("Failed to persist engine frontend record after switchover")
 		}
+		ef.RUnlock()
 
 		return nil
 

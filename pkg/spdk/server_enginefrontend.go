@@ -285,10 +285,15 @@ func (s *Server) EngineFrontendCreate(ctx context.Context, req *spdkrpc.EngineFr
 		// The loser's Create() may have overwritten the winner's
 		// persistence record (both share the same volumeName key).
 		// Re-persist the winner to restore correct on-disk state.
+		// Hold the winner's read lock to prevent concurrent mutations
+		// (e.g. Delete, switchover) from racing with the field reads
+		// inside saveEngineFrontendRecord.
 		if winner != nil && winner.metadataDir != "" && ef.VolumeName == winner.VolumeName {
+			winner.RLock()
 			if err := saveEngineFrontendRecord(winner.metadataDir, winner); err != nil {
 				logrus.WithError(err).Warnf("Failed to re-persist winner engine frontend %v record after race", winner.Name)
 			}
+			winner.RUnlock()
 		}
 		if duplicateVolume {
 			return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "engine frontend already exists for volume %v", req.VolumeName)
