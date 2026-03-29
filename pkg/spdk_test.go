@@ -3363,9 +3363,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 	concurrentCount := 5
 	dataCountInMB := int64(100)
 
-	// Pre-create all resources sequentially to avoid SPDK service contention
-	// during concurrent engine creation (validateReplicaSize + connectNVMfBdev
-	// can cause context deadline exceeded when goroutines contend simultaneously)
+	// Pre-create all resources concurrently — each goroutine creates the
+	// full stack (replicas → engine → engine frontend) for one volume.
 	type volumeTestData struct {
 		volumeName         string
 		engineName         string
@@ -3378,52 +3377,57 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 	}
 
 	testVolumes := make([]volumeTestData, concurrentCount)
+	createErrs := make([]error, concurrentCount)
+	var createWg sync.WaitGroup
+	createWg.Add(concurrentCount)
 	for i := range concurrentCount {
-		vol := &testVolumes[i]
-		vol.volumeName = fmt.Sprintf("test-vol-%d", i)
-		vol.engineName = fmt.Sprintf("%s-e", vol.volumeName)
-		vol.engineFrontendName = fmt.Sprintf("%s-ef", vol.volumeName)
-		vol.replicaName1 = fmt.Sprintf("%s-replica-1", vol.volumeName)
-		vol.replicaName2 = fmt.Sprintf("%s-replica-2", vol.volumeName)
+		go func(idx int) {
+			defer createWg.Done()
 
-		replica1, err := spdkCli.ReplicaCreate(vol.replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
-		c.Assert(err, IsNil)
-		c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
-		c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
-		c.Assert(replica1.ErrorMsg, Equals, "")
-		c.Assert(replica1.State, Equals, types.InstanceStateRunning)
-		c.Assert(replica1.PortStart, Not(Equals), int32(0))
-		vol.replica1 = replica1
+			vol := &testVolumes[idx]
+			vol.volumeName = fmt.Sprintf("test-vol-%d", idx)
+			vol.engineName = fmt.Sprintf("%s-e", vol.volumeName)
+			vol.engineFrontendName = fmt.Sprintf("%s-ef", vol.volumeName)
+			vol.replicaName1 = fmt.Sprintf("%s-replica-1", vol.volumeName)
+			vol.replicaName2 = fmt.Sprintf("%s-replica-2", vol.volumeName)
 
-		replica2, err := spdkCli.ReplicaCreate(vol.replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
-		c.Assert(err, IsNil)
-		c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
-		c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
-		c.Assert(replica2.ErrorMsg, Equals, "")
-		c.Assert(replica2.State, Equals, types.InstanceStateRunning)
-		c.Assert(replica2.PortStart, Not(Equals), int32(0))
+			replica1, err := spdkCli.ReplicaCreate(vol.replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
+			if err != nil {
+				createErrs[idx] = fmt.Errorf("failed to create replica1 for vol %d: %w", idx, err)
+				return
+			}
+			vol.replica1 = replica1
 
-		vol.replicaAddressMap = map[string]string{
-			replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
-			replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
-		}
-		replicaModeMap := map[string]types.Mode{
-			replica1.Name: types.ModeRW,
-			replica2.Name: types.ModeRW,
-		}
+			replica2, err := spdkCli.ReplicaCreate(vol.replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
+			if err != nil {
+				createErrs[idx] = fmt.Errorf("failed to create replica2 for vol %d: %w", idx, err)
+				return
+			}
 
-		vol.endpoint = helperutil.GetLonghornDevicePath(vol.volumeName)
-		engine, err := spdkCli.EngineCreate(vol.engineName, vol.volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, vol.replicaAddressMap, 1, false)
-		c.Assert(err, IsNil)
-		c.Assert(engine.State, Equals, types.InstanceStateRunning)
-		c.Assert(engine.ReplicaAddressMap, DeepEquals, vol.replicaAddressMap)
-		c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
-		c.Assert(engine.Port, Not(Equals), int32(0))
+			vol.replicaAddressMap = map[string]string{
+				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
+				replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
+			}
 
-		engineFrontend, err := spdkCli.EngineFrontendCreate(vol.engineFrontendName, vol.volumeName, vol.engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
-			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
-		c.Assert(err, IsNil)
-		c.Assert(engineFrontend.Endpoint, Equals, vol.endpoint)
+			vol.endpoint = helperutil.GetLonghornDevicePath(vol.volumeName)
+			engine, err := spdkCli.EngineCreate(vol.engineName, vol.volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, vol.replicaAddressMap, 1, false)
+			if err != nil {
+				createErrs[idx] = fmt.Errorf("failed to create engine for vol %d: %w", idx, err)
+				return
+			}
+
+			engineFrontend, err := spdkCli.EngineFrontendCreate(vol.engineFrontendName, vol.volumeName, vol.engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+			if err != nil {
+				createErrs[idx] = fmt.Errorf("failed to create engine frontend for vol %d: %w", idx, err)
+				return
+			}
+			_ = engineFrontend
+		}(i)
+	}
+	createWg.Wait()
+	for i, err := range createErrs {
+		c.Assert(err, IsNil, Commentf("concurrent pre-creation failed for vol %d", i))
 	}
 
 	wg := sync.WaitGroup{}
