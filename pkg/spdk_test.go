@@ -4420,29 +4420,20 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
 	}, retry.Delay(1*time.Second), retry.Attempts(60))
 	c.Assert(err, IsNil)
 
-	// 9. Verify Data on Second Replica
-	// Connect to Replica 2 directly to verify data
-	replica2NQN := helpertypes.GetNQN(replicaNames[1])
-	replica2Port := strconv.Itoa(int(replica2.PortStart))
-
-	ne, err = helperutil.NewExecutor(commontypes.ProcDirectory)
+	// 9. Verify rebuilt replica works with the engine by removing replica 1
+	// Delete replica 1 from the engine so the engine runs solely on the rebuilt replica 2,
+	// then read data through the frontend endpoint to verify correctness end-to-end.
+	replica1Address := replicaAddressMap[replicaNames[0]]
+	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[0], replica1Address)
 	c.Assert(err, IsNil)
 
-	_, err = helperinitiator.ConnectTarget(ip, replica2Port, replica2NQN, ne)
+	err = spdkCli.ReplicaDelete(replicaNames[0], true)
 	c.Assert(err, IsNil)
-	defer func() {
-		_ = helperinitiator.DisconnectTarget(replica2NQN, ne)
-	}()
+	delete(replicas, replicaNames[0])
 
-	devices, err := helperinitiator.GetDevices(ip, replica2Port, replica2NQN, ne)
-	c.Assert(err, IsNil)
-	c.Assert(len(devices), Equals, 1)
-
-	replica2Endpoint := filepath.Join("/dev", devices[0].Namespaces[0].NameSpace)
-
-	// Read back and verify Data A and B
-	readAndVerifyBlockDevicePattern(c, replica2Endpoint, dataA, 0)
-	readAndVerifyBlockDevicePattern(c, replica2Endpoint, dataB, 4096)
+	// Read back and verify Data A and B through the engine frontend
+	readAndVerifyBlockDevicePattern(c, endpoint, dataA, 0)
+	readAndVerifyBlockDevicePattern(c, endpoint, dataB, 4096)
 }
 
 // TestSPDKEngineFrontendReplicaAddErrorHandling tests the error handling of replica addition.
