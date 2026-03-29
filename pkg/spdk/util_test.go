@@ -1,6 +1,7 @@
 package spdk
 
 import (
+	"fmt"
 	"testing"
 
 	. "gopkg.in/check.v1"
@@ -13,6 +14,8 @@ type TestSuite struct{}
 var _ = Suite(&TestSuite{})
 
 func (s *TestSuite) TestSplitHostPort(c *C) {
+	fmt.Println("Testing splitHostPort with various address formats")
+
 	type testCase struct {
 		address      string
 		expectedHost string
@@ -56,6 +59,8 @@ func (s *TestSuite) TestSplitHostPort(c *C) {
 }
 
 func (s *TestSuite) TestExtractBackingImageAndDiskUUID(c *C) {
+	fmt.Println("Testing ExtractBackingImageAndDiskUUID with various lvol name formats")
+
 	type testCase struct {
 		lvolName         string
 		expectedBIName   string

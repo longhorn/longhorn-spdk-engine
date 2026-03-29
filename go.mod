@@ -9,8 +9,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20260306105805-ea08687ca2cd
-	github.com/longhorn/go-common-libs v0.0.0-20260318015712-f76eda5ec3f6
-	github.com/longhorn/go-spdk-helper v0.5.0
+	github.com/longhorn/go-common-libs v0.0.0-20260323115845-a31a74cd171a
+	github.com/longhorn/go-spdk-helper v0.5.1-0.20260322130822-31f96676dd03
 	github.com/longhorn/types v0.0.0-20260304051809-1002ef5005c7
 	github.com/sirupsen/logrus v1.9.4
 	go.uber.org/multierr v1.11.0
@@ -79,3 +79,5 @@ require (
 	k8s.io/mount-utils v0.31.3 // indirect
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 // indirect
 )
+
+replace github.com/longhorn/types => ../longhorn-types

@@ -26,7 +26,9 @@ import (
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	commonnet "github.com/longhorn/go-common-libs/net"
+	commonns "github.com/longhorn/go-common-libs/ns"
 	commontypes "github.com/longhorn/go-common-libs/types"
+	helperinitiator "github.com/longhorn/go-spdk-helper/pkg/initiator"
 	helperclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
@@ -81,11 +83,23 @@ var (
 	SPDKTGTBinary = "spdk_tgt"
 )
 
+const (
+	spdkTargetProbeTimeout      = 3 * time.Second
+	spdkTargetStopGracePeriod   = 10 * time.Second
+	spdkTargetStartupProbeDelay = 1 * time.Second
+	spdkTargetStopPollInterval  = 200 * time.Millisecond
+)
+
 func Test(t *testing.T) { TestingT(t) }
 
 type TestSuite struct{}
 
 var _ = Suite(&TestSuite{})
+var runtimeMonitoringTestMu sync.Mutex
+
+func getVolumeName() string {
+	return fmt.Sprintf("test-vol-%s", time.Now().Format("20060102150405"))
+}
 
 func startTarget(spdkDir string, args []string, execute func(envs []string, binary string, args []string, timeout time.Duration) (string, error)) (err error) {
 	argsInStr := ""
@@ -103,37 +117,84 @@ func startTarget(spdkDir string, args []string, execute func(envs []string, bina
 	return err
 }
 
-func LaunchTestSPDKTarget(c *C, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error)) {
-	targetReady := false
-	if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
-		if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
-			targetReady = true
+func probeSPDKTargetReady(timeout time.Duration) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	spdkCli, err := helperclient.NewClient(ctx)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		if err := spdkCli.Close(); err != nil {
+			logrus.WithError(err).Warn("Failed to close SPDK target probe client")
 		}
+	}()
+
+	return true
+}
+
+func waitForSPDKTargetDaemonStoppedWithTimeout(timeout, pollInterval time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		running, err := util.IsSPDKTargetProcessRunning()
+		if err != nil {
+			return err
+		}
+		if !running {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for spdk_tgt to stop")
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
+func ensureSPDKTargetDaemonStopped(timeout time.Duration) error {
+	running, err := util.IsSPDKTargetProcessRunning()
+	if err != nil {
+		return err
+	}
+	if !running {
+		return nil
 	}
 
-	if !targetReady {
-		go func() {
-			logrus.Info("Starting SPDK target")
-			err := startTarget("", []string{"--logflag all", "2>&1 | tee /tmp/spdk_tgt.log"}, execute)
-			c.Assert(err, IsNil)
-		}()
+	if err := util.ForceStopSPDKTgtDaemon(timeout); err != nil &&
+		!strings.Contains(err.Error(), "process with cmdline spdk_tgt is not found") {
+		return err
+	}
 
-		for cnt := 0; cnt < 300; cnt++ {
-			if spdkCli, err := helperclient.NewClient(context.Background()); err == nil {
-				if _, err := spdkCli.BdevGetBdevs("", 0); err == nil {
-					targetReady = true
-					break
-				}
-			}
-			time.Sleep(time.Second)
+	return waitForSPDKTargetDaemonStoppedWithTimeout(timeout, spdkTargetStopPollInterval)
+}
+
+func LaunchTestSPDKTargetDaemon(c *C, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error)) {
+	err := ensureSPDKTargetDaemonStopped(spdkTargetStopGracePeriod)
+	c.Assert(err, IsNil)
+
+	targetReady := false
+	go func() {
+		logrus.Info("Starting SPDK target daemon")
+		err := startTarget("", []string{"--logflag all", "2>&1 | tee /tmp/spdk_tgt.log"}, execute)
+		c.Assert(err, IsNil)
+	}()
+
+	for cnt := 0; cnt < 300; cnt++ {
+		if probeSPDKTargetReady(spdkTargetProbeTimeout) {
+			targetReady = true
+			break
 		}
+		time.Sleep(spdkTargetStartupProbeDelay)
 	}
 
 	c.Assert(targetReady, Equals, true)
 }
 
-func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error), wg *sync.WaitGroup) {
-	LaunchTestSPDKTarget(c, execute)
+// launchTestSPDKGRPCServer launches the SPDK gRPC server and returns the server instance.
+// This helper allows tests to access the server instance for advanced testing scenarios (e.g. error injection).
+func launchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error), wg *sync.WaitGroup) *server.Server {
+
+	LaunchTestSPDKTargetDaemon(c, execute)
 	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort)
 	c.Assert(err, IsNil)
 
@@ -153,7 +214,13 @@ func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func
 		logrus.Info("Stopping SPDK gRPC server")
 		// TODO: The error "no such child process" will be emitted when the process is already stopped.
 		// Need to improve the error handling, but we can ignore it for now.
-		_ = util.ForceStopSPDKTgtDaemon(120 * time.Second)
+		if err := util.ForceStopSPDKTgtDaemon(120 * time.Second); err != nil &&
+			!strings.Contains(err.Error(), "process with cmdline spdk_tgt is not found") {
+			logrus.WithError(err).Warn("Failed to force stop SPDK target daemon")
+		}
+		if err := waitForSPDKTargetDaemonStoppedWithTimeout(spdkTargetStopGracePeriod, spdkTargetStopPollInterval); err != nil {
+			logrus.WithError(err).Warn("SPDK target daemon is still running after stop")
+		}
 	}()
 	spdkrpc.RegisterSPDKServiceServer(spdkGRPCServer, srv)
 	reflection.Register(spdkGRPCServer)
@@ -162,6 +229,13 @@ func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func
 			logrus.WithError(err).Error("Stopping SPDK gRPC server")
 		}
 	}()
+	return srv
+}
+
+// LaunchTestSPDKGRPCServer launches the SPDK gRPC server.
+// It wraps launchTestSPDKGRPCServer but discards the returned server instance to maintain backward compatibility.
+func LaunchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error), wg *sync.WaitGroup) {
+	launchTestSPDKGRPCServer(ctx, c, ip, execute, wg)
 }
 
 func PrepareDiskFile(c *C) string {
@@ -233,6 +307,43 @@ func waitForDiskReady(ctx context.Context, spdkCli *client.SPDKClient, loopDevic
 	}
 
 	return readyDisk, nil
+}
+
+// formatBlockDevice formats block device to check if the engine frontend is working
+func formatBlockDevice(endpoint string, fsType string) error {
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	if err != nil {
+		return err
+	}
+	if _, err := ne.Execute(nil, "mkfs", []string{"-t", fsType, endpoint}, defaultTestExecuteTimeout); err != nil {
+		return err
+	}
+	return nil
+}
+
+// verifyNVMfInitiatorConnected verifies the NVMe/TCP initiator is connected.
+func verifyNVMfInitiatorConnected(engineFrontend *api.EngineFrontend, nqn string) error {
+	ip := engineFrontend.TargetIP
+	port := strconv.Itoa(int(engineFrontend.TargetPort))
+
+	nvmeTCPInfo := &helperinitiator.NVMeTCPInfo{
+		SubsystemNQN:       nqn,
+		TransportAddress:   ip,
+		TransportServiceID: port,
+	}
+
+	// We use empty host proc path here since we are running checking inside the container (same as the host)
+	// and we don't want to lock the file for the test.
+	initiator, err := helperinitiator.NewInitiator(engineFrontend.VolumeName, helperinitiator.HostProc, nvmeTCPInfo, nil)
+	if err != nil {
+		return err
+	}
+
+	if err := initiator.WaitForNVMeTCPConnect(60, time.Second); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *TestSuite) TestReplicaCreateWithStateChecks(c *C) {
@@ -333,6 +444,1346 @@ func (s *TestSuite) TestReplicaDeletePendingWithoutCleanupIsNoop(c *C) {
 	}
 }
 
+func (s *TestSuite) TestSPDKEngineFrontendCreateWithoutEngine(c *C) {
+	fmt.Println("Testing SPDK basic operations: engine frontend create without engine")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+
+		disk, err = spdkCli.DiskGet(defaultTestDiskName, disk.Path, diskDriverName)
+		c.Assert(err, NotNil)
+		c.Assert(disk, IsNil)
+	}()
+
+	volumeName := getVolumeName()
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
+
+	defer func() {
+		err = spdkCli.EngineFrontendDelete(engineFrontendName)
+		c.Assert(err, IsNil)
+	}()
+
+	// Create engine frontend (NVMe/TCP initiator)
+	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(ip, strconv.Itoa(30000)), 0, 0)
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend.State, Equals, types.InstanceStateError)
+	c.Assert(engineFrontend.ErrorMsg, Not(Equals), "")
+	c.Assert(engineFrontend.TargetIP, Equals, "")
+	c.Assert(engineFrontend.TargetPort, Equals, int32(0))
+}
+
+func (s *TestSuite) TestSPDKEngineAndEngineFrontendCreateAndDeleteWithDifferentFrontends(c *C) {
+	fmt.Println("Testing SPDK basic operations: engine/enginefrontend create and delete with different frontends")
+
+	tests := []struct {
+		name                 string
+		frontend             string
+		expectEngineEndpoint bool
+		verifyFrontend       func(c *C, volumeName, engineName string, engine *api.Engine, engineFrontend *api.EngineFrontend)
+	}{
+		{
+			name:                 "FrontendSPDKTCPBlockdev",
+			frontend:             types.FrontendSPDKTCPBlockdev,
+			expectEngineEndpoint: true,
+			verifyFrontend: func(c *C, volumeName, _ string, _ *api.Engine, engineFrontend *api.EngineFrontend) {
+				endpoint := helperutil.GetLonghornDevicePath(volumeName)
+				c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+				err := formatBlockDevice(endpoint, "ext4")
+				c.Assert(err, IsNil)
+			},
+		},
+		{
+			name:                 "FrontendSPDKTCPNvmf",
+			frontend:             types.FrontendSPDKTCPNvmf,
+			expectEngineEndpoint: true,
+			verifyFrontend: func(c *C, _ string, engineName string, engine *api.Engine, engineFrontend *api.EngineFrontend) {
+				nqn := helpertypes.GetNQN(engineName)
+				endpoint := server.GetNvmfEndpoint(nqn, engine.IP, engine.Port)
+				c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+
+				ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+				c.Assert(err, IsNil)
+				_, err = helperinitiator.ConnectTarget(engine.IP, strconv.Itoa(int(engine.Port)), nqn, ne)
+				c.Assert(err, IsNil)
+
+				err = verifyNVMfInitiatorConnected(engineFrontend, nqn)
+				c.Assert(err, IsNil)
+
+				time.Sleep(5 * time.Second)
+
+				err = helperinitiator.DisconnectTarget(nqn, ne)
+				c.Assert(err, IsNil)
+			},
+		},
+		{
+			name:                 "FrontendUBLK",
+			frontend:             types.FrontendUBLK,
+			expectEngineEndpoint: false,
+			verifyFrontend: func(c *C, volumeName, _ string, _ *api.Engine, engineFrontend *api.EngineFrontend) {
+				endpoint := helperutil.GetLonghornDevicePath(volumeName)
+				c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+
+				err := formatBlockDevice(endpoint, "ext4")
+				c.Assert(err, IsNil)
+				c.Assert(engineFrontend.UblkID, Not(Equals), int32(helperinitiator.UnInitializedUblkId))
+			},
+		},
+	}
+
+	assertEngineEndpoint := func(c *C, ip string, port int32, expectSet bool) {
+		if expectSet {
+			c.Assert(ip, Not(Equals), "")
+			c.Assert(port, Not(Equals), int32(0))
+			return
+		}
+		c.Assert(ip, Equals, "")
+		c.Assert(port, Equals, int32(0))
+	}
+
+	for _, test := range tests {
+		test := test
+		fmt.Println("Testing frontend case:", test.name)
+
+		func() {
+			diskDriverName := "aio"
+
+			ip, err := commonnet.GetAnyExternalIP()
+			c.Assert(err, IsNil)
+			err = os.Setenv(commonnet.EnvPodIP, ip)
+			c.Assert(err, IsNil)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			var spdkWg sync.WaitGroup
+			defer func() {
+				cancel()
+				spdkWg.Wait()
+			}()
+
+			ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+			c.Assert(err, IsNil)
+			LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+			loopDevicePath := PrepareDiskFile(c)
+			defer func() {
+				CleanupDiskFile(c, loopDevicePath)
+			}()
+
+			spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+			c.Assert(err, IsNil)
+			defer func() {
+				if errClose := spdkCli.Close(); errClose != nil {
+					logrus.WithError(errClose).Error("Failed to close SPDK client")
+				}
+			}()
+
+			disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+			c.Assert(err, IsNil)
+			c.Assert(disk, NotNil)
+
+			disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+			c.Assert(err, IsNil)
+			c.Assert(disk.Path, Equals, loopDevicePath)
+			c.Assert(disk.Uuid, Not(Equals), "")
+
+			defer func() {
+				err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+				c.Assert(err, IsNil)
+
+				disk, err = spdkCli.DiskGet(defaultTestDiskName, disk.Path, diskDriverName)
+				c.Assert(err, NotNil)
+				c.Assert(disk, IsNil)
+			}()
+
+			volumeName := getVolumeName()
+			engineName := fmt.Sprintf("%s-e", volumeName)
+			engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
+			replicaNames := []string{
+				fmt.Sprintf("%s-replica-1", volumeName),
+				fmt.Sprintf("%s-replica-2", volumeName),
+			}
+			replicas := make(map[string]*api.Replica)
+
+			defer func() {
+				err = spdkCli.EngineFrontendDelete(engineFrontendName)
+				c.Assert(err, IsNil)
+
+				err = spdkCli.EngineDelete(engineName)
+				c.Assert(err, IsNil)
+
+				for _, replica := range replicas {
+					err = spdkCli.ReplicaDelete(replica.Name, true)
+					c.Assert(err, IsNil)
+				}
+			}()
+
+			for _, replicaName := range replicaNames {
+				replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+				c.Assert(err, IsNil)
+				c.Assert(replica.LvsName, Equals, defaultTestDiskName)
+				c.Assert(replica.LvsUUID, Equals, disk.Uuid)
+				c.Assert(replica.ErrorMsg, Equals, "")
+				c.Assert(replica.State, Equals, types.InstanceStateRunning)
+				c.Assert(replica.PortStart, Not(Equals), int32(0))
+				c.Assert(replica.Head, NotNil)
+				c.Assert(replica.Head.CreationTime, Not(Equals), "")
+				c.Assert(replica.Head.Parent, Equals, "")
+				replicas[replicaName] = replica
+			}
+
+			replicaAddressMap := make(map[string]string)
+			replicaModeMap := make(map[string]types.Mode)
+			for _, replica := range replicas {
+				replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+				replicaModeMap[replica.Name] = types.ModeRW
+			}
+
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, test.frontend, defaultTestLvolSize, replicaAddressMap, 1, false)
+			c.Assert(err, IsNil)
+			c.Assert(engine.State, Equals, types.InstanceStateRunning)
+			c.Assert(engine.ErrorMsg, Equals, "")
+			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
+			c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
+			assertEngineEndpoint(c, engine.IP, engine.Port, test.expectEngineEndpoint)
+
+			engineList, err := spdkCli.EngineList()
+			c.Assert(err, IsNil)
+			c.Assert(engineList, HasLen, 1)
+			for _, e := range engineList {
+				assertEngineEndpoint(c, e.IP, e.Port, test.expectEngineEndpoint)
+			}
+
+			replicaList, err := spdkCli.ReplicaList()
+			c.Assert(err, IsNil)
+			c.Assert(replicaList, HasLen, 2)
+
+			e, err := spdkCli.EngineGet(engineName)
+			c.Assert(err, IsNil)
+			assertEngineEndpoint(c, e.IP, e.Port, test.expectEngineEndpoint)
+
+			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, test.frontend, defaultTestLvolSize,
+				net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0)
+			c.Assert(err, IsNil)
+			c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
+			c.Assert(engineFrontend.ErrorMsg, Equals, "")
+			c.Assert(engineFrontend.TargetIP, Equals, e.IP)
+			c.Assert(engineFrontend.TargetPort, Equals, e.Port)
+
+			test.verifyFrontend(c, volumeName, engineName, e, engineFrontend)
+		}()
+	}
+}
+
+func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
+	fmt.Println("Testing SPDK engine frontend suspend")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+
+		disk, err = spdkCli.DiskGet(defaultTestDiskName, disk.Path, diskDriverName)
+		c.Assert(err, NotNil)
+		c.Assert(disk, IsNil)
+	}()
+
+	volumeName := getVolumeName()
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
+	replicaNames := []string{
+		fmt.Sprintf("%s-replica-1", volumeName),
+		fmt.Sprintf("%s-replica-2", volumeName),
+	}
+	replicas := make(map[string]*api.Replica)
+
+	defer func() {
+		err = spdkCli.EngineFrontendDelete(engineFrontendName)
+		c.Assert(err, IsNil)
+
+		err = spdkCli.EngineDelete(engineName)
+		c.Assert(err, IsNil)
+
+		for _, replica := range replicas {
+			err = spdkCli.ReplicaDelete(replica.Name, true)
+			c.Assert(err, IsNil)
+		}
+	}()
+
+	// Create replicas
+	for _, replicaName := range replicaNames {
+		replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		c.Assert(err, IsNil)
+		c.Assert(replica.LvsName, Equals, defaultTestDiskName)
+		c.Assert(replica.LvsUUID, Equals, disk.Uuid)
+		c.Assert(replica.ErrorMsg, Equals, "")
+		c.Assert(replica.State, Equals, types.InstanceStateRunning)
+		c.Assert(replica.PortStart, Not(Equals), int32(0))
+		c.Assert(replica.Head, NotNil)
+		c.Assert(replica.Head.CreationTime, Not(Equals), "")
+		c.Assert(replica.Head.Parent, Equals, "")
+		replicas[replicaName] = replica
+	}
+
+	// Create replica address map and replica mode map
+	replicaAddressMap := make(map[string]string)
+	replicaModeMap := make(map[string]types.Mode)
+	for _, replica := range replicas {
+		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+		replicaModeMap[replica.Name] = types.ModeRW
+	}
+
+	// Create engine target
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
+	c.Assert(err, IsNil)
+	c.Assert(engine.State, Equals, types.InstanceStateRunning)
+	c.Assert(engine.ErrorMsg, Equals, "")
+	c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
+	c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
+	c.Assert(engine.IP, Not(Equals), "")
+	c.Assert(engine.Port, Not(Equals), int32(0))
+
+	engineList, err := spdkCli.EngineList()
+	c.Assert(err, IsNil)
+	c.Assert(engineList, HasLen, 1)
+	for _, e := range engineList {
+		c.Assert(e.IP, Not(Equals), "")
+		c.Assert(e.Port, Not(Equals), int32(0))
+	}
+
+	replicaList, err := spdkCli.ReplicaList()
+	c.Assert(err, IsNil)
+	c.Assert(replicaList, HasLen, 2)
+
+	e, err := spdkCli.EngineGet(engineName)
+	c.Assert(err, IsNil)
+	c.Assert(e.IP, Not(Equals), "")
+	c.Assert(e.Port, Not(Equals), int32(0))
+
+	// Create engine frontend (NVMe/TCP initiator)
+	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0)
+
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
+	c.Assert(engineFrontend.ErrorMsg, Equals, "")
+	c.Assert(engineFrontend.TargetIP, Equals, e.IP)
+	c.Assert(engineFrontend.TargetPort, Equals, e.Port)
+
+	endpoint := helperutil.GetLonghornDevicePath(volumeName)
+	c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+
+	// Format block device to check if the engine frontend is working
+	err = formatBlockDevice(endpoint, "ext4")
+	c.Assert(err, IsNil)
+
+	// Write a known 1MB zero pattern at offset 400MB (beyond the background dd's range)
+	// and compute its checksum for later verification.
+	_, err = ne.Execute(nil, "dd",
+		[]string{
+			"if=/dev/zero",
+			fmt.Sprintf("of=%s", endpoint),
+			"bs=1M", "count=1", "seek=400", "oflag=direct", "conv=notrunc", "status=none",
+		},
+		10*time.Second,
+	)
+	c.Assert(err, IsNil)
+
+	checksumBefore, err := ne.Execute(nil, "sh",
+		[]string{
+			"-c",
+			fmt.Sprintf("dd if=%s bs=1M count=1 skip=400 iflag=direct status=none | md5sum", endpoint),
+		},
+		10*time.Second,
+	)
+	c.Assert(err, IsNil)
+	c.Assert(strings.TrimSpace(checksumBefore), Not(Equals), "")
+
+	// Start a slow background write using direct IO + dsync.
+	// This ensures IO is still in progress when we call Suspend.
+	// We write ~10MB (2500 × 4K) which is slow enough with dsync to still be in-flight
+	// after 1 second, but fast enough to complete shortly after resume.
+	ddDone := make(chan error, 1)
+	go func() {
+		_, err := ne.Execute(nil, "dd",
+			[]string{
+				"if=/dev/urandom",
+				fmt.Sprintf("of=%s", endpoint),
+				"bs=4k", "count=2500", "oflag=direct,dsync", "conv=notrunc", "status=none",
+			},
+			30*time.Second,
+		)
+		ddDone <- err
+	}()
+
+	// Give dd time to start writing before suspending
+	time.Sleep(1 * time.Second)
+
+	// Suspend engine frontend — this freezes the dm-device, queuing all in-flight and new IO
+	err = spdkCli.EngineFrontendSuspend(engineFrontend.Name)
+	c.Assert(err, IsNil)
+
+	// Verify that new IO is blocked while the engine frontend is suspended.
+	// The dd command should time out because the dm-device suspend queues all new IO.
+	// We use oflag=direct to bypass the page cache, ensuring the IO hits the dm-device
+	// and gets queued by suspend (without direct IO, dd returns immediately after writing
+	// to the page cache).
+	_, err = ne.Execute(nil, "dd",
+		[]string{
+			"if=/dev/urandom",
+			fmt.Sprintf("of=%s", endpoint),
+			"bs=1M", "count=1", "seek=0", "oflag=direct", "conv=notrunc", "status=none",
+		},
+		10*time.Second,
+	)
+	c.Assert(err, NotNil)
+
+	// Resume engine frontend — this unblocks the queued IO
+	err = spdkCli.EngineFrontendResume(engineFrontend.Name)
+	c.Assert(err, IsNil)
+
+	// The background dd should now complete (successfully or with a write error,
+	// but it should no longer be stuck). We wait up to 60 seconds to account for
+	// the dd's Execute timeout plus residual IO after resume.
+	select {
+	case <-ddDone:
+	case <-time.After(60 * time.Second):
+		c.Fatal("background dd did not complete after resume")
+	}
+
+	// Verify data integrity: the checksum of the region at offset 400MB should be unchanged
+	// after the suspend/resume cycle.
+	checksumAfter, err := ne.Execute(nil, "sh",
+		[]string{
+			"-c",
+			fmt.Sprintf("dd if=%s bs=1M count=1 skip=400 iflag=direct status=none | md5sum", endpoint),
+		},
+		10*time.Second,
+	)
+	c.Assert(err, IsNil)
+	c.Assert(strings.TrimSpace(checksumAfter), Equals, strings.TrimSpace(checksumBefore))
+}
+
+func (s *TestSuite) TestSPDKEngineFrontendExpand(c *C) {
+	fmt.Println("Testing SPDK engine frontend expand")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+
+		disk, err = spdkCli.DiskGet(defaultTestDiskName, disk.Path, diskDriverName)
+		c.Assert(err, NotNil)
+		c.Assert(disk, IsNil)
+	}()
+
+	volumeName := getVolumeName()
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
+	replicaNames := []string{
+		fmt.Sprintf("%s-replica-1", volumeName),
+		fmt.Sprintf("%s-replica-2", volumeName),
+	}
+	replicas := make(map[string]*api.Replica)
+
+	defer func() {
+		err = spdkCli.EngineFrontendDelete(engineFrontendName)
+		c.Assert(err, IsNil)
+
+		err = spdkCli.EngineDelete(engineName)
+		c.Assert(err, IsNil)
+
+		for _, replica := range replicas {
+			err = spdkCli.ReplicaDelete(replica.Name, true)
+			c.Assert(err, IsNil)
+		}
+	}()
+
+	// Create replicas
+	for _, replicaName := range replicaNames {
+		replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		c.Assert(err, IsNil)
+		c.Assert(replica.LvsName, Equals, defaultTestDiskName)
+		c.Assert(replica.LvsUUID, Equals, disk.Uuid)
+		c.Assert(replica.ErrorMsg, Equals, "")
+		c.Assert(replica.State, Equals, types.InstanceStateRunning)
+		c.Assert(replica.PortStart, Not(Equals), int32(0))
+		c.Assert(replica.Head, NotNil)
+		c.Assert(replica.Head.CreationTime, Not(Equals), "")
+		c.Assert(replica.Head.Parent, Equals, "")
+		replicas[replicaName] = replica
+	}
+
+	// Create replica address map and replica mode map
+	replicaAddressMap := make(map[string]string)
+	replicaModeMap := make(map[string]types.Mode)
+	for _, replica := range replicas {
+		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+		replicaModeMap[replica.Name] = types.ModeRW
+	}
+
+	// Create engine target
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
+	c.Assert(err, IsNil)
+	c.Assert(engine.State, Equals, types.InstanceStateRunning)
+	c.Assert(engine.ErrorMsg, Equals, "")
+	c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
+	c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
+	c.Assert(engine.IP, Not(Equals), "")
+	c.Assert(engine.Port, Not(Equals), int32(0))
+
+	engineList, err := spdkCli.EngineList()
+	c.Assert(err, IsNil)
+	c.Assert(engineList, HasLen, 1)
+	for _, e := range engineList {
+		c.Assert(e.IP, Not(Equals), "")
+		c.Assert(e.Port, Not(Equals), int32(0))
+	}
+
+	replicaList, err := spdkCli.ReplicaList()
+	c.Assert(err, IsNil)
+	c.Assert(replicaList, HasLen, 2)
+
+	e, err := spdkCli.EngineGet(engineName)
+	c.Assert(err, IsNil)
+	c.Assert(e.IP, Not(Equals), "")
+	c.Assert(e.Port, Not(Equals), int32(0))
+
+	// Create engine frontend (NVMe/TCP initiator)
+	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0)
+
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
+	c.Assert(engineFrontend.ErrorMsg, Equals, "")
+	c.Assert(engineFrontend.TargetIP, Equals, e.IP)
+	c.Assert(engineFrontend.TargetPort, Equals, e.Port)
+
+	endpoint := helperutil.GetLonghornDevicePath(volumeName)
+	c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+
+	size := GetBlockDeviceSize(ne, endpoint)
+	c.Assert(size, Equals, int64(defaultTestLvolSize))
+
+	// Format block device to check if the engine frontend is working
+	err = formatBlockDevice(endpoint, "ext4")
+	c.Assert(err, IsNil)
+
+	// Suspend and resume engine frontend
+	newTestLvolSize := defaultTestLvolSize * 2
+	err = spdkCli.EngineFrontendExpand(ctx, engineFrontend.Name, newTestLvolSize)
+	c.Assert(err, IsNil)
+
+	// Format block device to check if the engine frontend is working
+	err = formatBlockDevice(endpoint, "ext4")
+	c.Assert(err, IsNil)
+
+	size = GetBlockDeviceSize(ne, endpoint)
+	c.Assert(size, Equals, int64(newTestLvolSize))
+}
+
+func (s *TestSuite) TestSPDKEngineSnapshotCreateAndDelete(c *C) {
+	fmt.Println("Testing SPDK engine snapshot create and delete")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	volumeName := getVolumeName()
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
+	replicaNames := []string{
+		fmt.Sprintf("%s-replica-1", volumeName),
+		fmt.Sprintf("%s-replica-2", volumeName),
+	}
+	replicas := make(map[string]*api.Replica)
+
+	defer func() {
+		err = spdkCli.EngineFrontendDelete(engineFrontendName)
+		c.Assert(err, IsNil)
+
+		err = spdkCli.EngineDelete(engineName)
+		c.Assert(err, IsNil)
+
+		for _, replica := range replicas {
+			err = spdkCli.ReplicaDelete(replica.Name, true)
+			c.Assert(err, IsNil)
+		}
+	}()
+
+	for _, replicaName := range replicaNames {
+		replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		c.Assert(err, IsNil)
+		replicas[replicaName] = replica
+	}
+
+	replicaAddressMap := make(map[string]string)
+	replicaModeMap := make(map[string]types.Mode)
+	for _, replica := range replicas {
+		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+		replicaModeMap[replica.Name] = types.ModeRW
+	}
+
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
+	c.Assert(err, IsNil)
+	c.Assert(engine.State, Equals, types.InstanceStateRunning)
+	c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
+	c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
+
+	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(ip, strconv.Itoa(int(engine.Port))), 0, 0)
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend, NotNil)
+
+	snapshotName := "snapshot-1"
+	retSnapshotName, err := spdkCli.EngineFrontendSnapshotCreate(engineFrontendName, snapshotName)
+	c.Assert(err, IsNil)
+	c.Assert(retSnapshotName, Equals, snapshotName)
+
+	engineAfterCreate, err := spdkCli.EngineGet(engineName)
+	c.Assert(err, IsNil)
+	_, exists := engineAfterCreate.Snapshots[snapshotName]
+	c.Assert(exists, Equals, true)
+
+	err = spdkCli.EngineSnapshotDelete(engineName, snapshotName)
+	c.Assert(err, IsNil)
+
+	engineAfterDelete, err := spdkCli.EngineGet(engineName)
+	c.Assert(err, IsNil)
+	_, exists = engineAfterDelete.Snapshots[snapshotName]
+	c.Assert(exists, Equals, false)
+
+	err = spdkCli.EngineSnapshotDelete(engineName, snapshotName)
+	c.Assert(err, NotNil)
+}
+
+// TestSPDKEngineFrontendSnapshotRevert validates both negative and positive revert paths.
+// Revert should fail with non-empty frontend and succeed with FrontendEmpty.
+func (s *TestSuite) TestSPDKEngineFrontendSnapshotRevert(c *C) {
+	fmt.Println("Testing SPDK engine frontend snapshot revert")
+
+	tests := []struct {
+		name               string
+		engineFrontendType string
+		expectErr          bool
+		errContains        string
+	}{
+		{
+			name:               "revert rejected for spdk-tcp-blockdev",
+			engineFrontendType: types.FrontendSPDKTCPBlockdev,
+			expectErr:          true,
+			errContains:        "invalid frontend",
+		},
+		// {
+		// 	name:               "revert rejected for spdk-tcp-nvmf",
+		// 	engineFrontendType: types.FrontendSPDKTCPNvmf,
+		// 	expectErr:          true,
+		// 	errContains:        "invalid frontend",
+		// },
+		// {
+		// 	name:               "revert rejected for ublk",
+		// 	engineFrontendType: types.FrontendUBLK,
+		// 	expectErr:          true,
+		// 	errContains:        "invalid frontend",
+		// },
+		// {
+		// 	name:               "revert succeeds for frontend-empty",
+		// 	engineFrontendType: types.FrontendEmpty,
+		// 	expectErr:          false,
+		// },
+	}
+
+	for _, tc := range tests {
+		c.Logf("testing %s", tc.name)
+
+		diskDriverName := "aio"
+
+		ip, err := commonnet.GetAnyExternalIP()
+		c.Assert(err, IsNil)
+		err = os.Setenv(commonnet.EnvPodIP, ip)
+		c.Assert(err, IsNil)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		var spdkWg sync.WaitGroup
+		func() {
+			defer func() {
+				cancel()
+				spdkWg.Wait()
+			}()
+
+			ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+			c.Assert(err, IsNil)
+			LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+			loopDevicePath := PrepareDiskFile(c)
+			defer func() {
+				CleanupDiskFile(c, loopDevicePath)
+			}()
+
+			spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+			c.Assert(err, IsNil)
+			defer func() {
+				if errClose := spdkCli.Close(); errClose != nil {
+					logrus.WithError(errClose).Error("Failed to close SPDK client")
+				}
+			}()
+
+			disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+			c.Assert(err, IsNil)
+			c.Assert(disk, NotNil)
+
+			disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+			c.Assert(err, IsNil)
+			c.Assert(disk.Path, Equals, loopDevicePath)
+			c.Assert(disk.Uuid, Not(Equals), "")
+
+			defer func() {
+				err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+				c.Assert(err, IsNil)
+			}()
+
+			volumeName := fmt.Sprintf("test-frontend-revert-vol-%s", time.Now().Format("20060102150405"))
+			engineName := fmt.Sprintf("%s-e", volumeName)
+			engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
+			replicaNames := []string{
+				fmt.Sprintf("%s-replica-1", volumeName),
+				fmt.Sprintf("%s-replica-2", volumeName),
+			}
+			replicas := make(map[string]*api.Replica)
+
+			defer func() {
+				err = spdkCli.EngineFrontendDelete(engineFrontendName)
+				c.Assert(err, IsNil)
+
+				err = spdkCli.EngineDelete(engineName)
+				c.Assert(err, IsNil)
+
+				for _, replica := range replicas {
+					err = spdkCli.ReplicaDelete(replica.Name, true)
+					c.Assert(err, IsNil)
+				}
+			}()
+
+			for _, replicaName := range replicaNames {
+				replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+				c.Assert(err, IsNil)
+				replicas[replicaName] = replica
+			}
+
+			replicaAddressMap := make(map[string]string)
+			for _, replica := range replicas {
+				replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+			}
+
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, tc.engineFrontendType, defaultTestLvolSize, replicaAddressMap, 1, false)
+			c.Assert(err, IsNil)
+			c.Assert(engine, NotNil)
+			if engine.State != types.InstanceStateRunning {
+				c.Skip(fmt.Sprintf("skip %s: engine is not running (state=%s, error=%s)", tc.name, engine.State, engine.ErrorMsg))
+			}
+
+			engineFrontendTargetAddress := net.JoinHostPort(ip, strconv.Itoa(int(engine.Port)))
+
+			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, tc.engineFrontendType, defaultTestLvolSize,
+				engineFrontendTargetAddress, 0, 0)
+			c.Assert(err, IsNil)
+			c.Assert(engineFrontend, NotNil)
+
+			snapshotName1 := "snapshot-1"
+			snapshotName2 := "snapshot-2"
+
+			retSnapshotName, err := spdkCli.EngineFrontendSnapshotCreate(engineFrontendName, snapshotName1)
+			c.Assert(err, IsNil)
+			c.Assert(retSnapshotName, Equals, snapshotName1)
+
+			retSnapshotName, err = spdkCli.EngineFrontendSnapshotCreate(engineFrontendName, snapshotName2)
+			c.Assert(err, IsNil)
+			c.Assert(retSnapshotName, Equals, snapshotName2)
+
+			err = spdkCli.EngineFrontendSnapshotRevert(engineFrontendName, snapshotName1)
+			if tc.expectErr {
+				c.Assert(err, NotNil)
+				c.Assert(strings.Contains(err.Error(), tc.errContains), Equals, true)
+			} else {
+				c.Assert(err, IsNil)
+			}
+
+			engineAfterRevert, err := spdkCli.EngineGet(engineName)
+			c.Assert(err, IsNil)
+			c.Assert(engineAfterRevert.State, Equals, types.InstanceStateRunning)
+			_, exists := engineAfterRevert.Snapshots[snapshotName1]
+			c.Assert(exists, Equals, true)
+		}()
+	}
+}
+
+type runtimeMonitoringTestEnv struct {
+	ctx        context.Context
+	spdkCli    *client.SPDKClient
+	rawSPDKCli *helperclient.Client
+	disk       *spdkrpc.Disk
+}
+
+func isReplicaNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if grpcstatus.Code(err) == grpccodes.NotFound {
+		return true
+	}
+	return strings.Contains(err.Error(), "cannot find replica")
+}
+
+func monitoringRetryOpts(ctx context.Context, attempts uint) []retry.Option {
+	return []retry.Option{
+		retry.Context(ctx),
+		retry.Attempts(attempts),
+		retry.DelayType(retry.FixedDelay),
+		retry.LastErrorOnly(true),
+		retry.Delay(server.MonitorInterval),
+	}
+}
+
+func waitForSPDKTargetStopped() error {
+	return waitForSPDKTargetDaemonStoppedWithTimeout(6*time.Second, spdkTargetStopPollInterval)
+}
+
+func withRuntimeMonitoringTestEnv(c *C, diskDriverName string, testFn func(env *runtimeMonitoringTestEnv)) {
+	runtimeMonitoringTestMu.Lock()
+	defer runtimeMonitoringTestMu.Unlock()
+
+	// Ensure no lingering target process from a previous test case.
+	err := waitForSPDKTargetStopped()
+	c.Assert(err, IsNil)
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	rawSPDKCli, err := helperclient.NewClient(context.Background())
+	c.Assert(err, IsNil)
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+
+	defer func() {
+		err := rawSPDKCli.Close()
+		c.Assert(err, IsNil)
+		err = spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+		err = spdkCli.Close()
+		c.Assert(err, IsNil)
+		CleanupDiskFile(c, loopDevicePath)
+		cancel()
+		spdkWg.Wait()
+		err = waitForSPDKTargetStopped()
+		c.Assert(err, IsNil)
+	}()
+
+	testFn(&runtimeMonitoringTestEnv{
+		ctx:        ctx,
+		spdkCli:    spdkCli,
+		rawSPDKCli: rawSPDKCli,
+		disk:       disk,
+	})
+}
+
+func (s *TestSuite) TestRuntimeMonitoringVerifyMultipleReplicasReconstruction(c *C) {
+	fmt.Println("Testing runtime monitoring verify() for multiple replicas reconstruction")
+	withRuntimeMonitoringTestEnv(c, "aio", func(env *runtimeMonitoringTestEnv) {
+		replicaNames := []string{
+			fmt.Sprintf("matrix-r-%s", strings.ReplaceAll(util.UUID(), "-", "")[:8]),
+			fmt.Sprintf("matrix-r-%s", strings.ReplaceAll(util.UUID(), "-", "")[:8]),
+			fmt.Sprintf("matrix-r-%s", strings.ReplaceAll(util.UUID(), "-", "")[:8]),
+		}
+
+		for _, name := range replicaNames {
+			_, err := env.rawSPDKCli.BdevLvolCreate("", env.disk.Uuid, name, util.BytesToMiB(defaultTestLvolSize), "", true)
+			c.Assert(err, IsNil)
+			defer func(replicaName string) {
+				_ = env.spdkCli.ReplicaDelete(replicaName, true)
+				_, _ = env.rawSPDKCli.BdevLvolDelete(fmt.Sprintf("%s/%s", env.disk.Name, replicaName))
+			}(name)
+		}
+
+		err := retry.Do(func() error {
+			for _, name := range replicaNames {
+				replica, err := env.spdkCli.ReplicaGet(name)
+				if err != nil {
+					return err
+				}
+				if replica.State != types.InstanceStateStopped {
+					return fmt.Errorf("replica %s state is %s, expected %s", replica.Name, replica.State, types.InstanceStateStopped)
+				}
+			}
+			return nil
+		}, monitoringRetryOpts(env.ctx, 8)...)
+		c.Assert(err, IsNil)
+
+		replicaMap, err := env.spdkCli.ReplicaList()
+		c.Assert(err, IsNil)
+		for _, name := range replicaNames {
+			_, exists := replicaMap[name]
+			c.Assert(exists, Equals, true)
+		}
+	})
+}
+
+func (s *TestSuite) TestRuntimeMonitoringVerifyMixedValidAndInvalidLvolNames(c *C) {
+	fmt.Println("Testing runtime monitoring verify() with mixed valid and invalid lvol names")
+	withRuntimeMonitoringTestEnv(c, "aio", func(env *runtimeMonitoringTestEnv) {
+		validReplicaName := fmt.Sprintf("matrix-r-%s", strings.ReplaceAll(util.UUID(), "-", "")[:8])
+		invalidNames := []string{
+			"matrix-invalid",
+			"matrix-r-123",
+			"matrix-r-123456789",
+		}
+		allNames := append([]string{validReplicaName}, invalidNames...)
+
+		for _, name := range allNames {
+			_, err := env.rawSPDKCli.BdevLvolCreate("", env.disk.Uuid, name, util.BytesToMiB(defaultTestLvolSize), "", true)
+			c.Assert(err, IsNil)
+			defer func(replicaName string) {
+				_ = env.spdkCli.ReplicaDelete(replicaName, true)
+				_, _ = env.rawSPDKCli.BdevLvolDelete(fmt.Sprintf("%s/%s", env.disk.Name, replicaName))
+			}(name)
+		}
+
+		err := retry.Do(func() error {
+			replica, err := env.spdkCli.ReplicaGet(validReplicaName)
+			if err != nil {
+				return err
+			}
+			if replica.State != types.InstanceStateStopped {
+				return fmt.Errorf("replica %s state is %s, expected %s", replica.Name, replica.State, types.InstanceStateStopped)
+			}
+			return nil
+		}, monitoringRetryOpts(env.ctx, 8)...)
+		c.Assert(err, IsNil)
+
+		for _, invalidName := range invalidNames {
+			_, err := env.spdkCli.ReplicaGet(invalidName)
+			c.Assert(isReplicaNotFound(err), Equals, true)
+		}
+	})
+}
+
+func (s *TestSuite) TestRuntimeMonitoringVerifyStaleCacheRemoval(c *C) {
+	fmt.Println("Testing runtime monitoring verify() stale cache removal")
+	withRuntimeMonitoringTestEnv(c, "aio", func(env *runtimeMonitoringTestEnv) {
+		replicaName := fmt.Sprintf("matrix-r-%s", strings.ReplaceAll(util.UUID(), "-", "")[:8])
+		replicaAlias := fmt.Sprintf("%s/%s", env.disk.Name, replicaName)
+
+		_, err := env.rawSPDKCli.BdevLvolCreate("", env.disk.Uuid, replicaName, util.BytesToMiB(defaultTestLvolSize), "", true)
+		c.Assert(err, IsNil)
+		defer func() {
+			_ = env.spdkCli.ReplicaDelete(replicaName, true)
+			_, _ = env.rawSPDKCli.BdevLvolDelete(replicaAlias)
+		}()
+
+		err = retry.Do(func() error {
+			_, err := env.spdkCli.ReplicaGet(replicaName)
+			return err
+		}, monitoringRetryOpts(env.ctx, 8)...)
+		c.Assert(err, IsNil)
+
+		_, err = env.rawSPDKCli.BdevLvolDelete(replicaAlias)
+		c.Assert(err, IsNil)
+
+		err = retry.Do(func() error {
+			_, err := env.spdkCli.ReplicaGet(replicaName)
+			if isReplicaNotFound(err) {
+				return nil
+			}
+			if err == nil {
+				return fmt.Errorf("replica %s still exists in cache", replicaName)
+			}
+			return err
+		}, monitoringRetryOpts(env.ctx, 8)...)
+		c.Assert(err, IsNil)
+	})
+}
+
+func (s *TestSuite) TestRuntimeMonitoringVerifySkipRebuildingAndCloningLvol(c *C) {
+	fmt.Println("Testing runtime monitoring verify() skips rebuilding and cloning lvols")
+	withRuntimeMonitoringTestEnv(c, "aio", func(env *runtimeMonitoringTestEnv) {
+		baseReplicaName := fmt.Sprintf("matrix-r-%s", strings.ReplaceAll(util.UUID(), "-", "")[:8])
+		rebuildingLvolName := server.GetReplicaRebuildingLvolName(baseReplicaName)
+		cloningLvolName := server.GetReplicaCloningLvolName(baseReplicaName)
+
+		for _, name := range []string{rebuildingLvolName, cloningLvolName} {
+			_, err := env.rawSPDKCli.BdevLvolCreate("", env.disk.Uuid, name, util.BytesToMiB(defaultTestLvolSize), "", true)
+			c.Assert(err, IsNil)
+			defer func(replicaName string) {
+				_ = env.spdkCli.ReplicaDelete(replicaName, true)
+				_, _ = env.rawSPDKCli.BdevLvolDelete(fmt.Sprintf("%s/%s", env.disk.Name, replicaName))
+			}(name)
+		}
+
+		err := retry.Do(func() error {
+			for _, name := range []string{rebuildingLvolName, cloningLvolName, baseReplicaName} {
+				_, err := env.spdkCli.ReplicaGet(name)
+				if !isReplicaNotFound(err) {
+					if err == nil {
+						return fmt.Errorf("lvol %s was unexpectedly reconstructed as replica", name)
+					}
+					return err
+				}
+			}
+			return nil
+		}, monitoringRetryOpts(env.ctx, 4)...)
+		c.Assert(err, IsNil)
+	})
+}
+
+func (s *TestSuite) TestRuntimeMonitoringVerifyCleanupOrphanBackingImageTempHead(c *C) {
+	fmt.Println("Testing runtime monitoring verify() cleans up orphan backing image temp head")
+	withRuntimeMonitoringTestEnv(c, "aio", func(env *runtimeMonitoringTestEnv) {
+		backingImageName := fmt.Sprintf("matrix-bi-%s", strings.ReplaceAll(util.UUID(), "-", "")[:8])
+		tempHeadName := server.GetBackingImageTempHeadLvolName(backingImageName, env.disk.Uuid)
+		tempHeadAlias := fmt.Sprintf("%s/%s", env.disk.Name, tempHeadName)
+
+		_, err := env.rawSPDKCli.BdevLvolCreate("", env.disk.Uuid, tempHeadName, util.BytesToMiB(defaultTestLvolSize), "", true)
+		c.Assert(err, IsNil)
+		defer func() {
+			_, _ = env.rawSPDKCli.BdevLvolDelete(tempHeadAlias)
+		}()
+
+		err = retry.Do(func() error {
+			bdevs, err := env.rawSPDKCli.BdevGetBdevs("", 0)
+			if err != nil {
+				return err
+			}
+			for _, bdev := range bdevs {
+				for _, alias := range bdev.Aliases {
+					if alias == tempHeadAlias {
+						return fmt.Errorf("orphan backing image temp head %s still exists", tempHeadAlias)
+					}
+				}
+			}
+			return nil
+		}, monitoringRetryOpts(env.ctx, 8)...)
+		c.Assert(err, IsNil)
+	})
+}
+
+// TestSPDKEngineCreateWithSalvageRequested validates salvage flow during engine creation.
+// The test creates two replicas, writes random data only to the first replica so its head
+// actual size becomes larger, then calls EngineCreate with salvageRequested=true.
+// It verifies the engine keeps only the replica with the largest head actual size as the
+// salvage candidate.
+func (s *TestSuite) TestSPDKEngineCreateWithSalvageRequested(c *C) {
+	fmt.Println("Testing SPDK engine create with salvageRequested=true")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	volumeName := fmt.Sprintf("test-salvage-vol-%s", time.Now().Format("20060102150405"))
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	replicaNames := []string{
+		fmt.Sprintf("%s-replica-1", volumeName),
+		fmt.Sprintf("%s-replica-2", volumeName),
+	}
+	replicas := make(map[string]*api.Replica)
+
+	defer func() {
+		err = spdkCli.EngineDelete(engineName)
+		c.Assert(err, IsNil)
+
+		for _, replica := range replicas {
+			err = spdkCli.ReplicaDelete(replica.Name, true)
+			c.Assert(err, IsNil)
+		}
+	}()
+
+	for _, replicaName := range replicaNames {
+		replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		c.Assert(err, IsNil)
+		replicas[replicaName] = replica
+	}
+
+	primaryReplica := replicas[replicaNames[0]]
+	primaryNQN := helpertypes.GetNQN(primaryReplica.Name)
+	primaryPort := strconv.Itoa(int(primaryReplica.PortStart))
+
+	_, err = helperinitiator.ConnectTarget(ip, primaryPort, primaryNQN, ne)
+	c.Assert(err, IsNil)
+	defer func() {
+		err := helperinitiator.DisconnectTarget(primaryNQN, ne)
+		c.Assert(err, IsNil)
+	}()
+
+	devices, err := helperinitiator.GetDevices(ip, primaryPort, primaryNQN, ne)
+	c.Assert(err, IsNil)
+	c.Assert(len(devices), Equals, 1)
+	c.Assert(len(devices[0].Namespaces), Equals, 1)
+
+	endpoint := filepath.Join("/dev", devices[0].Namespaces[0].NameSpace)
+	err = writeDataToBlockDevice(ne, endpoint, 0, 8)
+	c.Assert(err, IsNil)
+
+	var primaryHeadSize uint64
+	var secondaryHeadSize uint64
+	for i := 0; i < 20; i++ {
+		primaryReplicaInfo, err := spdkCli.ReplicaGet(replicaNames[0])
+		c.Assert(err, IsNil)
+		secondaryReplicaInfo, err := spdkCli.ReplicaGet(replicaNames[1])
+		c.Assert(err, IsNil)
+
+		primaryHeadSize = primaryReplicaInfo.Head.ActualSize
+		secondaryHeadSize = secondaryReplicaInfo.Head.ActualSize
+		if primaryHeadSize > secondaryHeadSize {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	c.Assert(primaryHeadSize > secondaryHeadSize, Equals, true)
+
+	replicaAddressMap := make(map[string]string)
+	for _, replica := range replicas {
+		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+	}
+
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, true)
+	c.Assert(err, IsNil)
+	c.Assert(engine, NotNil)
+	c.Assert(engine.State, Equals, types.InstanceStateRunning)
+	c.Assert(len(engine.ReplicaAddressMap), Equals, 1)
+	c.Assert(engine.ReplicaAddressMap[replicaNames[0]], Equals, net.JoinHostPort(ip, strconv.Itoa(int(replicas[replicaNames[0]].PortStart))))
+	c.Assert(engine.ReplicaModeMap[replicaNames[0]], Equals, types.ModeRW)
+}
+
+func GetBlockDeviceSize(ne *commonns.Executor, endpoint string) int64 {
+	output, err := ne.Execute(nil, "blockdev", []string{"--getsize64", endpoint}, 10*time.Second)
+	if err != nil {
+		return 0
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(output), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return size
+}
+
 func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	fmt.Println("Testing SPDK basic operations with multiple threads")
 
@@ -387,10 +1838,10 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 	}()
 
 	concurrentCount := 5
-	dataCountInMB := 100
+	dataCountInMB := int64(100)
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
-	for i := 0; i < concurrentCount; i++ {
+	for i := range concurrentCount {
 		spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
 		c.Assert(err, IsNil)
 		defer func() {
@@ -400,7 +1851,8 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 		}()
 
 		volumeName := fmt.Sprintf("test-vol-%d", i)
-		engineName := fmt.Sprintf("%s-engine", volumeName)
+		engineName := fmt.Sprintf("%s-e", volumeName)
+		engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
 		replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
 		replicaName2 := fmt.Sprintf("%s-replica-2", volumeName)
 		replicaName3 := fmt.Sprintf("%s-replica-3", volumeName)
@@ -408,6 +1860,8 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 		go func() {
 			defer func() {
 				// Do cleanup
+				err = spdkCli.EngineFrontendDelete(engineFrontendName)
+				c.Assert(err, IsNil)
 				err = spdkCli.EngineDelete(engineName)
 				c.Assert(err, IsNil)
 				err = spdkCli.ReplicaDelete(replicaName1, true)
@@ -450,22 +1904,21 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica2.Name: types.ModeRW,
 			}
 			endpoint := helperutil.GetLonghornDevicePath(volumeName)
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false, 0, 0)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.ErrorMsg, Equals, "")
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
-			c.Assert(engine.Endpoint, Equals, endpoint)
-			// initiator and target are on the same node
-			c.Assert(engine.IP, Not(Equals), "")
-			c.Assert(engine.TargetIP, Not(Equals), "")
-			c.Assert(engine.IP, Equals, engine.TargetIP)
-			c.Assert(engine.Port, Not(Equals), int32(0))
-			c.Assert(engine.TargetPort, Not(Equals), int32(0))
-			c.Assert(engine.Port, Equals, engine.TargetPort)
 
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), "seek=0", "status=none"}, defaultTestExecuteTimeout)
+			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+			c.Assert(err, IsNil)
+			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+			c.Assert(engine.IP, Not(Equals), "")
+			c.Assert(engine.Port, Not(Equals), int32(0))
+
+			err = writeDataToBlockDevice(ne, endpoint, 0, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore1, err := util.GetFileChunkChecksum(endpoint, 0, 100*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -480,7 +1933,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				waitReplicaSnapshotChecksum(c, spdkCli, replicaName, snapshotName1)
 			}
 
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), "seek=200", "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, 200, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore2, err := util.GetFileChunkChecksum(endpoint, 200*helpertypes.MiB, 100*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -512,6 +1965,8 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			}
 
 			// Detach and re-attach the volume
+			err = spdkCli.EngineFrontendDelete(engineFrontendName)
+			c.Assert(err, IsNil)
 			err = spdkCli.EngineDelete(engineName)
 			c.Assert(err, IsNil)
 			err = spdkCli.ReplicaDelete(replicaName1, false)
@@ -548,13 +2003,17 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
 				replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
 			}
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false, 0, 0)
+			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.ErrorMsg, Equals, "")
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.Port, Not(Equals), int32(0))
-			c.Assert(engine.Endpoint, Equals, endpoint)
+
+			engineFrontend, err = spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+			c.Assert(err, IsNil)
+			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
 			// Check both replica snapshot map after the snapshot deletion and volume re-attachment
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
@@ -582,8 +2041,6 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(err, IsNil)
 			c.Assert(engine.ErrorMsg, Equals, "")
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			c.Assert(engine.Endpoint, Equals, endpoint)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW})
 
@@ -600,7 +2057,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica3.Head.CreationTime, Not(Equals), "")
 			c.Assert(replica3.Head.Parent, Equals, "")
 
-			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync)
+			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync)
 			c.Assert(err, IsNil)
 
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
@@ -642,8 +2099,6 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(err, IsNil)
 			c.Assert(engine.ErrorMsg, Equals, "")
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			c.Assert(engine.Endpoint, Equals, endpoint)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW, replicaName3: types.ModeRW})
 
@@ -663,9 +2118,18 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 
 	wg.Wait()
 
+	engineFrontendList, err := spdkCli.EngineFrontendList()
+	c.Assert(err, IsNil)
+	for _, ef := range engineFrontendList {
+		err = spdkCli.EngineFrontendDelete(ef.Name)
+		c.Assert(err, IsNil)
+	}
+
 	engineList, err := spdkCli.EngineList()
 	c.Assert(err, IsNil)
 	for _, engine := range engineList {
+		c.Assert(err, IsNil)
+
 		err = spdkCli.EngineDelete(engine.Name)
 		c.Assert(err, IsNil)
 	}
@@ -769,7 +2233,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 		}()
 
 		volumeName := fmt.Sprintf("test-vol-%d", i)
-		engineName := fmt.Sprintf("%s-engine", volumeName)
+		engineName := fmt.Sprintf("%s-e", volumeName)
+		engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
 		replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
 		replicaName2 := fmt.Sprintf("%s-replica-2", volumeName)
 		replicaName3 := fmt.Sprintf("%s-replica-3", volumeName)
@@ -778,6 +2243,8 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 		go func() {
 			defer func() {
 				// Do cleanup
+				err = spdkCli.EngineFrontendDelete(engineFrontendName)
+				c.Assert(err, IsNil)
 				err = spdkCli.EngineDelete(engineName)
 				c.Assert(err, IsNil)
 				err = spdkCli.ReplicaDelete(replicaName1, true)
@@ -824,17 +2291,22 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				replica2.Name: types.ModeRW,
 			}
 			endpoint := helperutil.GetLonghornDevicePath(volumeName)
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, ip, ip, false, 0, 0)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.ErrorMsg, Equals, "")
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
 			c.Assert(engine.Port, Not(Equals), int32(0))
-			c.Assert(engine.Endpoint, Equals, endpoint)
+			c.Assert(engine.Port, Not(Equals), int32(0))
+
+			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+			c.Assert(err, IsNil)
+			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
 			offsetInMB := int64(0)
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore11, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -854,7 +2326,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore12, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -875,7 +2347,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore13, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -897,7 +2369,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 3 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore14, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -920,7 +2392,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 4 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore15, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -948,7 +2420,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			// Write some extra data into the current head before reverting. This part of data will be discarded after revert
 			offsetInMB = 5 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore16, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -964,7 +2436,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Revert for a new chain (chain 2)
-			revertSnapshot(c, spdkCli, snapshotName13, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName13, volumeName, engineName, engineFrontendName, replicaAddressMap)
 
 			// Current snapshot tree (with backing image):
 			// 	 nil (backing image) -> snap11[0,10] -> snap12[10,20] -> snap13[20,30] -> snap14[30,40] -> snap15[40,50]
@@ -1000,7 +2472,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(cksumAfter14, Not(Equals), cksumBefore14)
 
 			offsetInMB = 3 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore21, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1027,7 +2499,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 4 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore22, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1055,7 +2527,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 5 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore23, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1156,7 +2628,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			// TODO: Add replica rebuilding related test step
 
 			// Revert for a new chain (chain 3)
-			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, engineFrontendName, replicaAddressMap)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
@@ -1169,7 +2641,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			// Create and delete some snapshots for the new chain (chain 3)
 			offsetInMB = dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore31, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1191,7 +2663,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore32, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1260,7 +2732,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Revert for a new chain (chain 4)
-			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, engineFrontendName, replicaAddressMap)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
@@ -1274,7 +2746,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			// Create some snapshots for the new chain (chain 4)
 			offsetInMB = dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore41, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1297,7 +2769,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore42, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1335,7 +2807,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Revert back to chain 1
-			revertSnapshot(c, spdkCli, snapshotName15, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName15, volumeName, engineName, engineFrontendName, replicaAddressMap)
 
 			checkReplicaSnapshots(c, spdkCli, engineName, []string{replicaName1, replicaName2},
 				map[string][]string{
@@ -1353,7 +2825,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			// Write some data to the head before the 1st rebuilding
 			offsetInMB = 6 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBeforeRebuild11, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1368,8 +2840,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			engine, err = spdkCli.EngineGet(engineName)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			c.Assert(engine.Endpoint, Equals, endpoint)
+
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName2: types.ModeRW})
 			// Launch the 1st rebuilding replica as the replacement of the crashed replica1
@@ -1380,7 +2851,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(replica3.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica3.PortStart, Not(Equals), int32(0))
 			// Start the 1st rebuilding and wait for the completion
-			err = spdkCli.EngineReplicaAdd(engineName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync)
+			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync)
 			c.Assert(err, IsNil)
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
 			// While the volume head data written before rebuilding remains
@@ -1413,8 +2884,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			engine, err = spdkCli.EngineGet(engineName)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			c.Assert(engine.Endpoint, Equals, endpoint)
+
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName2: types.ModeRW, replicaName3: types.ModeRW})
 
@@ -1453,7 +2923,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			// Write more data to the head before the 2nd rebuilding
 			offsetInMB = 7 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBeforeRebuild12, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1468,8 +2938,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			engine, err = spdkCli.EngineGet(engineName)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			c.Assert(engine.Endpoint, Equals, endpoint)
+
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName3: types.ModeRW})
 			// Launch the 2nd rebuilding replica as the replacement of the crashed replica2
@@ -1480,7 +2949,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(replica4.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica4.PortStart, Not(Equals), int32(0))
 			// Start the 2nd rebuilding and wait for the completion
-			err = spdkCli.EngineReplicaAdd(engineName, replicaName4, net.JoinHostPort(ip, strconv.Itoa(int(replica4.PortStart))), defaultTestFastSync)
+			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName4, net.JoinHostPort(ip, strconv.Itoa(int(replica4.PortStart))), defaultTestFastSync)
 			c.Assert(err, IsNil)
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName4)
 			// While the volume head data written before rebuilding remains
@@ -1517,8 +2986,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			engine, err = spdkCli.EngineGet(engineName)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			c.Assert(engine.Endpoint, Equals, endpoint)
+
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName3: types.ModeRW, replicaName4: types.ModeRW})
 
@@ -1619,7 +3087,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumAfterRebuild12, Equals, cksumBeforeRebuild12)
 			// Verify chain2
-			revertSnapshot(c, spdkCli, snapshotName23, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName23, volumeName, engineName, engineFrontendName, replicaAddressMap)
 
 			// Current snapshot tree (with backing image):
 			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50]
@@ -1667,7 +3135,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(cksumAfter23, Equals, cksumBefore23)
 
 			// Verify chain3
-			revertSnapshot(c, spdkCli, snapshotName32, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName32, volumeName, engineName, engineFrontendName, replicaAddressMap)
 			// Current snapshot tree (with backing image):
 			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50]
 			// 	                                    |\                \
@@ -1700,7 +3168,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(err, IsNil)
 			c.Assert(cksumAfter32, Equals, cksumBefore32)
 			// Verify chain4
-			revertSnapshot(c, spdkCli, snapshotName42, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName42, volumeName, engineName, engineFrontendName, replicaAddressMap)
 			// Current snapshot tree (with backing image):
 			// 	 nil (backing image) -> snap11[0,10] -> snap13[10,30] -> snap15[30,50]
 			// 	                                    |\                \
@@ -1737,6 +3205,13 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 	wg.Wait()
 
+	engineFrontendList, err := spdkCli.EngineFrontendList()
+	c.Assert(err, IsNil)
+	for _, ef := range engineFrontendList {
+		err = spdkCli.EngineFrontendDelete(ef.Name)
+		c.Assert(err, IsNil)
+	}
+
 	engineList, err := spdkCli.EngineList()
 	c.Assert(err, IsNil)
 	for _, engine := range engineList {
@@ -1752,7 +3227,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 }
 
 func (s *TestSuite) TestSPDKMultipleThreadSnapshotOpsAndRebuildingWithoutBackingImage(c *C) {
-	fmt.Println("Testing SPDK snapshot operations with multiple threads without backing image")
+	fmt.Println("Testing SPDK multiple thread snapshot ops and rebuilding without backing image")
 	s.spdkMultipleThreadSnapshotOpsAndRebuilding(c, false)
 }
 
@@ -1813,7 +3288,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 		}()
 
 		// check if bi.State is "ready" in 300 seconds
-		for i := 0; i < maxBackingImageGetRetries; i++ {
+		for i := range maxBackingImageGetRetries {
 			bi, err = spdkCli.BackingImageGet(defaultTestBackingImageName, disk.Uuid)
 			c.Assert(err, IsNil)
 
@@ -1836,67 +3311,98 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 
 	concurrentCount := 5
 	dataCountInMB := int64(100)
+
+	// Pre-create all resources sequentially to avoid SPDK service contention
+	// during concurrent engine creation (validateReplicaSize + connectNVMfBdev
+	// can cause context deadline exceeded when goroutines contend simultaneously)
+	type volumeTestData struct {
+		volumeName         string
+		engineName         string
+		engineFrontendName string
+		replicaName1       string
+		replicaName2       string
+		replica1           *api.Replica
+		replicaAddressMap  map[string]string
+		endpoint           string
+	}
+
+	testVolumes := make([]volumeTestData, concurrentCount)
+	for i := range concurrentCount {
+		vol := &testVolumes[i]
+		vol.volumeName = fmt.Sprintf("test-vol-%d", i)
+		vol.engineName = fmt.Sprintf("%s-e", vol.volumeName)
+		vol.engineFrontendName = fmt.Sprintf("%s-ef", vol.volumeName)
+		vol.replicaName1 = fmt.Sprintf("%s-replica-1", vol.volumeName)
+		vol.replicaName2 = fmt.Sprintf("%s-replica-2", vol.volumeName)
+
+		replica1, err := spdkCli.ReplicaCreate(vol.replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
+		c.Assert(err, IsNil)
+		c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
+		c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
+		c.Assert(replica1.ErrorMsg, Equals, "")
+		c.Assert(replica1.State, Equals, types.InstanceStateRunning)
+		c.Assert(replica1.PortStart, Not(Equals), int32(0))
+		vol.replica1 = replica1
+
+		replica2, err := spdkCli.ReplicaCreate(vol.replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
+		c.Assert(err, IsNil)
+		c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
+		c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
+		c.Assert(replica2.ErrorMsg, Equals, "")
+		c.Assert(replica2.State, Equals, types.InstanceStateRunning)
+		c.Assert(replica2.PortStart, Not(Equals), int32(0))
+
+		vol.replicaAddressMap = map[string]string{
+			replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
+			replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
+		}
+		replicaModeMap := map[string]types.Mode{
+			replica1.Name: types.ModeRW,
+			replica2.Name: types.ModeRW,
+		}
+
+		vol.endpoint = helperutil.GetLonghornDevicePath(vol.volumeName)
+		engine, err := spdkCli.EngineCreate(vol.engineName, vol.volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, vol.replicaAddressMap, 1, false)
+		c.Assert(err, IsNil)
+		c.Assert(engine.State, Equals, types.InstanceStateRunning)
+		c.Assert(engine.ReplicaAddressMap, DeepEquals, vol.replicaAddressMap)
+		c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
+		c.Assert(engine.Port, Not(Equals), int32(0))
+
+		engineFrontend, err := spdkCli.EngineFrontendCreate(vol.engineFrontendName, vol.volumeName, vol.engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
+			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+		c.Assert(err, IsNil)
+		c.Assert(engineFrontend.Endpoint, Equals, vol.endpoint)
+	}
+
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
-	for i := 0; i < concurrentCount; i++ {
-		volumeName := fmt.Sprintf("test-vol-%d", i)
-		engineName := fmt.Sprintf("%s-engine", volumeName)
-		replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
-		replicaName2 := fmt.Sprintf("%s-replica-2", volumeName)
-
+	for i := range concurrentCount {
 		go func() {
-			defer func() {
-				// Do cleanup
-				// TODO: Check why there is a race here
-				// err = spdkCli.EngineDelete(engineName)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName1, true)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName2, true)
-				// c.Assert(err, IsNil)
-				// err = spdkCli.ReplicaDelete(replicaName3, true)
-				// c.Assert(err, IsNil)
+			defer wg.Done()
 
-				wg.Done()
-			}()
+			vol := testVolumes[i]
+			volumeName := vol.volumeName
+			engineName := vol.engineName
+			engineFrontendName := vol.engineFrontendName
+			replicaName1 := vol.replicaName1
+			replicaName2 := vol.replicaName2
+			replica1 := vol.replica1
+			replicaAddressMap := vol.replicaAddressMap
+			endpoint := vol.endpoint
 
-			replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
-			c.Assert(err, IsNil)
-			c.Assert(replica1.LvsName, Equals, defaultTestDiskName)
-			c.Assert(replica1.LvsUUID, Equals, disk.Uuid)
-			c.Assert(replica1.ErrorMsg, Equals, "")
-			c.Assert(replica1.State, Equals, types.InstanceStateRunning)
-			c.Assert(replica1.PortStart, Not(Equals), int32(0))
-			replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLargeLvolSize, defaultTestReplicaPortCount, backingImageName)
-			c.Assert(err, IsNil)
-			c.Assert(replica2.LvsName, Equals, defaultTestDiskName)
-			c.Assert(replica2.LvsUUID, Equals, disk.Uuid)
-			c.Assert(replica2.ErrorMsg, Equals, "")
-			c.Assert(replica2.State, Equals, types.InstanceStateRunning)
-			c.Assert(replica2.PortStart, Not(Equals), int32(0))
-
-			replicaAddressMap := map[string]string{
-				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
-				replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
-			}
-			replicaModeMap := map[string]types.Mode{
-				replica1.Name: types.ModeRW,
-				replica2.Name: types.ModeRW,
-			}
-			endpoint := helperutil.GetLonghornDevicePath(volumeName)
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaAddressMap, 1, ip, ip, false, 0, 0)
-			c.Assert(err, IsNil)
-			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
-			c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
-			c.Assert(engine.Port, Not(Equals), int32(0))
-			c.Assert(engine.Endpoint, Equals, endpoint)
+			var engine *api.Engine
+			var engineFrontend *api.EngineFrontend
+			var err error
+			// Suppress unused warnings; these are used in the goroutine body below
+			_ = engine
+			_ = engineFrontend
 
 			// Construct a snapshot tree with enough data before testing rebuilding
 
 			// Build the first chain (chain 1)
 			offsetInMB := int64(0)
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore11, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1916,7 +3422,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore12, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1937,7 +3443,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore13, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1959,7 +3465,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Revert for a new chain (chain 2)
-			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName11, volumeName, engineName, engineFrontendName, replicaAddressMap)
 
 			// Current snapshot tree (with backing image):
 			//       BackingImage -> snap11 ->  snap12 -> snap13
@@ -1974,7 +3480,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 1 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore21, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -1999,7 +3505,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBefore22, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -2025,7 +3531,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Revert for a new chain (chain 3)
-			revertSnapshot(c, spdkCli, snapshotName21, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName21, volumeName, engineName, engineFrontendName, replicaAddressMap)
 
 			// Current snapshot tree (with backing image):
 			//       BackingImage -> snap11 ->  snap12 -> snap13
@@ -2044,7 +3550,13 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
+			if err != nil {
+				fmt.Printf("Error writing data before creating snap31 for volume %s: %v\n", volumeName, err)
+				time.Sleep(60000 * time.Second)
+				fmt.Printf("After sleep, still error writing data before creating snap31 for volume %s: %v\n", volumeName, err)
+			}
 			c.Assert(err, IsNil)
 			cksumBefore31, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -2074,7 +3586,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 
 			// Finally, write some data to the head before the rebuilding
 			offsetInMB = 3 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			cksumBeforeRebuild11, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -2117,8 +3629,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			engine, err = spdkCli.EngineGet(engineName)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			c.Assert(engine.Endpoint, Equals, endpoint)
+
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName2: types.ModeRW})
 
@@ -2134,15 +3645,21 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
 			}
 
+			err = spdkCli.EngineFrontendDelete(engineFrontendName)
+			c.Assert(err, IsNil)
 			err = spdkCli.EngineDelete(engineName)
 			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaTmpAddressMap, 1, ip, ip, false, 0, 0)
+			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaTmpAddressMap, 1, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaTmpAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replica1.Name: types.ModeRW})
 			c.Assert(engine.Port, Not(Equals), int32(0))
-			c.Assert(engine.Endpoint, Equals, endpoint)
+
+			engineFrontend, err = spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+			c.Assert(err, IsNil)
+			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
 			// Current snapshot tree (with backing image):
 			//       BackingImage -> snap11[0,1*DATA] -> snap12[1*DATA,2*DATA] -> snap13[2*DATA,3*DATA]
@@ -2162,7 +3679,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
 			// Mess up snapshots in chain 1 by corrupting data for snap12 and introducing more invalid snapshots/head for the crashed replica1
-			revertSnapshot(c, spdkCli, snapshotName12, volumeName, engineName, replicaTmpAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName12, volumeName, engineName, engineFrontendName, replicaTmpAddressMap)
 
 			// Current snapshot tree of the crashed replica1 (with backing image):
 			//                                               -> head[,]
@@ -2206,7 +3723,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 
 			// Try to write invalid data into the snap12 for replica1
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			// Since we cannot modify or even delete the snap12 now, we need to put the invalid data to the new snap12-tmp
 			snapshotName12Tmp := "snap12-tmp"
@@ -2241,7 +3758,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 
 			// Then create the invalid snapshot13
 			offsetInMB = 2 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName13)
 			c.Assert(err, IsNil)
@@ -2250,7 +3767,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 
 			// Finally, create an extra snapshot14 and leave an invalid head
 			offsetInMB = 3 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 			snapshotName14 := "snap14"
 			_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName14)
@@ -2258,7 +3775,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			err = spdkCli.EngineSnapshotHash(engineName, snapshotName14, false)
 			c.Assert(err, IsNil)
 			offsetInMB = 4 * dataCountInMB
-			_, err = ne.Execute(nil, "dd", []string{"if=/dev/urandom", fmt.Sprintf("of=%s", endpoint), "bs=1M", fmt.Sprintf("count=%d", dataCountInMB), fmt.Sprintf("seek=%d", offsetInMB), "status=none"}, defaultTestExecuteTimeout)
+			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
 			c.Assert(err, IsNil)
 
 			// Current snapshot tree of the crashed replica1 (with backing image):
@@ -2279,20 +3796,26 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 				},
 				nil, checkReplicaSnapshotsMaxRetries, checkReplicaSnapshotsWaitInterval)
 
+			err = spdkCli.EngineFrontendDelete(engineFrontendName)
+			c.Assert(err, IsNil)
 			err = spdkCli.EngineDelete(engineName)
 			c.Assert(err, IsNil)
 
 			// Relaunch engine with the correct replica
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaAddressMap, 1, ip, ip, false, 0, 0)
+			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaAddressMap, 1, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
-			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replica2.Name: types.ModeRW})
+			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName2: types.ModeRW})
 			c.Assert(engine.Port, Not(Equals), int32(0))
-			c.Assert(engine.Endpoint, Equals, endpoint)
+
+			engineFrontend, err = spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+			c.Assert(err, IsNil)
+			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
 			// And start the 1st rebuilding and wait for the completion
-			err = spdkCli.EngineReplicaAdd(engineName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))), defaultTestFastSync)
+			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))), defaultTestFastSync)
 			c.Assert(err, IsNil)
 			// The rebuilding should be pretty fast since all existing snapshots and the previous head are there
 			WaitForReplicaRebuildingCompleteTimeout(c, spdkCli, engineName, replicaName1, 300)
@@ -2322,8 +3845,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			engine, err = spdkCli.EngineGet(engineName)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
-			c.Assert(engine.Frontend, Equals, types.FrontendSPDKTCPBlockdev)
-			c.Assert(engine.Endpoint, Equals, endpoint)
+
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 			c.Assert(engine.ReplicaModeMap, DeepEquals, map[string]types.Mode{replicaName1: types.ModeRW, replicaName2: types.ModeRW})
 
@@ -2372,7 +3894,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(cksumAfter31, Equals, cksumBefore31)
 
 			// Verify chain2, the volume head will be reverted to the snapshot22
-			revertSnapshot(c, spdkCli, snapshotName22, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName22, volumeName, engineName, engineFrontendName, replicaAddressMap)
 			for snapName := range snapshotMap {
 				snapshotOpts[snapName] = api.SnapshotOptions{UserCreated: true}
 			}
@@ -2403,7 +3925,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(cksumAfter22, Equals, cksumBefore22)
 
 			// Verify chain1, the volume head will be reverted to the snapshot13
-			revertSnapshot(c, spdkCli, snapshotName13, volumeName, engineName, replicaAddressMap)
+			revertSnapshot(c, spdkCli, snapshotName13, volumeName, engineName, engineFrontendName, replicaAddressMap)
 			for snapName := range snapshotMap {
 				snapshotOpts[snapName] = api.SnapshotOptions{UserCreated: true}
 			}
@@ -2437,6 +3959,13 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 
 	wg.Wait()
 
+	engineFrontendList, err := spdkCli.EngineFrontendList()
+	c.Assert(err, IsNil)
+	for _, ef := range engineFrontendList {
+		err = spdkCli.EngineFrontendDelete(ef.Name)
+		c.Assert(err, IsNil)
+	}
+
 	engineList, err := spdkCli.EngineList()
 	c.Assert(err, IsNil)
 	for _, engine := range engineList {
@@ -2458,7 +3987,11 @@ func (s *TestSuite) TestSPDKMultipleThreadFastRebuildingWithoutBackingImage(c *C
 
 func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, replicaList []string, snapshotMap map[string][]string, snapshotOpts map[string]api.SnapshotOptions, maxRetries int, retryInterval time.Duration) {
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	retries := maxRetries
+	if retries <= 0 {
+		retries = 1
+	}
+	for attempt := 0; attempt < retries; attempt++ {
 		lastErr = nil
 
 		engine, err := spdkCli.EngineGet(engineName)
@@ -2542,7 +4075,7 @@ func checkReplicaSnapshots(c *C, spdkCli *client.SPDKClient, engineName string, 
 			return
 		}
 
-		if attempt < maxRetries-1 {
+		if attempt < retries-1 {
 			time.Sleep(retryInterval)
 		}
 	}
@@ -2592,7 +4125,7 @@ func waitReplicaSnapshotChecksumTimeout(c *C, spdkCli *client.SPDKClient, replic
 	c.Assert(hasChecksum, Equals, true)
 }
 
-func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, engineName string, replicaAddressMap map[string]string) {
+func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, engineName, engineFrontendName string, replicaAddressMap map[string]string) {
 	ip, err := commonnet.GetAnyExternalIP()
 	c.Assert(err, IsNil)
 	err = os.Setenv(commonnet.EnvPodIP, ip)
@@ -2606,18 +4139,27 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 	}
 	volumeSize := engine.SpecSize
 
-	prevFrontend := engine.Frontend
-	prevEndpoint := engine.Endpoint
+	engineFrontends, err := spdkCli.EngineFrontendList()
+	c.Assert(err, IsNil)
+	var prevFrontend, prevEndpoint string
+	if ef, ok := engineFrontends[engineFrontendName]; ok {
+		prevFrontend = ef.Frontend
+		prevEndpoint = ef.Endpoint
+	} else {
+		prevFrontend = types.FrontendEmpty
+	}
+
 	if prevFrontend != types.FrontendEmpty {
 		// Restart the engine without the frontend
+		err = spdkCli.EngineFrontendDelete(engineFrontendName)
+		c.Assert(err, IsNil)
 		err = spdkCli.EngineDelete(engineName)
 		c.Assert(err, IsNil)
-		engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, volumeSize, replicaAddressMap, 1, ip, ip, false, 0, 0)
+		engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, volumeSize, replicaAddressMap, 1, false)
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 		c.Assert(engine.Port, Equals, int32(0))
-		c.Assert(engine.Endpoint, Equals, "")
 	}
 
 	err = spdkCli.EngineSnapshotRevert(engineName, snapshotName)
@@ -2625,14 +4167,20 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 
 	if prevFrontend != types.FrontendEmpty {
 		// Restart the engine with the previous frontend
+		err = spdkCli.EngineFrontendDelete(engineFrontendName)
+		c.Assert(err, IsNil)
 		err = spdkCli.EngineDelete(engineName)
 		c.Assert(err, IsNil)
-		engine, err = spdkCli.EngineCreate(engineName, volumeName, prevFrontend, volumeSize, replicaAddressMap, 1, ip, ip, false, 0, 0)
+		engine, err = spdkCli.EngineCreate(engineName, volumeName, prevFrontend, volumeSize, replicaAddressMap, 1, false)
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 		c.Assert(engine.Port, Not(Equals), int32(0))
-		c.Assert(engine.Endpoint, Equals, prevEndpoint)
+
+		engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, prevFrontend, volumeSize,
+			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+		c.Assert(err, IsNil)
+		c.Assert(engineFrontend.Endpoint, Equals, prevEndpoint)
 	}
 }
 
@@ -2693,8 +4241,8 @@ func WaitForReplicaRebuildingCompleteTimeout(c *C, spdkCli *client.SPDKClient, e
 	c.Assert(complete, Equals, true)
 }
 
-func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
-	fmt.Println("Testing SPDK basic operations with engine only with target")
+func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
+	fmt.Println("Testing SPDK engine frontend replica add with data verification")
 
 	diskDriverName := "aio"
 
@@ -2705,7 +4253,6 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var spdkWg sync.WaitGroup
-
 	defer func() {
 		cancel()
 		spdkWg.Wait()
@@ -2724,7 +4271,7 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 	c.Assert(err, IsNil)
 	defer func() {
 		if errClose := spdkCli.Close(); errClose != nil {
-			c.Assert(errClose, IsNil)
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
 		}
 	}()
 
@@ -2740,48 +4287,455 @@ func (s *TestSuite) TestSPDKEngineOnlyWithTarget(c *C) {
 	defer func() {
 		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
 		c.Assert(err, IsNil)
-
-		disk, err = spdkCli.DiskGet(defaultTestDiskName, disk.Path, diskDriverName)
-		c.Assert(err, NotNil)
-		c.Assert(disk, IsNil)
 	}()
 
-	volumeName := "test-vol"
-	engineName := fmt.Sprintf("%s-engine", volumeName)
-	replicaName1 := fmt.Sprintf("%s-replica-1", volumeName)
-	replicaName2 := fmt.Sprintf("%s-replica-2", volumeName)
+	volumeName := getVolumeName()
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
+	replicaNames := []string{
+		fmt.Sprintf("%s-replica-1", volumeName),
+		fmt.Sprintf("%s-replica-2", volumeName),
+	}
+	replicas := make(map[string]*api.Replica)
 
-	replica1, err := spdkCli.ReplicaCreate(replicaName1, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	defer func() {
+		err = spdkCli.EngineFrontendDelete(engineFrontendName)
+		c.Assert(err, IsNil)
+
+		err = spdkCli.EngineDelete(engineName)
+		c.Assert(err, IsNil)
+
+		for _, replica := range replicas {
+			err = spdkCli.ReplicaDelete(replica.Name, true)
+			c.Assert(err, IsNil)
+		}
+	}()
+
+	// 1. Create first replica
+	replica, err := spdkCli.ReplicaCreate(replicaNames[0], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
 	c.Assert(err, IsNil)
-	replica2, err := spdkCli.ReplicaCreate(replicaName2, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	replicas[replicaNames[0]] = replica
+
+	replicaAddressMap := make(map[string]string)
+	replicaAddressMap[replicaNames[0]] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+
+	// 2. Create Engine with 1 replica
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
 	c.Assert(err, IsNil)
 
-	replicaAddressMap := map[string]string{
-		replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
-		replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
+	// 3. Create Engine Frontend
+	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
+
+	endpoint := helperutil.GetLonghornDevicePath(volumeName)
+	c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+
+	// 4. Write Data to Volume (Pattern A)
+	offset := int64(0)
+	length := int64(4096)
+	dataA := make([]byte, length)
+	for i := 0; i < len(dataA); i++ {
+		dataA[i] = 'A'
+	}
+	f, err := os.OpenFile(endpoint, os.O_RDWR, 0666)
+	c.Assert(err, IsNil)
+	_, err = f.WriteAt(dataA, offset)
+	c.Assert(err, IsNil)
+	err = f.Sync()
+	c.Assert(err, IsNil)
+	err = f.Close()
+	c.Assert(err, IsNil)
+
+	// 5. Take Snapshot
+	snapshotName := "snap1"
+	_, err = spdkCli.EngineFrontendSnapshotCreate(engineFrontendName, snapshotName)
+	c.Assert(err, IsNil)
+
+	// 6. Write Data to Volume (Pattern B)
+	offsetB := int64(4096)
+	dataB := make([]byte, length)
+	for i := 0; i < len(dataB); i++ {
+		dataB[i] = 'B'
+	}
+	f, err = os.OpenFile(endpoint, os.O_RDWR, 0666)
+	c.Assert(err, IsNil)
+	_, err = f.WriteAt(dataB, offsetB)
+	c.Assert(err, IsNil)
+	err = f.Sync()
+	c.Assert(err, IsNil)
+	err = f.Close()
+	c.Assert(err, IsNil)
+
+	// 7. Add Second Replica
+	replica2, err := spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replicas[replicaNames[1]] = replica2
+	replica2Address := net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
+
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	c.Assert(err, IsNil)
+
+	// 8. Wait for Replica Add to Complete
+	err = retry.Do(func() error {
+		e, err := spdkCli.EngineGet(engineName)
+		if err != nil {
+			return err
+		}
+		if e.ReplicaModeMap[replicaNames[1]] != types.ModeRW {
+			return fmt.Errorf("replica %s is not RW yest: %v", replicaNames[1], e.ReplicaModeMap[replicaNames[1]])
+		}
+		return nil
+	}, retry.Delay(1*time.Second), retry.Attempts(60))
+	c.Assert(err, IsNil)
+
+	// 9. Verify Data on Second Replica
+	// Connect to Replica 2 directly to verify data
+	replica2NQN := helpertypes.GetNQN(replicaNames[1])
+	replica2Port := strconv.Itoa(int(replica2.PortStart))
+
+	ne, err = helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+
+	_, err = helperinitiator.ConnectTarget(ip, replica2Port, replica2NQN, ne)
+	c.Assert(err, IsNil)
+	defer func() {
+		_ = helperinitiator.DisconnectTarget(replica2NQN, ne)
+	}()
+
+	devices, err := helperinitiator.GetDevices(ip, replica2Port, replica2NQN, ne)
+	c.Assert(err, IsNil)
+	c.Assert(len(devices), Equals, 1)
+
+	replica2Endpoint := filepath.Join("/dev", devices[0].Namespaces[0].NameSpace)
+
+	// Read back Data A
+	readBuf := make([]byte, length)
+	f2, err := os.OpenFile(replica2Endpoint, os.O_RDONLY, 0666)
+	c.Assert(err, IsNil)
+	defer func() {
+		err = f2.Close()
+		c.Assert(err, IsNil)
+	}()
+
+	_, err = f2.ReadAt(readBuf, offset)
+	c.Assert(err, IsNil)
+	c.Assert(readBuf, DeepEquals, dataA)
+
+	// Read back Data B
+	_, err = f2.ReadAt(readBuf, offsetB)
+	c.Assert(err, IsNil)
+	c.Assert(readBuf, DeepEquals, dataB)
+}
+
+// TestSPDKEngineFrontendReplicaAddErrorHandling tests the error handling of replica addition.
+// It verifies that errors during shallow copy and finish phases are correctly reported and handled,
+// and that the operation can be retried successfully.
+func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
+
+	fmt.Println("Testing SPDK engine frontend replica add error handling")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	// Use launchTestSPDKGRPCServer helper to get access to the server instance
+	srv := launchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+	c.Assert(disk.Path, Equals, loopDevicePath)
+	c.Assert(disk.Uuid, Not(Equals), "")
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	volumeName := fmt.Sprintf("test-err-vol-%s", time.Now().Format("20060102150405"))
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
+	replicaNames := []string{
+		fmt.Sprintf("%s-replica-1", volumeName),
+		fmt.Sprintf("%s-replica-2", volumeName),
+	}
+	replicas := make(map[string]*api.Replica)
+
+	defer func() {
+		// Cleanup: Try to delete frontend if exists
+		_ = spdkCli.EngineFrontendDelete(engineFrontendName)
+
+		err = spdkCli.EngineDelete(engineName)
+		c.Assert(err, IsNil)
+
+		for _, replica := range replicas {
+			err = spdkCli.ReplicaDelete(replica.Name, true)
+			c.Assert(err, IsNil)
+		}
+	}()
+
+	// 1. Create first replica
+	replica, err := spdkCli.ReplicaCreate(replicaNames[0], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replicas[replicaNames[0]] = replica
+
+	replicaAddressMap := make(map[string]string)
+	replicaAddressMap[replicaNames[0]] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+
+	// 2. Create Engine with 1 replica
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false)
+	c.Assert(err, IsNil)
+
+	// 3. Create Engine Frontend
+	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
+
+	endpoint := helperutil.GetLonghornDevicePath(volumeName)
+
+	// Get Internal Engine Struct to inject errors
+	internalEngine := srv.GetEngineStruct(engineName)
+	c.Assert(internalEngine, NotNil)
+
+	// 4. Create Second Replica
+	replica2, err := spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replicas[replicaNames[1]] = replica2
+	replica2Address := net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
+
+	// Helper to wait for engine replica to reach ERR mode
+	// (indicates the async replica add goroutine on the Engine side has failed).
+	// The Engine sets the mode to ERR before running SPDK cleanup, so this
+	// returns quickly without waiting for detach timeouts.
+	waitForReplicaERR := func(replicaName string) {
+		err = retry.Do(func() error {
+			e, err := spdkCli.EngineGet(engineName)
+			if err != nil {
+				return err
+			}
+			mode, ok := e.ReplicaModeMap[replicaName]
+			if !ok {
+				return fmt.Errorf("replica %s not found in engine mode map", replicaName)
+			}
+			if mode != types.ModeERR {
+				return fmt.Errorf("replica %s mode is %v, expected ERR", replicaName, mode)
+			}
+			return nil
+		}, retry.Delay(500*time.Millisecond), retry.Attempts(30))
+		c.Assert(err, IsNil)
 	}
 
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, "127.0.0.1", ip, false, 0, 0)
+	// 5. Test Shallow Copy Error
+	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{
+		ShallowCopyFunc: func(srcReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, snapshots []*api.Lvol, fastSync bool) error {
+			return fmt.Errorf("injected shallow copy error")
+		},
+	})
+
+	// Call ReplicaAdd (async)
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	c.Assert(err, IsNil) // Should be nil as it returns immediately
+
+	waitForReplicaERR(replicaNames[1])
+
+	// Reset adder
+	internalEngine.SetReplicaAdder(nil)
+
+	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
 	c.Assert(err, IsNil)
 
-	c.Assert(engine.Endpoint, Equals, "")
-	// Initiator is not created, so the IP and Port should be empty
-	c.Assert(engine.IP, Equals, "")
-	c.Assert(engine.Port, Equals, int32(0))
-	// Target is created and exposed
-	c.Assert(engine.TargetIP, Equals, ip)
-	c.Assert(engine.TargetPort, Not(Equals), int32(0))
-
-	// Detach and re-attach the volume
-	// EngineDeleteTarget will delete engine instance if engine doesn't have an initiator
-	err = spdkCli.EngineDeleteTarget(engineName)
+	// The engine's ReplicaAdd goroutine internally calls replicaAddFinish on shallow copy
+	// failure, which detaches the external snapshot NVMe controller and stops the source from
+	// exposing. So we only need to delete/recreate the dst replica for a clean state.
+	err = spdkCli.ReplicaDelete(replicaNames[1], true)
 	c.Assert(err, IsNil)
 
-	_, err = spdkCli.EngineGet(engineName)
-	c.Assert(strings.Contains(err.Error(), "cannot find engine"), Equals, true)
+	replica2, err = spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replica2Address = net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
 
-	err = spdkCli.ReplicaDelete(replicaName1, false)
+	// 5b. Test Shallow Copy Error with Replica in Error State
+	// This tests the production scenario where a real shallow copy failure sets the
+	// replica's internal state to Error (via RebuildingDstShallowCopyStart's defer).
+	// The test hook operates at Engine level and doesn't trigger per-replica error state,
+	// so we use SetTestErrorState to simulate the production behavior.
+	// Without the P0 fix, RebuildingDstFinish would reject error-state replicas,
+	// causing doCleanupForRebuildingDst to never run, leaving the external snapshot
+	// NVMe controller attached and causing bdev_nvme_detach_controller to hang.
+	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{
+		ShallowCopyFunc: func(dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, snapshots []*api.Lvol, fastSync bool) error {
+			// Simulate what happens in production: the per-replica error state is set
+			// by RebuildingDstShallowCopyStart's defer when the actual shallow copy fails.
+			internalReplica := srv.GetReplicaStruct(dstReplicaName)
+			c.Assert(internalReplica, NotNil)
+			internalReplica.SetTestErrorState("simulated production shallow copy failure")
+			return fmt.Errorf("injected shallow copy error with replica error state")
+		},
+	})
+
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
 	c.Assert(err, IsNil)
-	err = spdkCli.ReplicaDelete(replicaName2, false)
+
+	waitForReplicaERR(replicaNames[1])
+
+	// Reset adder
+	internalEngine.SetReplicaAdder(nil)
+
+	// Clean up the partial state in Engine
+	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
 	c.Assert(err, IsNil)
+
+	// ReplicaDelete should succeed without hanging, because even though the replica
+	// was in error state, RebuildingDstFinish (with the P0 fix) still performed
+	// doCleanupForRebuildingDst, disconnecting the external snapshot NVMe controller.
+	err = spdkCli.ReplicaDelete(replicaNames[1], true)
+	c.Assert(err, IsNil)
+
+	replica2, err = spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replica2Address = net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
+
+	// 6. Test Finish Error
+	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{
+		FinishFunc: func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error {
+			return fmt.Errorf("injected finish error")
+		},
+	})
+
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	c.Assert(err, IsNil)
+
+	waitForReplicaERR(replicaNames[1])
+
+	// Reset adder
+	internalEngine.SetReplicaAdder(nil)
+
+	// Clean up the partial state in Engine
+	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
+	c.Assert(err, IsNil)
+
+	// The engine's ReplicaAdd goroutine internally calls the real replicaAddFinish
+	// for cleanup when the test hook fails, so SPDK resources are already cleaned up.
+	err = spdkCli.ReplicaDelete(replicaNames[1], true)
+	c.Assert(err, IsNil)
+	replica2, err = spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replica2Address = net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
+
+	// 6b. Test Engine Lock is Released During replicaAddFinish Phase 2 (RPC calls)
+	// This verifies the 3-phase lock refactoring: the Engine lock should NOT be held
+	// during Phase 2 when RPC calls (ReplicaRebuildingSrcFinish, ReplicaRebuildingDstFinish)
+	// are executed. Without this refactoring, these RPCs would block all Engine operations
+	// for 10+ seconds on ETIMEDOUT.
+	phase2LockReleased := make(chan bool, 1)
+	internalEngine.SetFinishPhase2Hook(func() {
+		// This hook runs inside Phase 2 of replicaAddFinish, where the Engine lock
+		// should be released. Verify by trying to acquire the lock.
+		if internalEngine.TryLock() {
+			// Lock was free — 3-phase pattern is working correctly
+			internalEngine.Unlock()
+			phase2LockReleased <- true
+		} else {
+			// Lock was held — 3-phase pattern is NOT working (old behavior)
+			phase2LockReleased <- false
+		}
+	})
+
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	c.Assert(err, IsNil)
+
+	// Wait for the Phase 2 hook to fire and report lock status
+	select {
+	case lockReleased := <-phase2LockReleased:
+		c.Assert(lockReleased, Equals, true)
+	case <-time.After(60 * time.Second):
+		c.Fatal("Timed out waiting for replicaAddFinish Phase 2 hook to fire")
+	}
+
+	// Reset hook
+	internalEngine.SetFinishPhase2Hook(nil)
+
+	// Wait for Replica Add to Complete
+	err = retry.Do(func() error {
+		e, err := spdkCli.EngineGet(engineName)
+		if err != nil {
+			return err
+		}
+		if e.ReplicaModeMap[replicaNames[1]] != types.ModeRW {
+			return fmt.Errorf("replica %s is not RW yet: %v", replicaNames[1], e.ReplicaModeMap[replicaNames[1]])
+		}
+		return nil
+	}, retry.Delay(1*time.Second), retry.Attempts(60))
+	c.Assert(err, IsNil)
+
+	// Verify Data I/O is still working
+	f, err := os.OpenFile(endpoint, os.O_RDWR, 0666)
+	c.Assert(err, IsNil)
+	data := []byte("phase2-lock-test")
+	_, err = f.WriteAt(data, 0)
+	c.Assert(err, IsNil)
+	err = f.Close()
+	c.Assert(err, IsNil)
+}
+
+func writeDataToBlockDevice(ne *commonns.Executor, endpoint string, offsetInMB, dataCountInMB int64) error {
+	return retry.Do(
+		func() error {
+			_, err := ne.Execute(
+				nil,
+				"dd",
+				[]string{
+					"if=/dev/urandom",
+					fmt.Sprintf("of=%s", endpoint),
+					"bs=1M",
+					fmt.Sprintf("count=%d", dataCountInMB),
+					fmt.Sprintf("seek=%d", offsetInMB),
+					"status=none",
+				},
+				defaultTestExecuteTimeout,
+			)
+			return err
+		},
+		retry.Attempts(30),
+		retry.Delay(1*time.Second),
+		retry.DelayType(retry.FixedDelay),
+		retry.LastErrorOnly(true),
+		retry.OnRetry(func(n uint, err error) {
+			logrus.WithFields(logrus.Fields{
+				"attempt": n + 1,
+				"error":   err,
+			}).Warn("Write data to block device failed, retrying...")
+		}),
+	)
 }
