@@ -1517,9 +1517,19 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyMixedValidAndInvalidLvolNames(c *
 		}
 		allNames := append([]string{validReplicaName}, invalidNames...)
 
-		for _, name := range allNames {
-			_, err := env.rawSPDKCli.BdevLvolCreate("", env.disk.Uuid, name, util.BytesToMiB(defaultTestLvolSize), "", true)
-			c.Assert(err, IsNil)
+		// Create all lvols concurrently
+		var createWg sync.WaitGroup
+		createErrs := make([]error, len(allNames))
+		for i, name := range allNames {
+			createWg.Add(1)
+			go func(idx int, lvolName string) {
+				defer createWg.Done()
+				_, createErrs[idx] = env.rawSPDKCli.BdevLvolCreate("", env.disk.Uuid, lvolName, util.BytesToMiB(defaultTestLvolSize), "", true)
+			}(i, name)
+		}
+		createWg.Wait()
+		for i, name := range allNames {
+			c.Assert(createErrs[i], IsNil, Commentf("failed to create lvol %s", name))
 			defer func(replicaName string) {
 				_ = env.spdkCli.ReplicaDelete(replicaName, true)
 				_, _ = env.rawSPDKCli.BdevLvolDelete(fmt.Sprintf("%s/%s", env.disk.Name, replicaName))
@@ -1538,9 +1548,20 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyMixedValidAndInvalidLvolNames(c *
 		}, monitoringRetryOpts(env.ctx, 8)...)
 		c.Assert(err, IsNil)
 
-		for _, invalidName := range invalidNames {
-			_, err := env.spdkCli.ReplicaGet(invalidName)
-			c.Assert(isReplicaNotFound(err), Equals, true)
+		// Verify invalid lvols are not found concurrently
+		var verifyWg sync.WaitGroup
+		verifyResults := make([]bool, len(invalidNames))
+		for i, invalidName := range invalidNames {
+			verifyWg.Add(1)
+			go func(idx int, name string) {
+				defer verifyWg.Done()
+				_, err := env.spdkCli.ReplicaGet(name)
+				verifyResults[idx] = isReplicaNotFound(err)
+			}(i, invalidName)
+		}
+		verifyWg.Wait()
+		for i, invalidName := range invalidNames {
+			c.Assert(verifyResults[i], Equals, true, Commentf("expected replica %s to be not found", invalidName))
 		}
 	})
 }
