@@ -783,6 +783,11 @@ func (ef *EngineFrontend) finishExpansion(fromSize uint64, expanded bool, size u
 			// The backend expansion succeeded, but post-expansion frontend handling failed.
 			ef.SpecSize = size
 			ef.log.Warnf("Expanded from size %v to %v but encountered post-expansion error", fromSize, size)
+
+			// Re-persist even on error so the updated SpecSize survives a restart.
+			if err := saveEngineFrontendRecord(ef.metadataDir, ef); err != nil {
+				ef.log.WithError(err).Warn("Failed to persist engine frontend record after partial expansion")
+			}
 		} else {
 			ef.log.Infof("Failed to expand from size %v to %v", fromSize, size)
 		}
@@ -807,6 +812,11 @@ func (ef *EngineFrontend) finishExpansion(fromSize uint64, expanded bool, size u
 	if expanded {
 		ef.log.Infof("Succeeded to expand from size %v to %v", fromSize, size)
 		ef.SpecSize = size
+
+		// Re-persist the record so the updated SpecSize survives a restart.
+		if err := saveEngineFrontendRecord(ef.metadataDir, ef); err != nil {
+			ef.log.WithError(err).Warn("Failed to persist engine frontend record after expansion")
+		}
 	} else {
 		ef.log.Infof("Failed to expand from size %v to %v", fromSize, size)
 	}
