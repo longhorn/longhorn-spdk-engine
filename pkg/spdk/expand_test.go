@@ -58,11 +58,12 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionSuccessClearsErrorState(c *
 	ef.ErrorMsg = "previous failure"
 	ef.lastExpansionError = ""
 
-	ef.finishExpansion(10, true, 20, nil, "", "")
+	ef.finishExpansion(10, true, 20, nil, "", "", 15)
 
 	c.Assert(ef.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateRunning))
 	c.Assert(ef.ErrorMsg, Equals, "")
 	c.Assert(ef.SpecSize, Equals, uint64(20))
+	c.Assert(ef.ActualSize, Equals, uint64(15))
 	c.Assert(ef.isExpanding, Equals, false)
 }
 
@@ -71,11 +72,12 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionExpandedWithError(c *C) {
 
 	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1))
 
-	ef.finishExpansion(10, true, 20, errors.New("post expansion frontend failure"), "", "")
+	ef.finishExpansion(10, true, 20, errors.New("post expansion frontend failure"), "", "", 15)
 
 	c.Assert(ef.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
 	c.Assert(ef.ErrorMsg, Not(Equals), "")
 	c.Assert(ef.SpecSize, Equals, uint64(20))
+	c.Assert(ef.ActualSize, Equals, uint64(15))
 	c.Assert(ef.lastExpansionError, Not(Equals), "")
 	c.Assert(ef.isExpanding, Equals, false)
 }
@@ -86,10 +88,11 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionFailureWithoutExpansion(c *
 	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1))
 	ef.SpecSize = 10
 
-	ef.finishExpansion(10, false, 20, errors.New("expand failed before backend expansion"), "", "")
+	ef.finishExpansion(10, false, 20, errors.New("expand failed before backend expansion"), "", "", 0)
 
 	c.Assert(ef.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
 	c.Assert(ef.SpecSize, Equals, uint64(10))
+	c.Assert(ef.ActualSize, Equals, uint64(0))
 	c.Assert(ef.lastExpansionError, Not(Equals), "")
 	c.Assert(ef.isExpanding, Equals, false)
 }
@@ -113,11 +116,12 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionPartialFailureKeepsOriginal
 
 	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1))
 
-	ef.finishExpansion(10, false, 20, nil, "replica expand failed", "2026-03-10T00:00:00Z")
+	ef.finishExpansion(10, false, 20, nil, "replica expand failed", "2026-03-10T00:00:00Z", 12)
 
 	c.Assert(ef.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateRunning))
 	c.Assert(ef.ErrorMsg, Equals, "")
 	c.Assert(ef.SpecSize, Equals, uint64(10))
+	c.Assert(ef.ActualSize, Equals, uint64(12))
 	c.Assert(ef.lastExpansionError, Equals, "replica expand failed")
 	c.Assert(ef.lastExpansionFailedAt, Equals, "2026-03-10T00:00:00Z")
 	c.Assert(ef.isExpanding, Equals, false)

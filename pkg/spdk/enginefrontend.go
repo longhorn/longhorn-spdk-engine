@@ -647,6 +647,7 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 	expanded := false
 	backendExpansionError := ""
 	backendExpansionFailedAt := ""
+	var engineActualSize uint64
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -658,7 +659,7 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 
 		// Phase 3: Re-acquire lock to update state.
 		ef.Lock()
-		ef.finishExpansion(originalSize, expanded, size, retErr, backendExpansionError, backendExpansionFailedAt)
+		ef.finishExpansion(originalSize, expanded, size, retErr, backendExpansionError, backendExpansionFailedAt, engineActualSize)
 		ef.Unlock()
 
 		ef.UpdateCh <- nil
@@ -693,6 +694,7 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 	if err != nil {
 		return errors.Wrapf(err, "failed to get engine %v after expansion", engineName)
 	}
+	engineActualSize = engine.ActualSize
 	if engine.LastExpansionError != "" {
 		backendExpansionError = engine.LastExpansionError
 		backendExpansionFailedAt = engine.LastExpansionFailedAt
@@ -770,7 +772,13 @@ func (ef *EngineFrontend) requireExpansion(ctx context.Context, engineSpdkClient
 	return true, nil
 }
 
-func (ef *EngineFrontend) finishExpansion(fromSize uint64, expanded bool, size uint64, err error, backendExpansionError, backendExpansionFailedAt string) {
+func (ef *EngineFrontend) finishExpansion(fromSize uint64, expanded bool, size uint64, err error, backendExpansionError, backendExpansionFailedAt string, engineActualSize uint64) {
+	// Sync ActualSize from the engine whenever we successfully queried it,
+	// regardless of whether the expansion itself succeeded or failed.
+	if engineActualSize > 0 {
+		ef.ActualSize = engineActualSize
+	}
+
 	if err != nil {
 		ef.log.WithError(err).Errorf("Engine %s failed to expand from size %v to %v", ef.Name, fromSize, size)
 		ef.State = types.InstanceStateError
