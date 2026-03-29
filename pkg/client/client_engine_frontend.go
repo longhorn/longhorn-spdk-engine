@@ -139,13 +139,6 @@ func (c *SPDKClient) EngineFrontendSwitchOver(name, newEngineName, newTargetAddr
 	return nil
 }
 
-func (c *SPDKClient) EngineFrontendSwitchOverWithOptions(name, newEngineName, newTargetAddress string, opts *EngineFrontendSwitchOverOptions) error {
-	if opts != nil && (opts.ExpectedEngineName != "" || opts.ExpectedTargetAddress != "" || opts.RequestID != "") {
-		return fmt.Errorf("engine frontend switch-over options are not supported by current gRPC EngineFrontendSwitchOverRequest")
-	}
-	return c.EngineFrontendSwitchOver(name, newEngineName, newTargetAddress)
-}
-
 func (c *SPDKClient) EngineFrontendSuspend(name string) error {
 	if name == "" {
 		return fmt.Errorf("failed to suspend engine frontend: missing required parameter")

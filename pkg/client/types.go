@@ -50,10 +50,3 @@ type BackupRestoreRequest struct {
 	ConcurrentLimit int32
 }
 
-type EngineFrontendSwitchOverOptions struct {
-	// These fields are kept for API compatibility, but current gRPC
-	// EngineFrontendSwitchOverRequest does not support them.
-	ExpectedEngineName    string
-	ExpectedTargetAddress string
-	RequestID             string
-}
