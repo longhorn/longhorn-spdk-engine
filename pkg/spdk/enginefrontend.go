@@ -275,6 +275,10 @@ func (ef *EngineFrontend) Delete(spdkClient *spdkclient.Client) (err error) {
 		ef.Unlock()
 		return errors.Wrapf(ErrSwitchOverTargetPrecondition, "engine frontend %s is switching over target", ef.Name)
 	}
+	if ef.isExpanding {
+		ef.Unlock()
+		return errors.Wrapf(ErrEngineFrontendLifecyclePrecondition, "engine frontend %s is still expanding", ef.Name)
+	}
 
 	defer func() {
 		// Considering that there may be still pending validations, it's better to update the state after the deletion.
