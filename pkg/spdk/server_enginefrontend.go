@@ -7,14 +7,14 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
-
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	commonnet "github.com/longhorn/go-common-libs/net"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
+
+	commonnet "github.com/longhorn/go-common-libs/net"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
