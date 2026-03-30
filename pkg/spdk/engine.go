@@ -167,7 +167,12 @@ func (e *Engine) checkInitiatorAndTargetCreationRequirements(podIP, initiatorIP,
 		return false, false, fmt.Errorf("failed to checkInitiatorAndTargetCreationRequirements: invalid NvmeTcpFrontend: %v", e.NvmeTcpFrontend)
 	}
 
-	if podIP == initiatorIP && podIP == targetIP {
+	// In dual-stack clusters, podIP (from GetIPForPod) may be IPv4 while initiatorIP/targetIP
+	// are IPv6. Use isLocalIP to check ownership against all local interface addresses.
+	podOwnsInitiator := podIP == initiatorIP || isLocalIP(initiatorIP)
+	podOwnsTarget := podIP == targetIP || isLocalIP(targetIP)
+
+	if podOwnsInitiator && podOwnsTarget {
 		// If the engine is running on the same pod, it should have both initiator and target instances
 		if e.NvmeTcpFrontend.Port == 0 && e.NvmeTcpFrontend.TargetPort == 0 {
 			// Both initiator and target instances are not created yet
@@ -185,11 +190,11 @@ func (e *Engine) checkInitiatorAndTargetCreationRequirements(podIP, initiatorIP,
 		} else {
 			e.log.Infof("Initiator instance with port %v and target instance with port %v are already created, will skip the creation", e.NvmeTcpFrontend.Port, e.NvmeTcpFrontend.TargetPort)
 		}
-	} else if podIP == initiatorIP && podIP != targetIP {
+	} else if podOwnsInitiator && !podOwnsTarget {
 		// Only initiator instance creation is required, because the target instance is running on a different pod
 		e.log.Info("Creating an initiator instance")
 		initiatorCreationRequired = true
-	} else if podIP == targetIP && podIP != initiatorIP {
+	} else if !podOwnsInitiator && podOwnsTarget {
 		// Only target instance creation is required, because the initiator instance is running on a different pod
 		e.log.Info("Creating a target instance")
 		targetCreationRequired = true
@@ -1283,8 +1288,7 @@ func (e *Engine) validateAndUpdateNvmeTcpFrontend(subsystemMap map[string]*spdkt
 
 	port := 0
 	for _, listenAddr := range subsystem.ListenAddresses {
-		if !strings.EqualFold(string(listenAddr.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
-			!strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
+		if !strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
 			continue
 		}
 		if port, err = strconv.Atoi(listenAddr.Trsvcid); err != nil {
@@ -1363,9 +1367,8 @@ func (e *Engine) validateAndUpdateReplicaNvme(replicaName string, bdev *spdktype
 		return types.ModeERR, fmt.Errorf("found zero or multiple NVMe info in a NVMe base bdev %v during replica %s mode validation", bdev.Name, replicaName)
 	}
 	nvmeInfo := (*bdev.DriverSpecific.Nvme)[0]
-	if !strings.EqualFold(string(nvmeInfo.Trid.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
-		!strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
-		return types.ModeERR, fmt.Errorf("found invalid address family %s and transport type %s in a remote NVMe base bdev %s during replica %s mode validation", nvmeInfo.Trid.Adrfam, nvmeInfo.Trid.Trtype, bdev.Name, replicaName)
+	if !strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
+		return types.ModeERR, fmt.Errorf("found invalid transport type %s in a remote NVMe base bdev %s during replica %s mode validation", nvmeInfo.Trid.Trtype, bdev.Name, replicaName)
 	}
 	bdevAddr := net.JoinHostPort(nvmeInfo.Trid.Traddr, nvmeInfo.Trid.Trsvcid)
 	if e.ReplicaStatusMap[replicaName].Address != bdevAddr {
@@ -3020,8 +3023,12 @@ func (e *Engine) BackupRestoreFinish(spdkClient *spdkclient.Client) error {
 			return err
 		}
 		e.log.Infof("Attaching replica %s with address %s before finishing restoration", replicaName, replicaAddress)
+		replicaAdrfam := spdktypes.NvmeAddressFamilyIPv4
+		if parsedIP := net.ParseIP(replicaIP); parsedIP != nil && parsedIP.To4() == nil {
+			replicaAdrfam = spdktypes.NvmeAddressFamilyIPv6
+		}
 		nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(replicaName, helpertypes.GetNQN(replicaName), replicaIP, replicaPort,
-			spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4,
+			spdktypes.NvmeTransportTypeTCP, replicaAdrfam,
 			int32(e.ctrlrLossTimeout), replicaReconnectDelaySec, int32(e.fastIOFailTimeoutSec), replicaMultipath)
 		if err != nil {
 			return err
