@@ -1750,6 +1750,7 @@ func (s *TestSuite) TestSPDKEngineCreateWithSalvageRequested(c *C) {
 
 	volumeName := fmt.Sprintf("test-salvage-vol-%s", time.Now().Format("20060102150405"))
 	engineName := fmt.Sprintf("%s-e", volumeName)
+	engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
 	replicaNames := []string{
 		fmt.Sprintf("%s-replica-1", volumeName),
 		fmt.Sprintf("%s-replica-2", volumeName),
@@ -1757,6 +1758,9 @@ func (s *TestSuite) TestSPDKEngineCreateWithSalvageRequested(c *C) {
 	replicas := make(map[string]*api.Replica)
 
 	defer func() {
+		err = spdkCli.EngineFrontendDelete(engineFrontendName)
+		c.Assert(err, IsNil)
+
 		err = spdkCli.EngineDelete(engineName)
 		c.Assert(err, IsNil)
 
@@ -1821,6 +1825,21 @@ func (s *TestSuite) TestSPDKEngineCreateWithSalvageRequested(c *C) {
 	c.Assert(len(engine.ReplicaAddressMap), Equals, 1)
 	c.Assert(engine.ReplicaAddressMap[replicaNames[0]], Equals, net.JoinHostPort(ip, strconv.Itoa(int(replicas[replicaNames[0]].PortStart))))
 	c.Assert(engine.ReplicaModeMap[replicaNames[0]], Equals, types.ModeRW)
+
+	// Create engine frontend and verify IO works on the salvaged engine
+	e, err := spdkCli.EngineGet(engineName)
+	c.Assert(err, IsNil)
+
+	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0)
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
+
+	salvageEndpoint := helperutil.GetLonghornDevicePath(volumeName)
+	c.Assert(engineFrontend.Endpoint, Equals, salvageEndpoint)
+
+	err = formatBlockDevice(salvageEndpoint, "ext4")
+	c.Assert(err, IsNil)
 }
 
 func GetBlockDeviceSize(ne *commonns.Executor, endpoint string) int64 {
