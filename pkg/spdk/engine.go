@@ -700,89 +700,102 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 				}
 			}()
 
-			if err != nil || engineErr != nil {
-				e.log.Errorf("Engine %s won't do shallow copy for replica %s add due to replica error: %v, or engine error %v", e.Name, dstReplicaName, err, engineErr)
-				// Still clean up SPDK resources
-				if finishErr := e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, fastSync); finishErr != nil {
-					e.log.WithError(finishErr).Errorf("Engine %s failed to finish replica %s add after start failure", e.Name, dstReplicaName)
-				}
-				return
-			}
-
 			// Resolve the replica adder under lock
 			e.RLock()
 			adder := e.replicaAdder
 			e.RUnlock()
 
-			// Shallow copy phase
-			var shallowCopyErr error
-			if scErr := adder.ReplicaShallowCopy(dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshotList, fastSync); scErr != nil {
-				e.log.WithError(scErr).Errorf("Engine %s failed to do the shallow copy for replica %s add", e.Name, dstReplicaName)
-				shallowCopyErr = scErr
-			}
+			// asyncErr tracks whether the setup or shallow-copy phase failed.
+			var asyncErr error
 
-			// If shallow copy failed, always call the real replicaAddFinish for cleanup
-			if shallowCopyErr != nil {
+			// wrapCleanup indicates whether the cleanup replicaAddFinish
+			// should be wrapped by finishWrapper (suspend/resume). This is
+			// only needed when finishing failed after the success path
+			// entered the finishWrapper context. For setup/shallow-copy
+			// errors, the original code called replicaAddFinish directly.
+			var wrapCleanup bool
+
+			// Single deferred handler: on success call finish (with optional
+			// wrapper for suspend/resume), on any failure fall through to
+			// the single cleanup path that calls replicaAddFinish.
+			defer func() {
+				if asyncErr == nil {
+					// Success path: shallow copy completed, run finish.
+					e.log.Infof("Starting to finish replica %s add for engine %s", dstReplicaName, e.Name)
+
+					finishCalled := false
+					trackedFinish := func() error {
+						finishCalled = true
+						return adder.ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, fastSync)
+					}
+
+					var finishErr error
+					if finishWrapper != nil {
+						finishErr = finishWrapper(trackedFinish)
+					} else {
+						finishErr = trackedFinish()
+					}
+					if finishErr == nil {
+						return
+					}
+					e.log.WithError(finishErr).Errorf("Engine %s failed to finish replica %s add", e.Name, dstReplicaName)
+
+					if finishCalled {
+						// Finish was invoked. Check if the real replicaAddFinish
+						// already ran by inspecting the replica mode: the real finish
+						// always updates mode from WO to RW or ERR. If mode is still
+						// WO, the real cleanup hasn't happened (e.g. a mock injected
+						// an error instead of calling the real finish).
+						e.RLock()
+						dstStatus := e.ReplicaStatusMap[dstReplicaName]
+						stillWO := dstStatus != nil && dstStatus.Mode == types.ModeWO
+						e.RUnlock()
+						if !stillWO {
+							// Real finish already ran and updated the state.
+							return
+						}
+						// Real finish didn't run; fall through to cleanup.
+					}
+					// We came from the finish path; wrap cleanup in finishWrapper.
+					wrapCleanup = true
+				}
+
+				// Cleanup: mark the replica as ERR and call replicaAddFinish
+				// for SPDK resource cleanup. This is the single cleanup path
+				// for all failure cases (setup error, shallow copy error,
+				// finish wrapper failure).
 				e.Lock()
 				if dstStatus := e.ReplicaStatusMap[dstReplicaName]; dstStatus != nil && dstStatus.Mode != types.ModeERR {
 					dstStatus.Mode = types.ModeERR
 				}
 				e.Unlock()
 
-				if cleanupErr := e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, fastSync); cleanupErr != nil {
-					e.log.WithError(cleanupErr).Errorf("Engine %s failed to clean up after shallow copy failure for replica %s", e.Name, dstReplicaName)
+				cleanupFn := func() error {
+					return e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, fastSync)
 				}
+				var cleanupErr error
+				if wrapCleanup && finishWrapper != nil {
+					cleanupErr = finishWrapper(cleanupFn)
+				} else {
+					cleanupErr = cleanupFn()
+				}
+				if cleanupErr != nil {
+					e.log.WithError(cleanupErr).Errorf("Engine %s failed to clean up after replica %s add failure", e.Name, dstReplicaName)
+				}
+			}()
+
+			// Check for errors from the synchronous setup phase
+			if err != nil || engineErr != nil {
+				asyncErr = fmt.Errorf("replica add setup failed: replica err=%v, engine err=%v", err, engineErr)
+				e.log.Errorf("Engine %s won't do shallow copy for replica %s add due to replica error: %v, or engine error %v", e.Name, dstReplicaName, err, engineErr)
 				return
 			}
 
-			// Finish phase (optionally wrapped by finishWrapper for suspend/resume)
-			e.log.Infof("Starting to finish replica %s add for engine %s", dstReplicaName, e.Name)
-
-			finish := func() error {
-				return adder.ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, fastSync)
-			}
-
-			finishCalled := false
-			trackedFinish := func() error {
-				finishCalled = true
-				return finish()
-			}
-
-			var finishErr error
-			if finishWrapper != nil {
-				finishErr = finishWrapper(trackedFinish)
-			} else {
-				finishErr = trackedFinish()
-			}
-			if finishErr != nil {
-				e.log.WithError(finishErr).Errorf("Engine %s failed to finish replica %s add", e.Name, dstReplicaName)
-
-				// When finish was never called (e.g. finishWrapper suspend failure),
-				// or when a mock adder overrides finish, we must still call the real
-				// replicaAddFinish for SPDK resource cleanup.
-				mockAdder, isMock := adder.(*MockReplicaAdder)
-				needsCleanup := (!finishCalled && finishWrapper != nil) || (isMock && mockAdder.FinishFunc != nil)
-				if needsCleanup {
-					e.log.Infof("Calling real replicaAddFinish for cleanup after finish failure for replica %s add (finishCalled=%v)", dstReplicaName, finishCalled)
-					e.Lock()
-					if dstStatus := e.ReplicaStatusMap[dstReplicaName]; dstStatus != nil && dstStatus.Mode != types.ModeERR {
-						dstStatus.Mode = types.ModeERR
-					}
-					e.Unlock()
-
-					cleanupFn := func() error {
-						return e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, fastSync)
-					}
-					var cleanupErr error
-					if finishWrapper != nil {
-						cleanupErr = finishWrapper(cleanupFn)
-					} else {
-						cleanupErr = cleanupFn()
-					}
-					if cleanupErr != nil {
-						e.log.WithError(cleanupErr).Errorf("Engine %s failed to clean up after finish failure for replica %s", e.Name, dstReplicaName)
-					}
-				}
+			// Shallow copy phase
+			if scErr := adder.ReplicaShallowCopy(dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshotList, fastSync); scErr != nil {
+				asyncErr = scErr
+				e.log.WithError(scErr).Errorf("Engine %s failed to do the shallow copy for replica %s add", e.Name, dstReplicaName)
+				return
 			}
 		}()
 	}()
