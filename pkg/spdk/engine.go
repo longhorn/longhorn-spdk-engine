@@ -153,7 +153,7 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 	}
 	log.WithField("specSize", roundedSpecSize)
 
-	return &Engine{
+	e := &Engine{
 		Name:       engineName,
 		VolumeName: volumeName,
 		Frontend:   frontend,
@@ -175,12 +175,8 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 
 		log: safelog.NewSafeLogger(log),
 	}
-}
-
-func (e *Engine) initReplicaAdder() {
-	if e.replicaAdder == nil {
-		e.replicaAdder = &realReplicaAdder{e: e}
-	}
+	e.replicaAdder = &realReplicaAdder{e: e}
+	return e
 }
 
 func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[string]string, portCount int32, superiorPortAllocator *commonbitmap.Bitmap,
@@ -715,7 +711,6 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 
 			// Resolve the replica adder under lock
 			e.RLock()
-			e.initReplicaAdder()
 			adder := e.replicaAdder
 			e.RUnlock()
 
@@ -2953,7 +2948,6 @@ func (e *Engine) SetReplicaAdder(adder ReplicaAdder) {
 	} else {
 		// If substituting a MockReplicaAdder, inject the real adder for fallback.
 		if m, ok := adder.(*MockReplicaAdder); ok && m.real == nil {
-			e.initReplicaAdder()
 			m.real = e.replicaAdder
 		}
 		e.replicaAdder = adder
