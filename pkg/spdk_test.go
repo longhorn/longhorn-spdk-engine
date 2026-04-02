@@ -4725,6 +4725,44 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	}, retry.Delay(1*time.Second), retry.Attempts(60))
 	c.Assert(err, IsNil)
 
+	// 6c. Test MockReplicaAdder fallback always uses the real adder.
+	// Install a failing mock first, then replace it with a mock that leaves all
+	// hooks nil. The nil-hook mock must fall through to the real implementation,
+	// not the previously installed mock.
+	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
+	c.Assert(err, IsNil)
+	err = spdkCli.ReplicaDelete(replicaNames[1], true)
+	c.Assert(err, IsNil)
+
+	replica2, err = spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replica2Address = net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
+	replicas[replicaNames[1]] = replica2
+
+	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{
+		ShallowCopyFunc: func(dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, snapshots []*api.Lvol, fastSync bool) error {
+			return fmt.Errorf("stale mock should not be used as fallback")
+		},
+	})
+	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{})
+
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	c.Assert(err, IsNil)
+
+	err = retry.Do(func() error {
+		e, err := spdkCli.EngineGet(engineName)
+		if err != nil {
+			return err
+		}
+		if e.ReplicaModeMap[replicaNames[1]] != types.ModeRW {
+			return fmt.Errorf("replica %s is not RW yet after fallback test: %v", replicaNames[1], e.ReplicaModeMap[replicaNames[1]])
+		}
+		return nil
+	}, retry.Delay(1*time.Second), retry.Attempts(60))
+	c.Assert(err, IsNil)
+
+	internalEngine.SetReplicaAdder(nil)
+
 	// Verify Data I/O is still working
 	f, err := os.OpenFile(endpoint, os.O_RDWR, 0666)
 	c.Assert(err, IsNil)
@@ -4732,6 +4770,96 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	_, err = f.WriteAt(data, 0)
 	c.Assert(err, IsNil)
 	err = f.Close()
+	c.Assert(err, IsNil)
+}
+
+func (s *TestSuite) TestSPDKEngineReplicaAddWithoutEngineFrontendInfo(c *C) {
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	volumeName := fmt.Sprintf("test-direct-replica-add-%s", time.Now().Format("20060102150405"))
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	replicaNames := []string{
+		fmt.Sprintf("%s-replica-1", volumeName),
+		fmt.Sprintf("%s-replica-2", volumeName),
+	}
+	replicas := make(map[string]*api.Replica)
+
+	defer func() {
+		_ = spdkCli.EngineDelete(engineName)
+		for _, replica := range replicas {
+			_ = spdkCli.ReplicaDelete(replica.Name, true)
+		}
+	}()
+
+	replica1, err := spdkCli.ReplicaCreate(replicaNames[0], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replicas[replicaNames[0]] = replica1
+	replicaAddressMap := map[string]string{
+		replicaNames[0]: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
+	}
+
+	_, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false)
+	c.Assert(err, IsNil)
+
+	replica2, err := spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	replicas[replicaNames[1]] = replica2
+	replica2Address := net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
+
+	err = spdkCli.EngineReplicaAdd(engineName, replicaNames[1], replica2Address, defaultTestFastSync, "", "")
+	c.Assert(err, IsNil)
+
+	err = retry.Do(func() error {
+		e, err := spdkCli.EngineGet(engineName)
+		if err != nil {
+			return err
+		}
+		if e.ReplicaModeMap[replicaNames[1]] != types.ModeRW {
+			return fmt.Errorf("replica %s is not RW yet: %v", replicaNames[1], e.ReplicaModeMap[replicaNames[1]])
+		}
+		return nil
+	}, retry.Delay(1*time.Second), retry.Attempts(60))
 	c.Assert(err, IsNil)
 }
 

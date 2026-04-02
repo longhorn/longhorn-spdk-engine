@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	. "gopkg.in/check.v1"
+
+	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
 func Test(t *testing.T) { TestingT(t) }
@@ -124,4 +126,23 @@ func (s *TestSuite) TestExtractBackingImageAndDiskUUID(c *C) {
 			c.Assert(testCase.expectedDiskUUID, Equals, diskUUID)
 		}
 	}
+}
+
+func (s *TestSuite) TestSetReplicaAdderInjectsRealFallback(c *C) {
+	e := NewEngine("test-engine", "test-volume", types.FrontendEmpty, 1, nil)
+
+	firstMock := &MockReplicaAdder{}
+	e.SetReplicaAdder(firstMock)
+
+	firstFallback, ok := firstMock.real.(*realReplicaAdder)
+	c.Assert(ok, Equals, true)
+	c.Assert(firstFallback.e, Equals, e)
+
+	secondMock := &MockReplicaAdder{}
+	e.SetReplicaAdder(secondMock)
+
+	secondFallback, ok := secondMock.real.(*realReplicaAdder)
+	c.Assert(ok, Equals, true)
+	c.Assert(secondFallback.e, Equals, e)
+	c.Assert(secondMock.real == firstMock, Equals, false)
 }

@@ -244,11 +244,12 @@ func (s *Server) EngineWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_EngineW
 	return nil
 }
 
-// EngineReplicaAdd handles the full replica-add lifecycle. The request must
-// include EngineFrontendName and EngineFrontendAddress so the Engine can call
-// back to the EngineFrontend for suspend/resume around the finish step.
-// It builds a finishWrapper and delegates to Engine.ReplicaAdd which runs
-// asynchronously (start → shallow copy → finishWrapper(finish)).
+// EngineReplicaAdd handles the full replica-add lifecycle.
+//
+// When EngineFrontendName and EngineFrontendAddress are both provided, Engine
+// calls back to the EngineFrontend for suspend/resume around the snapshot and
+// finish steps. When both are omitted, ReplicaAdd runs without a finishWrapper,
+// preserving the older direct-engine API behavior.
 func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplicaAddRequest) (ret *emptypb.Empty, err error) {
 	if req.ReplicaName == "" || req.ReplicaAddress == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "replica name and address are required")
@@ -256,8 +257,8 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 
 	efName := req.EngineFrontendName
 	efAddress := req.EngineFrontendAddress
-	if efName == "" || efAddress == "" {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine frontend name and address are required")
+	if (efName == "") != (efAddress == "") {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine frontend name and address must be provided together")
 	}
 
 	s.RLock()
@@ -269,12 +270,15 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s add", req.EngineName, req.ReplicaName)
 	}
 
-	log := logrus.WithFields(logrus.Fields{
-		"engineName":     req.EngineName,
-		"replicaName":    req.ReplicaName,
-		"engineFrontend": efName,
-	})
-	finishWrapper := buildGRPCReplicaAddFinishWrapper(efName, efAddress, log)
+	var finishWrapper replicaAddFinishWrapper
+	if efName != "" {
+		log := logrus.WithFields(logrus.Fields{
+			"engineName":     req.EngineName,
+			"replicaName":    req.ReplicaName,
+			"engineFrontend": efName,
+		})
+		finishWrapper = buildGRPCReplicaAddFinishWrapper(efName, efAddress, log)
+	}
 
 	if err := e.ReplicaAdd(spdkClient, req.ReplicaName, req.ReplicaAddress, req.FastSync, finishWrapper); err != nil {
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to add replica %s to engine %s: %v", req.ReplicaName, req.EngineName, err)

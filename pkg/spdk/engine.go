@@ -2961,7 +2961,7 @@ func (e *Engine) SetReplicaAdder(adder ReplicaAdder) {
 	} else {
 		// If substituting a MockReplicaAdder, inject the real adder for fallback.
 		if m, ok := adder.(*MockReplicaAdder); ok && m.real == nil {
-			m.real = e.replicaAdder
+			m.real = &realReplicaAdder{e: e}
 		}
 		e.replicaAdder = adder
 	}
