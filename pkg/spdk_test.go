@@ -4654,7 +4654,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 
 	// 6. Test Finish Error
 	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{
-		FinishFunc: func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, dstReplicaName string, fastSync bool) error {
+		FinishFunc: func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string, fastSync bool) error {
 			return fmt.Errorf("injected finish error")
 		},
 	})
