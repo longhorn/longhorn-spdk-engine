@@ -133,10 +133,18 @@ type Engine struct {
 	// Production uses realReplicaAdder; tests can supply MockReplicaAdder.
 	replicaAdder ReplicaAdder
 
-	// finishPhase2Hook is an optional test hook called between phase 2 (RPC calls)
-	// and phase 3 (lock + state update) of replicaAddFinish. Used to verify that
-	// the Engine lock is released during slow RPCs (3-phase lock pattern).
-	finishPhase2Hook func()
+	// replicaAddFinishUnlockedHook is an optional hook that fires inside
+	// replicaAddFinish after the Engine lock is released and before the slow
+	// RPC calls (ReplicaRebuildingSrcFinish / ReplicaRebuildingDstFinish).
+	//
+	// Purpose: regression guard for the 3-phase lock pattern. The hook lets
+	// tests call TryLock() to prove the lock is truly released during phase 2.
+	// Without this, a future change that accidentally holds the lock through
+	// the RPCs (reverting to single-phase) would be undetectable from
+	// external behavior alone — replica-add would still succeed or fail
+	// identically, but all other Engine operations would stall for 10+
+	// seconds on same-node NVMe-oF ETIMEDOUT.
+	replicaAddFinishUnlockedHook func()
 }
 
 type EngineReplicaStatus struct {
@@ -1064,7 +1072,7 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 	// By releasing the lock, other Engine operations (status queries, other replica
 	// operations) are not blocked during these potentially slow RPCs.
 	e.RLock()
-	phase2Hook := e.finishPhase2Hook
+	phase2Hook := e.replicaAddFinishUnlockedHook
 	e.RUnlock()
 	if phase2Hook != nil {
 		phase2Hook()
@@ -3027,10 +3035,11 @@ func (e *Engine) SetReplicaAdder(adder ReplicaAdder) {
 	}
 }
 
-// SetFinishPhase2Hook injects a test hook called between phase 2 (RPC calls)
-// and phase 3 (lock + state update) of replicaAddFinish. Pass nil to clear.
-func (e *Engine) SetFinishPhase2Hook(hook func()) {
+// SetReplicaAddFinishUnlockedHook injects (or clears) the regression-guard
+// hook for the 3-phase lock pattern in replicaAddFinish. See the field comment
+// on replicaAddFinishUnlockedHook for details. Pass nil to clear.
+func (e *Engine) SetReplicaAddFinishUnlockedHook(hook func()) {
 	e.Lock()
 	defer e.Unlock()
-	e.finishPhase2Hook = hook
+	e.replicaAddFinishUnlockedHook = hook
 }

@@ -4690,7 +4690,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	// are executed. Without this refactoring, these RPCs would block all Engine operations
 	// for 10+ seconds on ETIMEDOUT.
 	phase2LockReleased := make(chan bool, 1)
-	internalEngine.SetFinishPhase2Hook(func() {
+	internalEngine.SetReplicaAddFinishUnlockedHook(func() {
 		// This hook runs inside Phase 2 of replicaAddFinish, where the Engine lock
 		// should be released. Verify by trying to acquire the lock.
 		if internalEngine.TryLock() {
@@ -4715,7 +4715,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	}
 
 	// Reset hook
-	internalEngine.SetFinishPhase2Hook(nil)
+	internalEngine.SetReplicaAddFinishUnlockedHook(nil)
 
 	// Wait for Replica Add to Complete
 	err = retry.Do(func() error {
