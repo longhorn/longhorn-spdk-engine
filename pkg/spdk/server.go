@@ -621,19 +621,19 @@ func toSwitchOverGRPCError(err error, format string, args ...interface{}) error 
 
 // buildGRPCReplicaAddFinishWrapper builds a replicaAddFinishWrapper that
 // calls back to the EngineFrontend on a (potentially remote) node via gRPC
-// for suspend/resume around the finish step.
+// for suspend/resume around the work step.
 //
 // If the EngineFrontend is unreachable (node down, pod deleted, etc.), the
-// wrapper proceeds with finish() without suspension. This is safe because an
+// wrapper proceeds with work() without suspension. This is safe because an
 // unreachable frontend means there is no active I/O to quiesce, and not
-// finishing would leak SPDK resources (detach controller, stop expose).
+// running the work would leak SPDK resources (detach controller, stop expose).
 func buildGRPCReplicaAddFinishWrapper(efName, efAddress string, log *logrus.Entry) replicaAddFinishWrapper {
-	return func(finish func() error) error {
+	return func(work func() error) error {
 		efClient, err := GetServiceClient(efAddress)
 		if err != nil {
 			// Cannot connect to the EF node at all — proceed without suspension.
-			log.WithError(err).Warnf("Engine frontend %s at %s is unreachable, proceeding with finish without suspension", efName, efAddress)
-			return finish()
+			log.WithError(err).Warnf("Engine frontend %s at %s is unreachable, proceeding without suspension", efName, efAddress)
+			return work()
 		}
 		defer func() {
 			if errClose := efClient.Close(); errClose != nil {
@@ -641,32 +641,32 @@ func buildGRPCReplicaAddFinishWrapper(efName, efAddress string, log *logrus.Entr
 			}
 		}()
 
-		// Suspend the frontend before finish.
+		// Suspend the frontend before running the work.
 		// If suspend fails for any reason (EF deleted, node down, unimplemented
 		// frontend type), proceed without suspension rather than aborting. The
-		// data has already been copied; not finishing is worse than a brief I/O
-		// disruption.
+		// data has already been copied; not running the work is worse than a
+		// brief I/O disruption.
 		suspended := false
 		if err := efClient.EngineFrontendSuspend(efName); err != nil {
-			log.WithError(err).Warnf("Failed to suspend engine frontend %s before replica add finish, proceeding without suspension", efName)
+			log.WithError(err).Warnf("Failed to suspend engine frontend %s before replica add work, proceeding without suspension", efName)
 		} else {
 			suspended = true
 		}
 
-		finishErr := finish()
+		workErr := work()
 
-		// Resume the frontend after finish.
-		// If resume fails (EF disappeared during finish, or internal error),
-		// log a warning but do not override finishErr — the replica-add result
-		// is determined by finish(), not by resume. longhorn-manager will
+		// Resume the frontend after the work.
+		// If resume fails (EF disappeared during work, or internal error),
+		// log a warning but do not override workErr — the replica-add result
+		// is determined by work(), not by resume. longhorn-manager will
 		// detect the stuck-suspended EF and handle recovery.
 		if suspended {
 			if resumeErr := efClient.EngineFrontendResume(efName); resumeErr != nil {
-				log.WithError(resumeErr).Errorf("Failed to resume engine frontend %s after replica add finish (finish succeeded: %v)", efName, finishErr == nil)
+				log.WithError(resumeErr).Errorf("Failed to resume engine frontend %s after replica add work (work succeeded: %v)", efName, workErr == nil)
 			}
 		}
 
-		return finishErr
+		return workErr
 	}
 }
 

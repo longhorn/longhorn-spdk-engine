@@ -134,15 +134,15 @@ func (s *TestSuite) TestSetReplicaAdderInjectsRealFallback(c *C) {
 	firstMock := &MockReplicaAdder{}
 	e.SetReplicaAdder(firstMock)
 
-	firstFallback, ok := firstMock.real.(*realReplicaAdder)
+	firstFallback, ok := firstMock.Real.(*realReplicaAdder)
 	c.Assert(ok, Equals, true)
 	c.Assert(firstFallback.e, Equals, e)
 
 	secondMock := &MockReplicaAdder{}
 	e.SetReplicaAdder(secondMock)
 
-	secondFallback, ok := secondMock.real.(*realReplicaAdder)
+	secondFallback, ok := secondMock.Real.(*realReplicaAdder)
 	c.Assert(ok, Equals, true)
 	c.Assert(secondFallback.e, Equals, e)
-	c.Assert(secondMock.real == firstMock, Equals, false)
+	c.Assert(secondMock.Real == firstMock, Equals, false)
 }

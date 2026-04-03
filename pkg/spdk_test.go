@@ -4653,11 +4653,16 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	replica2Address = net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
 
 	// 6. Test Finish Error
-	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{
-		FinishFunc: func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string, fastSync bool) error {
-			return fmt.Errorf("injected finish error")
-		},
-	})
+	// The mock FinishFunc is responsible for calling Real.ReplicaAddFinish()
+	// to clean up SPDK resources before returning the injected error.
+	// The engine goroutine simply marks the replica as ERR without fallback cleanup.
+	finishErrMock := &server.MockReplicaAdder{}
+	finishErrMock.FinishFunc = func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string) error {
+		// Clean up SPDK resources via the real finish before returning error
+		finishErrMock.Real.ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress)
+		return fmt.Errorf("injected finish error")
+	}
+	internalEngine.SetReplicaAdder(finishErrMock)
 
 	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
 	c.Assert(err, IsNil)
@@ -4671,8 +4676,8 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	err = spdkCli.EngineReplicaDelete(engineName, replicaNames[1], replica2Address)
 	c.Assert(err, IsNil)
 
-	// The engine's ReplicaAdd goroutine internally calls the real replicaAddFinish
-	// for cleanup when the test hook fails, so SPDK resources are already cleaned up.
+	// The mock's FinishFunc called Real.ReplicaAddFinish() for SPDK cleanup,
+	// so resources are already cleaned up and ReplicaDelete won't hang.
 	err = spdkCli.ReplicaDelete(replicaNames[1], true)
 	c.Assert(err, IsNil)
 	replica2, err = spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
