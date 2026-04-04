@@ -95,8 +95,7 @@ func (s *Server) EngineFrontendResume(ctx context.Context, req *spdkrpc.EngineFr
 //  0. Snapshot + setup (sync, under finishWrapper): suspend frontend via
 //     finishWrapper → create rebuild snapshot, connect to src/dst replica
 //     SPDK services, add dst replica head bdev to RAID, mark dst as ModeWO
-//     → resume frontend. This matches the original c6292c0 behaviour where
-//     the local NVMe initiator was suspended for the snapshot creation.
+//     → resume frontend.
 //
 // On return (with lock released), a deferred goroutine runs the remaining
 // phases:

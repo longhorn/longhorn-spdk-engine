@@ -619,26 +619,26 @@ type replicaAddFinishWrapper func(work func() error) error
 //  1. Validate engine state is Running, dst replica doesn't exist, no other WO replica.
 //  2. Obtain replica gRPC clients for all existing replicas, plus src/dst rebuild clients.
 //  3. Pick an RW replica as the rebuild source.
-//  4. Register deferred async goroutine (Phase 1–2 below).
-//  5. Snapshot + Setup (optionally wrapped by finishWrapper for EF suspend/resume):
+//  4. Call replicaAddStart (optionally wrapped by finishWrapper for EF suspend/resume):
 //     a. Create rebuild snapshot across all replicas.
 //     b. Get rebuilding snapshot list from src replica.
 //     c. ReplicaRebuildingSrcStart: src replica exposes snapshot as NVMe-oF target.
 //     d. ReplicaRebuildingDstStart: dst replica attaches external snapshot, creates head.
 //     e. BdevRaidGrowBaseBdev: add dst head bdev to RAID as base bdev.
 //     f. Mark dst replica as WO in ReplicaStatusMap.
-//  6. Return nil — background goroutine takes over.
+//  5. Launch replicaAddAsync goroutine (Phase 1–2 below).
+//  6. Return nil (or setupErr on failure) — background goroutine takes over.
 //     On sync error: outer defer marks dst replica ERR and (if applicable) sets engine to Error state.
 //
-// Phase 1 — Shallow Copy (async goroutine):
-//  7. Check for setup errors: if Phase 0 failed (err != nil || engineErr != nil), set asyncErr and skip to cleanup.
+// Phase 1 — Shallow Copy (replicaAddAsync goroutine):
+//  7. Check for setup errors: if Phase 0 failed (setupErr != nil), set asyncErr and skip to cleanup.
 //  8. adder.ReplicaShallowCopy(): copy all snapshots from src to dst; on failure set asyncErr.
 //
-// Phase 2 — Finish or Cleanup (async goroutine deferred handler, two mutually exclusive paths):
+// Phase 2 — Finish or Cleanup (replicaAddCleanupOrFinish, two mutually exclusive paths):
 //
 //	Path A — Failure (asyncErr != nil):
 //	  9. Call e.replicaAddFinish() directly (no finishWrapper, no suspend/resume) for SPDK resource cleanup.
-//	     Replica is already ERR. replicaAddFinish uses ERR cleanup order: SrcFinish first, then DstFinish.
+//	     Replica is already ERR. replicaAddFinish uses the same DstFinish→SrcFinish order as the success path.
 //
 //	Path B — Success (asyncErr == nil):
 //	 10. Call adder.ReplicaAddFinish() via finishWrapper (if present) or directly.
@@ -735,173 +735,47 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 		return err
 	}
 
+	// Perform the synchronous setup phase (optionally wrapped for EF suspend/resume).
 	var rebuildingSnapshotList []*api.Lvol
-	// Need to make sure the replica clients available before set this deferred goroutine
-	defer func() {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					e.log.Errorf("Recovered panic during engine %s replica %s add: %v", e.Name, dstReplicaName, r)
-				}
-			}()
-
-			// Resolve the replica adder under lock
-			e.RLock()
-			adder := e.replicaAdder
-			e.RUnlock()
-
-			// asyncErr tracks whether the setup or shallow-copy phase failed.
-			var asyncErr error
-
-			// Single deferred handler: on success call finish (with optional
-			// wrapper for suspend/resume), on failure call replicaAddFinish
-			// directly for SPDK resource cleanup without suspend/resume.
-			defer func() {
-				if asyncErr != nil {
-					// Setup or shallow copy failed. The replica is already
-					// marked ERR by replicaShallowCopy's defer or ReplicaAdd's
-					// outer defer. Call replicaAddFinish directly (no wrapper)
-					// for SPDK resource cleanup (exposed snapshot, NVMe
-					// connections). The mode is already ERR, so replicaAddFinish
-					// uses the cleanup path (src first, then dst).
-					if cleanupErr := e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress); cleanupErr != nil {
-						e.log.WithError(cleanupErr).Errorf("Engine %s failed to clean up after replica %s add failure", e.Name, dstReplicaName)
-					}
-					return
-				}
-
-				// Success path: shallow copy completed, run finish.
-				e.log.Infof("Starting to finish replica %s add for engine %s", dstReplicaName, e.Name)
-
-				finishFn := func() error {
-					return adder.ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress)
-				}
-
-				var finishErr error
-				if finishWrapper != nil {
-					finishErr = finishWrapper(finishFn)
-				} else {
-					finishErr = finishFn()
-				}
-				if finishErr != nil {
-					e.log.WithError(finishErr).Errorf("Engine %s failed to finish replica %s add", e.Name, dstReplicaName)
-
-					// Mark the replica as ERR. SPDK resource cleanup is the
-					// responsibility of the ReplicaAdder (mock should call
-					// Real.ReplicaAddFinish before returning error) or will
-					// be handled by r.Delete() when the replica is removed.
-					e.Lock()
-					if dstStatus := e.ReplicaStatusMap[dstReplicaName]; dstStatus != nil && dstStatus.Mode != types.ModeERR {
-						dstStatus.Mode = types.ModeERR
-					}
-					e.Unlock()
-				}
-			}()
-
-			// Check for errors from the synchronous setup phase
-			if err != nil || engineErr != nil {
-				asyncErr = fmt.Errorf("replica add setup failed: replica err=%v, engine err=%v", err, engineErr)
-				e.log.Errorf("Engine %s won't do shallow copy for replica %s add due to replica error: %v, or engine error %v", e.Name, dstReplicaName, err, engineErr)
-				return
-			}
-
-			// Shallow copy phase
-			if scErr := adder.ReplicaShallowCopy(dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshotList, fastSync); scErr != nil {
-				asyncErr = scErr
-				e.log.WithError(scErr).Errorf("Engine %s failed to do the shallow copy for replica %s add", e.Name, dstReplicaName)
-				return
-			}
-		}()
-	}()
-
-	// snapshotName is the per-rebuild system snapshot name created during the
-	// synchronous setup phase. It defines the stable rebuild source point that is
-	// shared by both sides of the rebuild flow:
-	// 1. snapshotOperationWithoutLock(..., SnapshotOperationCreate, ...) creates
-	//    this system snapshot across the current replicas.
-	// 2. ReplicaRebuildingSrcStart uses snapshotName to find and expose that
-	//    snapshot from the source replica.
-	// 3. ReplicaRebuildingDstStart uses the same snapshotName to attach the
-	//    exposed snapshot on the destination replica and initialize rebuilding.
-	// In short, snapshotName ties together snapshot creation, src exposure, and
-	// dst rebuilding setup for this specific ReplicaAdd session.
-	snapshotName := GenerateRebuildingSnapshotName()
-	opts := &api.SnapshotOptions{
-		Timestamp: util.Now(),
-	}
-
-	// Pause the IO and flush cache by suspending the frontend before snapshot
-	// creation. In c6292c0 (before engine-separation) this was a direct
-	// e.initiator.Suspend() call; now the frontend lives on a (potentially
-	// remote) EngineFrontend node, so we use finishWrapper which calls back
-	// to EF via gRPC for suspend/resume. The system-created snapshot during
-	// a rebuilding does not need to guarantee the integrity of the
-	// filesystem, but we still suspend to keep I/O behaviour identical to the
-	// original implementation.
-	snapshotAndSetup := func() error {
-		var replicasErr error
-		updateRequired, replicasErr, engineErr = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, SnapshotOperationCreate, opts)
-		if replicasErr != nil {
-			return replicasErr
+	var setupErr error
+	startFn := func() error {
+		var startEngineErr error
+		var startUpdateRequired bool
+		rebuildingSnapshotList, startUpdateRequired, startEngineErr, setupErr = e.replicaAddStart(spdkClient, replicaClients,
+			srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress)
+		updateRequired = updateRequired || startUpdateRequired
+		if startEngineErr != nil {
+			engineErr = startEngineErr
 		}
-		if engineErr != nil {
-			return engineErr
+		if setupErr != nil {
+			return setupErr
 		}
-		e.checkAndUpdateInfoFromReplicaNoLock()
-
-		rebuildingSnapshotList, err = getRebuildingSnapshotList(srcReplicaServiceCli, srcReplicaName)
-		if err != nil {
-			return err
-		}
-
-		// Ask the source replica to expose the newly created snapshot if the source replica and destination replica are not on the same node.
-		externalSnapshotAddress, err := srcReplicaServiceCli.ReplicaRebuildingSrcStart(srcReplicaName, dstReplicaName, dstReplicaAddress, snapshotName)
-		if err != nil {
-			return err
-		}
-
-		// The destination replica attaches the source replica exposed snapshot as the external snapshot then create a head based on it.
-		dstHeadLvolAddress, err := dstReplicaServiceCli.ReplicaRebuildingDstStart(dstReplicaName, srcReplicaName, srcReplicaAddress, snapshotName, externalSnapshotAddress, rebuildingSnapshotList)
-		if err != nil {
-			return err
-		}
-
-		// Add rebuilding replica head bdev to the base bdev list of the RAID bdev
-		dstHeadLvolBdevName, err := connectNVMfBdev(spdkClient, dstReplicaName, dstHeadLvolAddress, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
-		if err != nil {
-			return err
-		}
-
-		e.log.Infof("Adding rebuilding replica %s head bdev %s to the base bdev list for engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
-		if _, err := spdkClient.BdevRaidGrowBaseBdev(e.Name, dstHeadLvolBdevName); err != nil {
-			return errors.Wrapf(err, "failed to adding the rebuilding replica %s head bdev %s to the base bdev list for engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
-		}
-
-		e.ReplicaStatusMap[dstReplicaName] = &EngineReplicaStatus{
-			Address:  dstReplicaAddress,
-			Mode:     types.ModeWO,
-			BdevName: dstHeadLvolBdevName,
-		}
-		updateRequired = true
-		return nil
+		return startEngineErr
 	}
 
 	if finishWrapper != nil {
-		if wrapErr := finishWrapper(snapshotAndSetup); wrapErr != nil {
+		if wrapErr := finishWrapper(startFn); wrapErr != nil {
 			// The wrapper itself may fail (e.g. suspend or resume failure).
-			// If the inner snapshotAndSetup already set err/engineErr, those
-			// are captured via closure. If the wrapper failed around it
-			// (suspend failed, resume failed), treat it as an engine error
-			// consistent with c6292c0 behaviour.
+			// If the inner startFn already set engineErr, those are captured
+			// via closure.
 			if err == nil && engineErr == nil {
 				engineErr = wrapErr
 			}
-			return wrapErr
+			setupErr = wrapErr
 		}
 	} else {
-		if setupErr := snapshotAndSetup(); setupErr != nil {
-			return setupErr
+		if fnErr := startFn(); fnErr != nil {
+			setupErr = fnErr
 		}
+	}
+
+	// Launch the async phase: shallow copy followed by cleanup or finish.
+	// Even on setup failure, the goroutine handles SPDK resource cleanup
+	// (exposed snapshot, NVMe connections) via replicaAddCleanupOrFinish.
+	go e.replicaAddAsync(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, rebuildingSnapshotList, fastSync, finishWrapper, setupErr)
+
+	if setupErr != nil {
+		return setupErr
 	}
 
 	// TODO: Mark the destination replica as WO mode here does not prevent the RAID bdev from using this. May need to have a SPDK API to control the corresponding base bdev mode.
@@ -914,6 +788,165 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	e.log.Infof("Engine started to rebuild replica %s from healthy replica %s with fastSync %v", dstReplicaName, srcReplicaName, fastSync)
 
 	return nil
+}
+
+// replicaAddStart performs the synchronous setup phase of replica add:
+// creates a rebuild snapshot, starts src/dst rebuilding, connects the
+// dst head bdev, and grows the RAID base bdev.
+//
+// Returns:
+//   - rebuildingSnapshotList: snapshots to be shallow-copied in the async phase
+//   - startUpdateRequired: true if engine state changed and UpdateCh should be notified
+//   - engineErr: non-nil if the engine should transition to Error state
+//   - err: non-nil for replica-related operation errors
+func (e *Engine) replicaAddStart(spdkClient *spdkclient.Client, replicaClients map[string]*client.SPDKClient,
+	srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient,
+	srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string,
+) (rebuildingSnapshotList []*api.Lvol, startUpdateRequired bool, engineErr, err error) {
+	snapshotName := GenerateRebuildingSnapshotName()
+	opts := &api.SnapshotOptions{
+		Timestamp: util.Now(),
+	}
+
+	var replicasErr error
+	startUpdateRequired, replicasErr, engineErr = e.snapshotOperationWithoutLock(spdkClient, replicaClients, snapshotName, SnapshotOperationCreate, opts)
+	if replicasErr != nil {
+		return nil, startUpdateRequired, engineErr, replicasErr
+	}
+	if engineErr != nil {
+		return nil, startUpdateRequired, engineErr, nil
+	}
+	e.checkAndUpdateInfoFromReplicaNoLock()
+
+	rebuildingSnapshotList, err = getRebuildingSnapshotList(srcReplicaServiceCli, srcReplicaName)
+	if err != nil {
+		return nil, startUpdateRequired, nil, err
+	}
+
+	// Ask the source replica to expose the newly created snapshot if the source replica and destination replica are not on the same node.
+	externalSnapshotAddress, err := srcReplicaServiceCli.ReplicaRebuildingSrcStart(srcReplicaName, dstReplicaName, dstReplicaAddress, snapshotName)
+	if err != nil {
+		return nil, startUpdateRequired, nil, err
+	}
+
+	// The destination replica attaches the source replica exposed snapshot as the external snapshot then create a head based on it.
+	dstHeadLvolAddress, err := dstReplicaServiceCli.ReplicaRebuildingDstStart(dstReplicaName, srcReplicaName, srcReplicaAddress, snapshotName, externalSnapshotAddress, rebuildingSnapshotList)
+	if err != nil {
+		return nil, startUpdateRequired, nil, err
+	}
+
+	// Add rebuilding replica head bdev to the base bdev list of the RAID bdev
+	dstHeadLvolBdevName, err := connectNVMfBdev(spdkClient, dstReplicaName, dstHeadLvolAddress, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
+	if err != nil {
+		return nil, startUpdateRequired, nil, err
+	}
+
+	e.log.Infof("Adding rebuilding replica %s head bdev %s to the base bdev list for engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
+	if _, err := spdkClient.BdevRaidGrowBaseBdev(e.Name, dstHeadLvolBdevName); err != nil {
+		return nil, startUpdateRequired, nil, errors.Wrapf(err, "failed to adding the rebuilding replica %s head bdev %s to the base bdev list for engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
+	}
+
+	e.ReplicaStatusMap[dstReplicaName] = &EngineReplicaStatus{
+		Address:  dstReplicaAddress,
+		Mode:     types.ModeWO,
+		BdevName: dstHeadLvolBdevName,
+	}
+	startUpdateRequired = true
+	return rebuildingSnapshotList, startUpdateRequired, nil, nil
+}
+
+// replicaAddAsync runs the asynchronous phase of replica add: shallow copy
+// followed by cleanup or finish. It is launched as a goroutine from ReplicaAdd.
+// setupErr is non-nil if the synchronous setup phase (replicaAddStart) failed.
+func (e *Engine) replicaAddAsync(
+	srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient,
+	srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string,
+	rebuildingSnapshotList []*api.Lvol,
+	fastSync bool,
+	finishWrapper replicaAddFinishWrapper,
+	setupErr error,
+) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.log.Errorf("Recovered panic during engine %s replica %s add: %v", e.Name, dstReplicaName, r)
+		}
+	}()
+
+	// Resolve the replica adder under lock
+	e.RLock()
+	adder := e.replicaAdder
+	e.RUnlock()
+
+	var asyncErr error
+	defer func() {
+		e.replicaAddCleanupOrFinish(adder, srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, finishWrapper, asyncErr)
+	}()
+
+	// Check for errors from the synchronous setup phase
+	if setupErr != nil {
+		asyncErr = fmt.Errorf("replica add setup failed: %v", setupErr)
+		e.log.Errorf("Engine %s won't do shallow copy for replica %s add due to setup error: %v", e.Name, dstReplicaName, setupErr)
+		return
+	}
+
+	// Shallow copy phase
+	if scErr := adder.ReplicaShallowCopy(dstReplicaServiceCli, srcReplicaName, dstReplicaName, rebuildingSnapshotList, fastSync); scErr != nil {
+		asyncErr = scErr
+		e.log.WithError(scErr).Errorf("Engine %s failed to do the shallow copy for replica %s add", e.Name, dstReplicaName)
+		return
+	}
+}
+
+// replicaAddCleanupOrFinish handles the completion of the async replica add phase.
+// If asyncErr is non-nil, it calls replicaAddFinish directly (no finishWrapper) for
+// SPDK resource cleanup. If asyncErr is nil, it runs the finish flow via the adder
+// (optionally wrapped by finishWrapper for suspend/resume).
+func (e *Engine) replicaAddCleanupOrFinish(
+	adder ReplicaAdder,
+	srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient,
+	srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string,
+	finishWrapper replicaAddFinishWrapper,
+	asyncErr error,
+) {
+	if asyncErr != nil {
+		// Setup or shallow copy failed. The replica is already
+		// marked ERR by replicaShallowCopy's defer or ReplicaAdd's
+		// outer defer. Call replicaAddFinish directly (no wrapper)
+		// for SPDK resource cleanup (exposed snapshot, NVMe
+		// connections). The mode is already ERR, so replicaAddFinish
+		// uses the same DstFinish→SrcFinish order as the success path.
+		if cleanupErr := e.replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress); cleanupErr != nil {
+			e.log.WithError(cleanupErr).Errorf("Engine %s failed to clean up after replica %s add failure", e.Name, dstReplicaName)
+		}
+		return
+	}
+
+	// Success path: shallow copy completed, run finish.
+	e.log.Infof("Starting to finish replica %s add for engine %s", dstReplicaName, e.Name)
+
+	finishFn := func() error {
+		return adder.ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress)
+	}
+
+	var finishErr error
+	if finishWrapper != nil {
+		finishErr = finishWrapper(finishFn)
+	} else {
+		finishErr = finishFn()
+	}
+	if finishErr != nil {
+		e.log.WithError(finishErr).Errorf("Engine %s failed to finish replica %s add", e.Name, dstReplicaName)
+
+		// Mark the replica as ERR. SPDK resource cleanup is the
+		// responsibility of the ReplicaAdder (mock should call
+		// Real.ReplicaAddFinish before returning error) or will
+		// be handled by r.Delete() when the replica is removed.
+		e.Lock()
+		if dstStatus := e.ReplicaStatusMap[dstReplicaName]; dstStatus != nil && dstStatus.Mode != types.ModeERR {
+			dstStatus.Mode = types.ModeERR
+		}
+		e.Unlock()
+	}
 }
 
 func (e *Engine) closeReplicaAddClients(srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, phase string) {
@@ -1048,11 +1081,10 @@ func (e *Engine) replicaShallowCopy(dstReplicaServiceCli *client.SPDKClient, src
 // It returns fatal errors that lead to engine unavailable only. As for the errors during replica rebuilding wrap-up, it will be logged and ignored.
 //
 // The function uses a 3-phase lock pattern to avoid holding the Engine lock during
-// potentially slow RPC calls (ReplicaRebuildingSrcFinish, ReplicaRebuildingDstFinish),
-// which may each block for 10+ seconds on same-node NVMe-oF ETIMEDOUT:
+// potentially slow RPC calls (ReplicaRebuildingSrcFinish, ReplicaRebuildingDstFinish):
 //
 //	Phase 1 (lock):   Read dst replica mode from ReplicaStatusMap
-//	Phase 2 (unlock): Execute RPC calls to src/dst replicas
+//	Phase 2 (unlock): Execute RPC calls (DstFinish → SrcFinish) to src/dst replicas
 //	Phase 3 (lock):   Update replica mode and engine state
 func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string) error {
 	defer e.closeReplicaAddClients(srcReplicaServiceCli, dstReplicaServiceCli,
@@ -1078,27 +1110,15 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 		phase2Hook()
 	}
 
-	// Re-read replica status under a short lock so the cleanup-order decision
-	// uses the most current mode. This narrows the TOCTOU window between
-	// reading the mode and executing the RPCs: without this, a concurrent
-	// WO → ERR downgrade during the entire phase-1-to-phase-2 gap would cause
-	// the WO cleanup path (slow DstFinish first) instead of the ERR path
-	// (fast SrcFinish first) on same-node NVMe-oF.
-	// A residual TOCTOU race remains (mode could change during the RPCs
-	// themselves), but the window is reduced to the RPC duration only.
-	e.Lock()
-	dstReplicaStatus = e.ReplicaStatusMap[dstReplicaName]
-	if dstReplicaStatus != nil {
-		dstMode = dstReplicaStatus.Mode
-	}
-	e.Unlock()
-
-	//
-	// The cleanup order depends on whether the rebuild succeeded or failed:
-	// - ModeWO (success): DstFinish first (parent switch needs external snapshot), then SrcFinish (stop exposing)
-	// - ModeERR (failure): SrcFinish first (stop exposing, NVMe-oF target disappears), then DstFinish
-	//   (detach controller — returns quickly with "No such device" instead of ETIMEDOUT on same-node NVMe-oF)
-	var dstReplicaErr, srcReplicaErr error
+	// The RPC order is always DstFinish first, then SrcFinish.
+	// DstFinish calls BdevLvolSetParent (for ModeWO) to switch the dst
+	// replica's snapshot chain from the external (src-exposed) snapshot
+	// to the locally rebuilt chain. This parent-switch requires the
+	// external snapshot bdev to still be accessible, so the src must
+	// keep exposing it until DstFinish completes. For ModeERR the parent
+	// switch is a no-op, but we still call DstFinish to actively clean
+	// up dst-side resources (external snapshot attachment, NVMe controller).
+	var dstReplicaErr error
 	if dstReplicaStatus == nil {
 		// Dst replica was already removed from the engine map during Phase 1→2.
 		// Skip dst-side finish, but still clean up src-side resources (exposed
@@ -1114,7 +1134,6 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 				// The residual state will be cleaned up when the src replica is
 				// itself deleted (Replica.Delete calls doCleanupForRebuildingSrc).
 				e.log.WithError(srcErr).Errorf("Engine failed to finish rebuilding src replica %s after dst replica %s was removed: src may retain residual rebuilding state (exposed snapshot, port) until src replica is deleted", srcReplicaName, dstReplicaName)
-				srcReplicaErr = srcErr
 			}
 		}
 	} else if srcReplicaServiceCli == nil || dstReplicaServiceCli == nil {
@@ -1123,38 +1142,26 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 		// getReplicaAddSrcReplica failed before clients were created).
 		// Skip RPC calls; Phase 3 will still update the replica mode.
 		e.log.Warnf("Engine skipping rebuilding RPC cleanup for replica %s because replica service clients are unavailable (src=%v, dst=%v)", dstReplicaName, srcReplicaServiceCli != nil, dstReplicaServiceCli != nil)
-	} else if dstMode == types.ModeERR {
-		// Cleanup path (failed rebuild): SrcFinish first, then DstFinish
-		e.log.Infof("Engine cleaning up failed rebuild for replica %s (mode ERR): will stop src exposing first, then detach dst controller", dstReplicaName)
-
-		// 1. Stop source from exposing first so the NVMe-oF target disappears
-		if srcErr := srcReplicaServiceCli.ReplicaRebuildingSrcFinish(srcReplicaName, dstReplicaName); srcErr != nil {
-			e.log.WithError(srcErr).Errorf("Engine failed to finish rebuilding src replica %s during cleanup, will continue", srcReplicaName)
-			srcReplicaErr = srcErr
-		}
-
-		// 2. Now detach the dst controller — target is already gone, so detach should be fast
-		if dstErr := dstReplicaServiceCli.ReplicaRebuildingDstFinish(dstReplicaName); dstErr != nil {
-			e.log.WithError(dstErr).Errorf("Engine failed to finish rebuilding dst replica %s during cleanup", dstReplicaName)
-			dstReplicaErr = dstErr
-		}
-	} else if dstMode == types.ModeWO {
-		// Normal path (successful rebuild): DstFinish first (parent switch), then SrcFinish
+	} else {
+		// Unified path: DstFinish first, then SrcFinish
 		if dstErr := dstReplicaServiceCli.ReplicaRebuildingDstFinish(dstReplicaName); dstErr != nil {
 			e.log.WithError(dstErr).Errorf("Engine failed to finish rebuilding dst replica %s, will update the mode from %v to ERR then continue rebuilding src replica %s finish", dstReplicaName, dstMode, srcReplicaName)
 			dstReplicaErr = dstErr
 		}
 
-		// Stop source from exposing. If this fails, the src replica retains
-		// residual rebuilding state (exposed snapshot, NVMe-oF target, port,
-		// dstRebuildingBdevName) that could block subsequent rebuilds.
-		// We must NOT promote dst to RW in this case.
+		// The source replica blindly stops exposing the snapshot and wipes
+		// the rebuilding info. If this fails, the src replica retains residual
+		// rebuilding state (exposed snapshot, NVMe-oF target, port,
+		// dstRebuildingBdevName) that will be cleaned up when the src replica
+		// is itself deleted (doCleanupForRebuildingSrc). This does NOT block
+		// dst promotion to RW because the dst data is already correct after
+		// a successful DstFinish (parent switch completed).
 		if srcErr := srcReplicaServiceCli.ReplicaRebuildingSrcFinish(srcReplicaName, dstReplicaName); srcErr != nil {
-			e.log.WithError(srcErr).Errorf("Engine failed to finish rebuilding src replica %s, will mark dst replica %s as ERR to avoid residual src rebuilding state with RW promotion", srcReplicaName, dstReplicaName)
-			srcReplicaErr = srcErr
+			// TODO: Should we mark this healthy replica as error?
+			e.log.WithError(srcErr).Errorf("Engine failed to finish rebuilding src replica %s, will ignore this error", srcReplicaName)
 		}
 
-		if dstReplicaErr == nil && srcReplicaErr == nil {
+		if dstReplicaErr == nil && dstMode == types.ModeWO {
 			e.log.Infof("Engine succeeded to finish rebuilding dst replica %s, will update the mode from %v to RW", dstReplicaName, dstMode)
 		}
 	}
@@ -1185,7 +1192,7 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 		case types.ModeERR:
 			updateRequired = true
 		case types.ModeWO:
-			if dstReplicaErr != nil || srcReplicaErr != nil {
+			if dstReplicaErr != nil {
 				dstReplicaStatus.Mode = types.ModeERR
 			} else {
 				dstReplicaStatus.Mode = types.ModeRW
@@ -1196,8 +1203,8 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 
 	e.checkAndUpdateInfoFromReplicaNoLock()
 
-	if dstReplicaErr != nil || srcReplicaErr != nil {
-		e.log.Errorf("Engine failed to finish rebuilding replica %s from healthy replica %s (dstErr=%v, srcErr=%v)", dstReplicaName, srcReplicaName, dstReplicaErr, srcReplicaErr)
+	if dstReplicaErr != nil {
+		e.log.Errorf("Engine failed to finish rebuilding replica %s from healthy replica %s (dstErr=%v)", dstReplicaName, srcReplicaName, dstReplicaErr)
 	} else if dstReplicaStatus != nil && dstReplicaStatus.Mode == types.ModeERR {
 		// All RPCs succeeded, but the replica mode is ERR because another
 		// goroutine (e.g. validateReplicaStatusMapNoLock) downgraded WO → ERR
@@ -1227,6 +1234,10 @@ func (e *Engine) getReplicaAddSrcReplica() (srcReplicaName, srcReplicaAddress st
 	return srcReplicaName, srcReplicaAddress, nil
 }
 
+// getRebuildingSnapshotList fetches the snapshot tree from the src replica and
+// returns the ordered list of snapshots that need to be shallow-copied to the
+// dst replica. It finds the ancestor snapshot (empty parent or backing image
+// parent) and traverses the tree via DFS to produce the copy order.
 func getRebuildingSnapshotList(srcReplicaServiceCli *client.SPDKClient, srcReplicaName string) ([]*api.Lvol, error) {
 	rpcSrcReplica, err := srcReplicaServiceCli.ReplicaGet(srcReplicaName)
 	if err != nil {
@@ -1513,7 +1524,8 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 	return snapshotName, nil
 }
 
-func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, replicaClients map[string]*client.SPDKClient, snapshotName string, snapshotOp SnapshotOperationType, opts any) (updated bool, replicasErr error, engineErr error) {
+func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, replicaClients map[string]*client.SPDKClient,
+	snapshotName string, snapshotOp SnapshotOperationType, opts any) (updated bool, replicasErr error, engineErr error) {
 	if snapshotOp == SnapshotOperationRevert {
 		if _, err := spdkClient.BdevRaidDelete(e.Name); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 			e.log.WithError(err).Errorf("Failed to delete RAID after snapshot %s revert", snapshotName)
@@ -2693,6 +2705,10 @@ type replicaInspection struct {
 	foundSnapshot     bool
 }
 
+// checkAndUpdateInfoFromReplicaNoLock refreshes engine-level info (SnapshotMap, Head,
+// ActualSize) from the replicas. It iterates ReplicaStatusMap, inspects each RW/WO
+// replica, resolves its ancestor lineage, and selects the replica with the earliest
+// ancestor CreationTime as the info source. Must be called with the Engine lock held.
 func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 	replicaMap := map[string]*api.Replica{}
 	replicaAncestorMap := map[string]*api.Lvol{}
@@ -2723,6 +2739,10 @@ func (e *Engine) checkAndUpdateInfoFromReplicaNoLock() {
 	e.selectAndApplyEarliestReplicaInfo(replicaMap, replicaAncestorMap, hasBackingImage, hasSnapshot)
 }
 
+// ensureReplicaModeForInfoUpdate checks whether a replica's mode qualifies it
+// for info update inspection. Returns true for RW and WO replicas. For any
+// unexpected mode (not RW, WO, or ERR), it downgrades the mode to ERR and
+// returns false.
 func (e *Engine) ensureReplicaModeForInfoUpdate(replicaName string, replicaStatus *EngineReplicaStatus) bool {
 	if replicaStatus.Mode == types.ModeRW || replicaStatus.Mode == types.ModeWO {
 		return true

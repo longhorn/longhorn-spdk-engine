@@ -4659,7 +4659,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	finishErrMock := &server.MockReplicaAdder{}
 	finishErrMock.FinishFunc = func(srcReplicaServiceCli *client.SPDKClient, dstReplicaServiceCli *client.SPDKClient, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string) error {
 		// Clean up SPDK resources via the real finish before returning error
-		finishErrMock.Real.ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress)
+		_ = finishErrMock.Real.ReplicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress)
 		return fmt.Errorf("injected finish error")
 	}
 	internalEngine.SetReplicaAdder(finishErrMock)
