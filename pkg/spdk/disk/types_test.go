@@ -1,6 +1,7 @@
 package disk
 
 import (
+	"fmt"
 	"testing"
 
 	. "gopkg.in/check.v1"
@@ -13,7 +14,8 @@ type TestSuite struct{}
 var _ = Suite(&TestSuite{})
 
 func (s *TestSuite) TestIsVfioPci(c *C) {
-	// Add test case for isVfioPci function
+	fmt.Println("Testing isVfioPci function with various driver strings")
+
 	testCases := []struct {
 		name     string
 		driver   string
@@ -48,7 +50,8 @@ func (s *TestSuite) TestIsVfioPci(c *C) {
 }
 
 func (s *TestSuite) TestIsUioPciGeneric(c *C) {
-	// Add test case for isUioPciGeneric function
+	fmt.Println("Testing isUioPciGeneric function with various driver strings")
+
 	testCases := []struct {
 		name     string
 		driver   string

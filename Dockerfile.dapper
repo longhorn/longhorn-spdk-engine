@@ -31,6 +31,8 @@ RUN for i in {1..10}; do \
         zypper --gpg-auto-import-keys ref && break || sleep 1; \
     done
 
+RUN zypper -n ref && \
+    zypper update -y
 RUN zypper -n install cmake curl wget gcc13 unzip tar xsltproc docbook-xsl-stylesheets python3 python3-pip fuse3-devel \
               e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps jq git
 
