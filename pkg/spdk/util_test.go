@@ -1,9 +1,12 @@
 package spdk
 
 import (
+	"fmt"
 	"testing"
 
 	. "gopkg.in/check.v1"
+
+	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
 func Test(t *testing.T) { TestingT(t) }
@@ -13,6 +16,8 @@ type TestSuite struct{}
 var _ = Suite(&TestSuite{})
 
 func (s *TestSuite) TestSplitHostPort(c *C) {
+	fmt.Println("Testing splitHostPort with various address formats")
+
 	type testCase struct {
 		address      string
 		expectedHost string
@@ -56,6 +61,8 @@ func (s *TestSuite) TestSplitHostPort(c *C) {
 }
 
 func (s *TestSuite) TestExtractBackingImageAndDiskUUID(c *C) {
+	fmt.Println("Testing ExtractBackingImageAndDiskUUID with various lvol name formats")
+
 	type testCase struct {
 		lvolName         string
 		expectedBIName   string
@@ -119,4 +126,23 @@ func (s *TestSuite) TestExtractBackingImageAndDiskUUID(c *C) {
 			c.Assert(testCase.expectedDiskUUID, Equals, diskUUID)
 		}
 	}
+}
+
+func (s *TestSuite) TestSetReplicaAdderInjectsRealFallback(c *C) {
+	e := NewEngine("test-engine", "test-volume", types.FrontendEmpty, 1, nil)
+
+	firstMock := &MockReplicaAdder{}
+	e.SetReplicaAdder(firstMock)
+
+	firstFallback, ok := firstMock.Real.(*realReplicaAdder)
+	c.Assert(ok, Equals, true)
+	c.Assert(firstFallback.e, Equals, e)
+
+	secondMock := &MockReplicaAdder{}
+	e.SetReplicaAdder(secondMock)
+
+	secondFallback, ok := secondMock.Real.(*realReplicaAdder)
+	c.Assert(ok, Equals, true)
+	c.Assert(secondFallback.e, Equals, e)
+	c.Assert(secondMock.Real == firstMock, Equals, false)
 }
