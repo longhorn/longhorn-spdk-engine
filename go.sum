@@ -78,6 +78,8 @@ github.com/longhorn/go-common-libs v0.0.0-20260328134226-cafa38fc4ce8 h1:HxGyRXT
 github.com/longhorn/go-common-libs v0.0.0-20260328134226-cafa38fc4ce8/go.mod h1:Vw9cRchaffWmZMjHOjqhSG37tFN9DdQ/isKs4ViPXQE=
 github.com/longhorn/go-spdk-helper v0.5.1-0.20260329081903-28b72c8abfa4 h1:qlxDYoEOiWfKCFIw5Qk3OzaNID7nf1DhHq3gxhDgGdA=
 github.com/longhorn/go-spdk-helper v0.5.1-0.20260329081903-28b72c8abfa4/go.mod h1:Q6lpfqGmo7ZksEBuMRhzPz3J4LEKLuBebXl37374g0E=
+github.com/longhorn/types v0.0.0-20260408014255-0ae353a2d888 h1:kwH25Td0oW2YA9IVxZu0Nq4VQbnjUzgsziwacJtZcc4=
+github.com/longhorn/types v0.0.0-20260408014255-0ae353a2d888/go.mod h1:qLF81pbxPxRteatoPFqVjcr0FPga839D8Cj2k1V4/1c=
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
 github.com/mitchellh/go-ps v1.0.0 h1:i6ampVEEF4wQFF+bkYfwYgY+F/uYJDktmvLPf7qIgjc=
 github.com/mitchellh/go-ps v1.0.0/go.mod h1:J4lOc8z8yJs6vUwklHw2XEIiT4z4C40KtWVN3nvg8Pg=
