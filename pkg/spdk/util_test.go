@@ -2,11 +2,13 @@ package spdk
 
 import (
 	"fmt"
+	"net"
 	"testing"
 
 	. "gopkg.in/check.v1"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 )
 
 func Test(t *testing.T) { TestingT(t) }
@@ -145,4 +147,28 @@ func (s *TestSuite) TestSetReplicaAdderInjectsRealFallback(c *C) {
 	c.Assert(ok, Equals, true)
 	c.Assert(secondFallback.e, Equals, e)
 	c.Assert(secondMock.Real == firstMock, Equals, false)
+}
+
+func (s *TestSuite) TestConnectNVMfBdevAdrfamDetection(c *C) {
+	testCases := []struct {
+		address        string
+		expectedIP     string
+		expectedAdrfam spdktypes.NvmeAddressFamily
+	}{
+		{"[fd00::1]:20001", "fd00::1", spdktypes.NvmeAddressFamilyIPv6},
+		{"10.0.0.1:20001", "10.0.0.1", spdktypes.NvmeAddressFamilyIPv4},
+		{"[::1]:20001", "::1", spdktypes.NvmeAddressFamilyIPv6},
+		{"192.168.1.100:8500", "192.168.1.100", spdktypes.NvmeAddressFamilyIPv4},
+	}
+	for _, tc := range testCases {
+		ip, _, err := net.SplitHostPort(tc.address)
+		c.Assert(err, IsNil)
+		c.Assert(ip, Equals, tc.expectedIP)
+		adrfam := spdktypes.NvmeAddressFamilyIPv4
+		if parsedIP := net.ParseIP(ip); parsedIP != nil && parsedIP.To4() == nil {
+			adrfam = spdktypes.NvmeAddressFamilyIPv6
+		}
+		c.Assert(adrfam, Equals, tc.expectedAdrfam,
+			Commentf("Wrong adrfam for %s", tc.address))
+	}
 }
