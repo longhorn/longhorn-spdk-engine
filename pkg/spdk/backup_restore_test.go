@@ -2,6 +2,7 @@ package spdk
 
 import (
 	"fmt"
+	"strings"
 
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
@@ -88,4 +89,40 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAllERRSkipped(c *C) 
 	// Modes remain ERR (not downgraded further)
 	c.Assert(e.ReplicaStatusMap["replica-1"].Mode, Equals, lhtypes.Mode(lhtypes.ModeERR))
 	c.Assert(e.ReplicaStatusMap["replica-2"].Mode, Equals, lhtypes.Mode(lhtypes.ModeERR))
+}
+
+func (s *TestSuite) TestEngineFrontendTeardownRestoreInitiatorMarksStopped(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreInitiator marks the temporary restore frontend stopped")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef.State = lhtypes.InstanceStateRunning
+	ef.IsRestoring = true
+	ef.Endpoint = "/dev/longhorn/vol-a"
+	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
+	ef.NvmeTcpFrontend.TargetPort = 2000
+	ef.NvmeTcpFrontend.Nqn = getStableVolumeNQN("vol-a")
+	ef.NvmeTcpFrontend.Nguid = getStableVolumeNGUID("vol-a")
+
+	ef.teardownRestoreInitiator(nil)
+
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateStopped))
+	c.Assert(ef.Frontend, Equals, "")
+	c.Assert(ef.Endpoint, Equals, "")
+	c.Assert(ef.NvmeTcpFrontend.TargetIP, Equals, "")
+	c.Assert(ef.NvmeTcpFrontend.TargetPort, Equals, int32(0))
+	c.Assert(ef.NvmeTcpFrontend.Nqn, Equals, "")
+	c.Assert(ef.NvmeTcpFrontend.Nguid, Equals, "")
+}
+
+func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {
+	fmt.Println("Testing Engine.ReplicaAdd is rejected while restore is in progress")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1))
+	e.State = lhtypes.InstanceStateRunning
+	e.IsRestoring = true
+
+	err := e.ReplicaAdd(nil, "replica-new", "10.0.0.2:20000", false, nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "restore is in progress"), Equals, true)
 }
