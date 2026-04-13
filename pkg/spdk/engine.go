@@ -835,10 +835,27 @@ func (e *Engine) replicaAddStart(spdkClient *spdkclient.Client, replicaClients m
 		return nil, startUpdateRequired, nil, err
 	}
 
+	// Ensure the dst head lvol size matches the engine spec size before connecting and growing the RAID.
+	if err := e.ensureRebuildingReplicaSize(dstReplicaServiceCli, dstReplicaName); err != nil {
+		return nil, startUpdateRequired, nil, err
+	}
+
 	// Add rebuilding replica head bdev to the base bdev list of the RAID bdev
 	dstHeadLvolBdevName, err := connectNVMfBdev(spdkClient, dstReplicaName, dstHeadLvolAddress, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
 	if err != nil {
 		return nil, startUpdateRequired, nil, err
+	}
+
+	// Double-confirm the actual bdev size reported by SPDK after connecting.
+	bdevList, err := spdkClient.BdevGetBdevs(dstHeadLvolBdevName, 0)
+	if err != nil {
+		return nil, startUpdateRequired, nil, errors.Wrapf(err, "failed to get bdev info for rebuilding replica %s head bdev %s", dstReplicaName, dstHeadLvolBdevName)
+	}
+	if len(bdevList) != 1 {
+		return nil, startUpdateRequired, nil, fmt.Errorf("expected 1 bdev for rebuilding replica %s head bdev %s, got %d", dstReplicaName, dstHeadLvolBdevName, len(bdevList))
+	}
+	if err := validateReplicaBdevSize(e, dstReplicaName, &bdevList[0]); err != nil {
+		return nil, startUpdateRequired, nil, errors.Wrapf(err, "rebuilding replica %s head bdev %s has wrong size, cannot add to engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
 	}
 
 	e.log.Infof("Adding rebuilding replica %s head bdev %s to the base bdev list for engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
@@ -2995,6 +3012,32 @@ func (e *Engine) validateAndUpdateReplicaNvme(replicaName string, bdev *spdktype
 	}
 
 	return replicaStatus.Mode, nil
+}
+
+// ensureRebuildingReplicaSize checks the dst replica's spec size against the engine spec size
+// before the NVMe bdev is connected. If the replica is smaller (e.g. created before a volume
+// expansion), it is expanded in place so that only a single connectNVMfBdev call is needed.
+// Returns an error if the replica is larger than the engine spec size.
+func (e *Engine) ensureRebuildingReplicaSize(dstReplicaServiceCli *client.SPDKClient, replicaName string) error {
+	replica, err := dstReplicaServiceCli.ReplicaGet(replicaName)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get rebuilding replica %s info before size check", replicaName)
+	}
+
+	if replica.SpecSize == e.SpecSize {
+		return nil
+	}
+	if replica.SpecSize > e.SpecSize {
+		return fmt.Errorf("rebuilding replica %s size %d exceeds engine %s spec size %d",
+			replicaName, replica.SpecSize, e.Name, e.SpecSize)
+	}
+
+	e.log.Infof("Rebuilding replica %s size %d is smaller than engine %s spec size %d, expanding before connecting",
+		replicaName, replica.SpecSize, e.Name, e.SpecSize)
+	if err := dstReplicaServiceCli.ReplicaExpand(replicaName, e.SpecSize); err != nil {
+		return errors.Wrapf(err, "failed to expand rebuilding replica %s to engine %s spec size %d", replicaName, e.Name, e.SpecSize)
+	}
+	return nil
 }
 
 func validateReplicaBdevSize(e *Engine, replicaName string, bdev *spdktypes.BdevInfo) error {
