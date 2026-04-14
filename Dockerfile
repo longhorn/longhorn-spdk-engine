@@ -1,6 +1,7 @@
-FROM registry.suse.com/bci/bci-base:16.1
+# syntax=docker/dockerfile:1.22.0
+FROM registry.suse.com/bci/bci-base:16.1 AS base
 
-ARG DAPPER_HOST_ARCH
+ARG TARGETARCH
 ARG http_proxy
 ARG https_proxy
 ARG SRC_BRANCH=master
@@ -9,20 +10,14 @@ ARG CACHEBUST
 
 ARG GOLANG_VERSION=1.25.3
 
-ENV HOST_ARCH=${DAPPER_HOST_ARCH} ARCH=${DAPPER_HOST_ARCH}
-ENV PATH /go/bin:/root/go/bin:$PATH
-ENV DAPPER_DOCKER_SOCKET true
-ENV DAPPER_ENV TAG REPO DRONE_REPO DRONE_PULL_REQUEST DRONE_COMMIT_REF
-ENV DAPPER_OUTPUT bin coverage.out
-ENV DAPPER_RUN_ARGS --privileged --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.venv:exec --tmpfs /go/src/github.com/longhorn/longhorn-spdk-engine/integration/.tox:exec -v /dev:/host/dev -v /proc:/host/proc -v /sys:/host/sys -v /tmp:/tmp
-ENV DAPPER_SOURCE /go/src/github.com/longhorn/longhorn-spdk-engine
-ENV SRC_BRANCH ${SRC_BRANCH}
-ENV SRC_TAG ${SRC_TAG}
+ENV ARCH=${TARGETARCH}
+ENV GOFLAGS=-mod=vendor
 
-WORKDIR ${DAPPER_SOURCE}
+# Install Go
+ENV GOPATH=/go PATH=/go/bin:/usr/local/go/bin:${PATH} SHELL=/bin/bash
 
-ENTRYPOINT ["./scripts/entry"]
-CMD ["ci"]
+ENV SRC_BRANCH=${SRC_BRANCH}
+ENV SRC_TAG=${SRC_TAG}
 
 RUN for i in {1..10}; do \
         zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:tools:compiler/16.0/devel:tools:compiler.repo && \
@@ -34,19 +29,22 @@ RUN for i in {1..10}; do \
 RUN zypper -n ref && \
     zypper update -y
 RUN zypper -n install cmake curl wget gcc13 unzip tar xsltproc docbook-xsl-stylesheets python3 python3-pip fuse3-devel \
-              e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps jq git
+              e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps jq git && \
+    rm -rf /var/cache/zypp/*
 
 RUN curl -sSL "https://golang.org/dl/go${GOLANG_VERSION}.linux-${ARCH}.tar.gz" -o /tmp/go.tar.gz \
-    && tar -C / -xzf /tmp/go.tar.gz \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
     && rm /tmp/go.tar.gz
-RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin latest
+
+# Install golangci-lint
+RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin latest
 
 RUN echo "Cloning longhorn/dep-versions SRC_BRANCH=${SRC_BRANCH} SRC_TAG=${SRC_TAG}" && \
     git clone https://github.com/longhorn/dep-versions.git -b ${SRC_BRANCH} /usr/src/dep-versions && \
     cd /usr/src/dep-versions && \
     if [ -n "${SRC_TAG}" ] && git show-ref --tags ${SRC_TAG} > /dev/null 2>&1; then \
         echo "Checking out tag ${SRC_TAG}"; \
-        cd /usr/src/dep-versions && git checkout tags/${SRC_TAG}; \
+        git checkout tags/${SRC_TAG}; \
     fi && \
     echo "dep-versions commit: $(git rev-parse HEAD)"
 
@@ -71,3 +69,12 @@ RUN export REPO_OVERRIDE="" && \
     bash /usr/src/dep-versions/scripts/build-go-spdk-helper.sh "${REPO_OVERRIDE}" "${COMMIT_ID_OVERRIDE}"
 
 RUN ldconfig
+
+WORKDIR /go/src/github.com/longhorn/longhorn-spdk-engine
+COPY . .
+
+FROM base AS validate
+RUN ./scripts/validate && touch /validate.done
+
+FROM scratch AS ci-artifacts
+COPY --from=validate /validate.done /validate.done

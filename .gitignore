@@ -26,12 +26,9 @@ _testmain.go
 coverage.out
 
 # Rancher
-.dapper
-.dapper.tmp
 trash.lock
 .trash-conf
 bin/
-Dockerfile.dapper*
 
 # patch tmp files
 *.orig
