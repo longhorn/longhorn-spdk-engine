@@ -7,11 +7,6 @@ on:
       - v*
     tags:
       - v*
-  pull_request:
-    branches:
-      - master
-      - main
-      - v*
   workflow_dispatch: {}
 
 permissions: {}
