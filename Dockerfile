@@ -9,6 +9,7 @@ ARG SRC_TAG
 ARG CACHEBUST
 
 ARG GOLANG_VERSION=1.25.3
+ENV GOLANGCI_LINT_VERSION=v2.11.4
 
 ENV ARCH=${TARGETARCH}
 ENV GOFLAGS=-mod=vendor
@@ -37,7 +38,9 @@ RUN curl -sSL "https://golang.org/dl/go${GOLANG_VERSION}.linux-${ARCH}.tar.gz" -
     && rm /tmp/go.tar.gz
 
 # Install golangci-lint
-RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin latest
+RUN curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh -o /tmp/install.sh \
+    && chmod +x /tmp/install.sh \
+    && /tmp/install.sh -b /usr/local/bin ${GOLANGCI_LINT_VERSION}
 
 RUN echo "Cloning longhorn/dep-versions SRC_BRANCH=${SRC_BRANCH} SRC_TAG=${SRC_TAG}" && \
     git clone https://github.com/longhorn/dep-versions.git -b ${SRC_BRANCH} /usr/src/dep-versions && \
