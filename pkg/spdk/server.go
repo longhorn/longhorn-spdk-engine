@@ -223,25 +223,24 @@ type verifyState struct {
 
 func (s *Server) verify() (err error) {
 	s.Lock()
-	locked := true
-	defer func() {
-		if locked {
-			s.Unlock()
-		}
-	}()
-
 	state := s.newVerifyState()
+	s.trySelfHealHotplug()
+	s.Unlock()
 
 	defer func() {
 		s.handleVerifyError(err, state)
 	}()
 
-	s.trySelfHealHotplug()
-
+	// rebuildCachedLvolObjects makes SPDK JSON-RPC calls that may block
+	// for a long time (e.g. when spdk_tgt is busy with blobstore
+	// recovery during DiskCreate).  Run it WITHOUT the server lock so
+	// that gRPC handlers (EngineGet, EngineFrontendCreate, …) are not
+	// starved.
 	if err = s.rebuildCachedLvolObjects(state); err != nil {
 		return err
 	}
 
+	s.Lock()
 	if len(s.replicaMap) != len(state.replicaMap) {
 		logrus.Infof("spdk gRPC server: replica map updated, map count is changed from %d to %d", len(s.replicaMap), len(state.replicaMap))
 	}
@@ -249,9 +248,7 @@ func (s *Server) verify() (err error) {
 	s.replicaMap = state.replicaMap
 	s.backingImageMap = state.backingImageMap
 	s.UpdateEngineMetrics()
-
 	s.Unlock()
-	locked = false
 
 	return s.syncVerifiedObjects(state)
 }
