@@ -9,7 +9,7 @@ import (
 )
 
 // Tests for ensureReplicaModeForInfoUpdate, which is called by
-// checkAndUpdateInfoFromReplicaNoLock — a function now invoked at the end of
+// checkAndUpdateInfoFromReplicasNoLock — a function now invoked at the end of
 // BackupRestoreFinish to refresh engine state from replica info.
 func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateRWQualifies(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: RW mode qualifies for info update")
@@ -59,21 +59,21 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateUnexpectedModeDowngradesTo
 	c.Assert(rs.Mode, Equals, lhtypes.Mode(lhtypes.ModeERR))
 }
 
-// Tests for checkAndUpdateInfoFromReplicaNoLock with edge-case replica maps.
+// Tests for checkAndUpdateInfoFromReplicasNoLock with edge-case replica maps.
 // This function is now called by BackupRestoreFinish after setting replicas
 // to ModeRW.
-func (s *TestSuite) TestCheckAndUpdateInfoFromReplicaNoLockEmptyMap(c *C) {
-	fmt.Println("Testing checkAndUpdateInfoFromReplicaNoLock: empty ReplicaStatusMap does not panic")
+func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockEmptyMap(c *C) {
+	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: empty ReplicaStatusMap does not panic")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
 	e.ReplicaStatusMap = map[string]*EngineReplicaStatus{}
 
 	// Should not panic with empty map
-	e.checkAndUpdateInfoFromReplicaNoLock()
+	e.checkAndUpdateInfoFromReplicasNoLock()
 }
 
-func (s *TestSuite) TestCheckAndUpdateInfoFromReplicaNoLockAllERRSkipped(c *C) {
-	fmt.Println("Testing checkAndUpdateInfoFromReplicaNoLock: all-ERR replicas are skipped without network calls")
+func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAllERRSkipped(c *C) {
+	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: all-ERR replicas are skipped without network calls")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
 	e.ReplicaStatusMap = map[string]*EngineReplicaStatus{
@@ -83,7 +83,7 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicaNoLockAllERRSkipped(c *C) {
 
 	// All replicas are ERR, so ensureReplicaModeForInfoUpdate returns false
 	// for each one. No inspectReplicaForInfoUpdate or network calls occur.
-	e.checkAndUpdateInfoFromReplicaNoLock()
+	e.checkAndUpdateInfoFromReplicasNoLock()
 
 	// Modes remain ERR (not downgraded further)
 	c.Assert(e.ReplicaStatusMap["replica-1"].Mode, Equals, lhtypes.Mode(lhtypes.ModeERR))

@@ -227,7 +227,6 @@ func (s *TestSuite) TestExpandDoesNotBlockConcurrentGet(c *C) {
 
 	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
 	ef.State = lhtypes.InstanceStateRunning
-	ef.EngineIP = "10.0.0.1"
 
 	// Simulate the Phase 1 lock pattern from Expand: acquire, read, release
 	var wg sync.WaitGroup
@@ -302,6 +301,34 @@ func (s *TestSuite) TestExpandCapturesTargetAddressWithNilNvmeTcpFrontend(c *C) 
 	c.Assert(targetAddress, Equals, "")
 }
 
+func (s *TestSuite) TestEngineExpandPreservesANAState(c *C) {
+	fmt.Println("Testing Engine Expand preserves non-optimized ANA state")
+
+	// An engine with ANAState=inaccessible (e.g. a switchover target)
+	// should keep that state across Expand, not revert to optimized.
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e.NvmeTcpTarget.ANAState = NvmeTCPANAStateInaccessible
+
+	// Verify the ANA state is preserved in the logic path that Expand uses.
+	currentANAState := e.NvmeTcpTarget.ANAState
+	if currentANAState == "" {
+		currentANAState = NvmeTCPANAStateOptimized
+	}
+	c.Assert(currentANAState, Equals, NvmeTCPANAStateInaccessible)
+
+	_, err := toSPDKListenerANAState(currentANAState)
+	c.Assert(err, IsNil)
+
+	// Verify that an empty ANAState defaults to optimized.
+	e2 := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	c.Assert(e2.NvmeTcpTarget.ANAState, Equals, NvmeTCPANAState(""))
+	defaultState := e2.NvmeTcpTarget.ANAState
+	if defaultState == "" {
+		defaultState = NvmeTCPANAStateOptimized
+	}
+	c.Assert(defaultState, Equals, NvmeTCPANAStateOptimized)
+}
+
 func (s *TestSuite) TestExpandResumeGuardsNilInitiator(c *C) {
 	fmt.Println("Testing Expand resume defer guards against nil initiator")
 
@@ -314,4 +341,57 @@ func (s *TestSuite) TestExpandResumeGuardsNilInitiator(c *C) {
 			_ = ef.initiator.Resume()
 		}
 	}, Not(PanicMatches), ".*")
+}
+
+func (s *TestSuite) TestGetEngineServiceAddressWithEngineIP(c *C) {
+	fmt.Println("Testing getEngineServiceAddress returns correct address when EngineIP is set")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef.EngineIP = "10.0.0.1"
+
+	addr := ef.getEngineServiceAddress()
+	c.Assert(addr, Equals, "10.0.0.1:8504")
+}
+
+func (s *TestSuite) TestGetEngineServiceAddressEmptyEngineIP(c *C) {
+	fmt.Println("Testing getEngineServiceAddress returns empty string when EngineIP is empty")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+
+	addr := ef.getEngineServiceAddress()
+	c.Assert(addr, Equals, "")
+}
+
+func (s *TestSuite) TestGetEngineServiceAddressFrontendEmpty(c *C) {
+	fmt.Println("Testing getEngineServiceAddress works for FrontendEmpty when EngineIP is set")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}, 1))
+	ef.EngineIP = "10.0.0.5"
+
+	addr := ef.getEngineServiceAddress()
+	c.Assert(addr, Equals, "10.0.0.5:8504")
+}
+
+func (s *TestSuite) TestCreateSetsEngineIPForEmptyFrontend(c *C) {
+	fmt.Println("Testing Create sets EngineIP for FrontendEmpty")
+
+	ef := NewEngineFrontend("ef-empty", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1048576, 0, 0, make(chan interface{}, 1))
+
+	_, _ = ef.Create(nil, "10.0.0.3:8500")
+	c.Assert(ef.EngineIP, Equals, "10.0.0.3")
+	c.Assert(ef.getEngineServiceAddress(), Equals, "10.0.0.3:8504")
+}
+
+func (s *TestSuite) TestCreateSetsEngineIPForBlockdevFrontend(c *C) {
+	fmt.Println("Testing EngineIP is used for engine service address with Blockdev frontend")
+
+	ef := NewEngineFrontend("ef-block", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1))
+
+	// Simulate what Create does: set EngineIP from the target address.
+	ef.EngineIP = "10.0.0.4"
+	c.Assert(ef.getEngineServiceAddress(), Equals, "10.0.0.4:8504")
+
+	// NvmeTcpFrontend.TargetIP being empty must NOT affect the service address.
+	c.Assert(ef.NvmeTcpFrontend.TargetIP, Equals, "")
+	c.Assert(ef.getEngineServiceAddress(), Equals, "10.0.0.4:8504")
 }

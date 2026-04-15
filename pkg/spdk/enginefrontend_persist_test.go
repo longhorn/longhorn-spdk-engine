@@ -2,6 +2,7 @@ package spdk
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -32,10 +33,18 @@ func (s *TestSuite) TestSaveAndLoadEngineFrontendRecord(c *C) {
 	c.Assert(records[0].Name, Equals, "ef-1")
 	c.Assert(records[0].EngineName, Equals, "engine-a")
 	c.Assert(records[0].VolumeName, Equals, "vol-a")
+	c.Assert(records[0].VolumeNQN, Equals, getStableVolumeNQN("vol-a"))
+	c.Assert(records[0].VolumeNGUID, Equals, getStableVolumeNGUID("vol-a"))
 	c.Assert(records[0].Frontend, Equals, lhtypes.FrontendSPDKTCPBlockdev)
 	c.Assert(records[0].SpecSize, Equals, uint64(1048576))
 	c.Assert(records[0].TargetIP, Equals, "10.0.0.1")
 	c.Assert(records[0].TargetPort, Equals, int32(3000))
+	c.Assert(records[0].ActivePath, Equals, "10.0.0.1:3000")
+	c.Assert(records[0].PreferredPath, Equals, "10.0.0.1:3000")
+	c.Assert(len(records[0].Paths), Equals, 1)
+	c.Assert(records[0].Paths[0].TargetIP, Equals, "10.0.0.1")
+	c.Assert(records[0].Paths[0].TargetPort, Equals, int32(3000))
+	c.Assert(records[0].Paths[0].ANAState, Equals, NvmeTCPANAStateOptimized)
 }
 
 func (s *TestSuite) TestSaveRecordPersistsTargetIPAndPort(c *C) {
@@ -57,6 +66,55 @@ func (s *TestSuite) TestSaveRecordPersistsTargetIPAndPort(c *C) {
 	c.Assert(json.Unmarshal(data, &raw), IsNil)
 	c.Assert(raw["targetIP"], Equals, "192.168.1.10")
 	c.Assert(raw["targetPort"], Equals, float64(4420)) // JSON numbers are float64
+	c.Assert(raw["volumeNqn"], Equals, getStableVolumeNQN("vol-b"))
+	c.Assert(raw["volumeNguid"], Equals, getStableVolumeNGUID("vol-b"))
+}
+
+func (s *TestSuite) TestSaveAndLoadEngineFrontendRecordPreservesMultipathMetadata(c *C) {
+	tmpDir := c.MkDir()
+
+	ef := NewEngineFrontend("ef-mp", "engine-a", "vol-mp",
+		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, make(chan interface{}, 1))
+	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
+	ef.NvmeTcpFrontend.TargetPort = 3000
+	ef.NvmeTcpFrontend.Nqn = helpertypes.GetNQN("engine-a")
+	ef.NvmeTcpFrontend.Nguid = generateNGUID("engine-a")
+	ef.ActivePath = "10.0.0.1:3000"
+	ef.PreferredPath = "10.0.0.2:3001"
+	ef.NvmeTCPPathMap = map[string]*NvmeTCPPath{
+		"10.0.0.1:3000": {
+			TargetIP:   "10.0.0.1",
+			TargetPort: 3000,
+			EngineName: "engine-a",
+			Nqn:        helpertypes.GetNQN("engine-a"),
+			Nguid:      generateNGUID("engine-a"),
+			ANAState:   NvmeTCPANAStateOptimized,
+		},
+		"10.0.0.2:3001": {
+			TargetIP:   "10.0.0.2",
+			TargetPort: 3001,
+			EngineName: "engine-b",
+			Nqn:        helpertypes.GetNQN("engine-b"),
+			Nguid:      generateNGUID("engine-b"),
+			ANAState:   NvmeTCPANAStateNonOptimized,
+		},
+	}
+
+	c.Assert(saveEngineFrontendRecord(tmpDir, ef), IsNil)
+
+	records, err := loadEngineFrontendRecords(tmpDir)
+	c.Assert(err, IsNil)
+	c.Assert(len(records), Equals, 1)
+	c.Assert(records[0].ActivePath, Equals, "10.0.0.1:3000")
+	c.Assert(records[0].PreferredPath, Equals, "10.0.0.2:3001")
+	c.Assert(len(records[0].Paths), Equals, 2)
+
+	pathsByAddress := map[string]*EngineFrontendPathRecord{}
+	for _, path := range records[0].Paths {
+		pathsByAddress[getNvmeTCPPathAddress(path.TargetIP, path.TargetPort)] = path
+	}
+	c.Assert(pathsByAddress["10.0.0.1:3000"].ANAState, Equals, NvmeTCPANAStateOptimized)
+	c.Assert(pathsByAddress["10.0.0.2:3001"].ANAState, Equals, NvmeTCPANAStateNonOptimized)
 }
 
 // --- UBLK frontend should NOT be persisted (Issue #4) ---
@@ -227,8 +285,7 @@ func (s *TestSuite) TestLoadRecordsBackwardCompatibleWithOldFormat(c *C) {
   "engineName": "engine-old",
   "volumeName": "vol-old",
   "frontend": "spdk-tcp-blockdev",
-  "specSize": 1048576,
-  "engineIP": "10.0.0.99"
+  "specSize": 1048576
 }`
 	c.Assert(os.WriteFile(filepath.Join(volDir, engineFrontendRecFile), []byte(oldRecord), 0600), IsNil)
 
@@ -236,8 +293,11 @@ func (s *TestSuite) TestLoadRecordsBackwardCompatibleWithOldFormat(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(len(records), Equals, 1)
 	c.Assert(records[0].Name, Equals, "ef-old")
+	c.Assert(records[0].VolumeNQN, Equals, getStableVolumeNQN("vol-old"))
+	c.Assert(records[0].VolumeNGUID, Equals, getStableVolumeNGUID("vol-old"))
 	c.Assert(records[0].TargetIP, Equals, "")         // Not present in old format.
 	c.Assert(records[0].TargetPort, Equals, int32(0)) // Not present in old format.
+	c.Assert(len(records[0].Paths), Equals, 0)
 }
 
 // --- Overwrite: saving again updates the record ---
@@ -270,7 +330,6 @@ func (s *TestSuite) TestRecoverFromHostNvmfReconstructsEndpoint(c *C) {
 
 	ef := NewEngineFrontend("ef-nvmf-recover", "engine-r", "vol-r",
 		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, updateCh)
-	ef.EngineIP = "10.0.0.5"
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.5"
 	ef.NvmeTcpFrontend.TargetPort = 4420
 
@@ -280,7 +339,7 @@ func (s *TestSuite) TestRecoverFromHostNvmfReconstructsEndpoint(c *C) {
 	got := ef.Get()
 	c.Assert(got.State, Equals, string(lhtypes.InstanceStateRunning))
 
-	expectedNqn := helpertypes.GetNQN("engine-r")
+	expectedNqn := getStableVolumeNQN("vol-r")
 	expectedEndpoint := GetNvmfEndpoint(expectedNqn, "10.0.0.5", 4420)
 	c.Assert(got.Endpoint, Equals, expectedEndpoint)
 	c.Assert(got.TargetIp, Equals, "10.0.0.5")
@@ -299,7 +358,7 @@ func (s *TestSuite) TestRecoverFromHostNvmfNoPortLeavesEmptyEndpoint(c *C) {
 
 	ef := NewEngineFrontend("ef-nvmf-noport", "engine-np", "vol-np",
 		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, updateCh)
-	ef.EngineIP = "10.0.0.6"
+	ef.NvmeTcpFrontend.TargetIP = "10.0.0.6"
 	// TargetPort is 0 (not recovered from old record).
 
 	err := ef.RecoverFromHost(nil)
@@ -353,6 +412,175 @@ func (s *TestSuite) TestRecoverFromHostUnsupportedFrontendSetsError(c *C) {
 	c.Assert(got.ErrorMsg, Matches, ".*unsupported frontend type.*")
 }
 
+func (s *TestSuite) TestRecoverFromHostBlockdevReconnectsPersistedTarget(c *C) {
+	updateCh := make(chan interface{}, 1)
+
+	ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh)
+	ef.metadataDir = c.MkDir()
+	ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
+	ef.NvmeTcpFrontend.TargetPort = 4420
+	ef.getInitiatorEndpointFn = func() string { return "/dev/longhorn/vol-r" }
+
+	loadCalls := 0
+	ef.loadInitiatorNVMeDeviceInfoFn = func(transportAddress, transportServiceID, subsystemNQN string) error {
+		loadCalls++
+		c.Assert(subsystemNQN, Equals, getStableVolumeNQN("vol-r"))
+		if loadCalls == 1 {
+			// First call: persisted address, device not found.
+			c.Assert(transportAddress, Equals, "10.0.0.8")
+			c.Assert(transportServiceID, Equals, "4420")
+			return fmt.Errorf("%s", helpertypes.ErrorMessageCannotFindValidNvmeDevice)
+		}
+		if loadCalls == 2 {
+			// Second call: empty-address fallback, also not found.
+			c.Assert(transportAddress, Equals, "")
+			c.Assert(transportServiceID, Equals, "")
+			return fmt.Errorf("%s", helpertypes.ErrorMessageCannotFindValidNvmeDevice)
+		}
+		// Third call: after reconnect, persisted address succeeds.
+		c.Assert(transportAddress, Equals, "10.0.0.8")
+		c.Assert(transportServiceID, Equals, "4420")
+		if ef.initiator != nil && ef.initiator.NVMeTCPInfo != nil {
+			ef.initiator.NVMeTCPInfo.TransportAddress = transportAddress
+			ef.initiator.NVMeTCPInfo.TransportServiceID = transportServiceID
+		}
+		return nil
+	}
+
+	reconnectCalled := false
+	ef.reconnectNvmeTCPPathFn = func(transportAddress, transportServiceID string) error {
+		reconnectCalled = true
+		c.Assert(transportAddress, Equals, "10.0.0.8")
+		c.Assert(transportServiceID, Equals, "4420")
+		if err := ef.loadInitiatorNVMeDeviceInfoFn(transportAddress, transportServiceID, getStableVolumeNQN("vol-r")); err != nil {
+			return err
+		}
+		return nil
+	}
+	ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error { return nil }
+
+	err := ef.RecoverFromHost(nil)
+	c.Assert(err, IsNil)
+	c.Assert(reconnectCalled, Equals, true)
+	c.Assert(loadCalls, Equals, 3)
+
+	got := ef.Get()
+	c.Assert(got.State, Equals, string(lhtypes.InstanceStateRunning))
+	c.Assert(got.Endpoint, Equals, "/dev/longhorn/vol-r")
+	c.Assert(got.TargetIp, Equals, "10.0.0.8")
+	c.Assert(got.TargetPort, Equals, int32(4420))
+
+	select {
+	case <-updateCh:
+	case <-time.After(time.Second):
+		c.Fatal("expected update on UpdateCh")
+	}
+}
+
+func (s *TestSuite) TestRecoverFromHostBlockdevUsesPersistedTargetForControllerSelection(c *C) {
+	updateCh := make(chan interface{}, 1)
+
+	ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh)
+	ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
+	ef.NvmeTcpFrontend.TargetPort = 4420
+	ef.getInitiatorEndpointFn = func() string { return "/dev/longhorn/vol-r" }
+
+	loadCalls := 0
+	ef.loadInitiatorNVMeDeviceInfoFn = func(transportAddress, transportServiceID, subsystemNQN string) error {
+		loadCalls++
+		c.Assert(transportAddress, Equals, "10.0.0.8")
+		c.Assert(transportServiceID, Equals, "4420")
+		c.Assert(subsystemNQN, Equals, getStableVolumeNQN("vol-r"))
+		if ef.initiator != nil && ef.initiator.NVMeTCPInfo != nil {
+			ef.initiator.NVMeTCPInfo.TransportAddress = transportAddress
+			ef.initiator.NVMeTCPInfo.TransportServiceID = transportServiceID
+		}
+		return nil
+	}
+
+	reconnectCalled := false
+	ef.reconnectNvmeTCPPathFn = func(transportAddress, transportServiceID string) error {
+		reconnectCalled = true
+		return nil
+	}
+	ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error { return nil }
+
+	err := ef.RecoverFromHost(nil)
+	c.Assert(err, IsNil)
+	c.Assert(loadCalls, Equals, 1)
+	c.Assert(reconnectCalled, Equals, false)
+
+	got := ef.Get()
+	c.Assert(got.State, Equals, string(lhtypes.InstanceStateRunning))
+	c.Assert(got.Endpoint, Equals, "/dev/longhorn/vol-r")
+	c.Assert(got.TargetIp, Equals, "10.0.0.8")
+	c.Assert(got.TargetPort, Equals, int32(4420))
+
+	select {
+	case <-updateCh:
+	case <-time.After(time.Second):
+		c.Fatal("expected update on UpdateCh")
+	}
+}
+
+func (s *TestSuite) TestRecoverFromHostBlockdevStalePersistedTargetFallsBackToAnyController(c *C) {
+	updateCh := make(chan interface{}, 1)
+
+	ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh)
+	// Persisted target is stale — no controller exists at 10.0.0.8:4420.
+	ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
+	ef.NvmeTcpFrontend.TargetPort = 4420
+	ef.getInitiatorEndpointFn = func() string { return "/dev/longhorn/vol-r" }
+
+	loadCalls := 0
+	ef.loadInitiatorNVMeDeviceInfoFn = func(transportAddress, transportServiceID, subsystemNQN string) error {
+		loadCalls++
+		c.Assert(subsystemNQN, Equals, getStableVolumeNQN("vol-r"))
+		if loadCalls == 1 {
+			// First call: persisted address fails (stale controller).
+			c.Assert(transportAddress, Equals, "10.0.0.8")
+			c.Assert(transportServiceID, Equals, "4420")
+			return fmt.Errorf("no controller matching transport address 10.0.0.8:4420")
+		}
+		// Second call: empty-address fallback succeeds via a different controller.
+		c.Assert(transportAddress, Equals, "")
+		c.Assert(transportServiceID, Equals, "")
+		if ef.initiator != nil && ef.initiator.NVMeTCPInfo != nil {
+			ef.initiator.NVMeTCPInfo.TransportAddress = "10.0.0.9"
+			ef.initiator.NVMeTCPInfo.TransportServiceID = "4420"
+		}
+		return nil
+	}
+
+	reconnectCalled := false
+	ef.reconnectNvmeTCPPathFn = func(transportAddress, transportServiceID string) error {
+		reconnectCalled = true
+		return nil
+	}
+	ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error { return nil }
+
+	err := ef.RecoverFromHost(nil)
+	c.Assert(err, IsNil)
+	c.Assert(loadCalls, Equals, 2)
+	c.Assert(reconnectCalled, Equals, false)
+
+	got := ef.Get()
+	c.Assert(got.State, Equals, string(lhtypes.InstanceStateRunning))
+	c.Assert(got.Endpoint, Equals, "/dev/longhorn/vol-r")
+	// TargetIP is updated from the fallback controller's transport address.
+	c.Assert(got.TargetIp, Equals, "10.0.0.9")
+	c.Assert(got.TargetPort, Equals, int32(4420))
+
+	select {
+	case <-updateCh:
+	case <-time.After(time.Second):
+		c.Fatal("expected update on UpdateCh")
+	}
+}
+
 // --- recoverEngineFrontends integration test ---
 
 func (s *TestSuite) TestRecoverEngineFrontendsRestoresTargetIPAndPort(c *C) {
@@ -374,10 +602,25 @@ func (s *TestSuite) TestRecoverEngineFrontendsRestoresTargetIPAndPort(c *C) {
 	updateCh := make(chan interface{}, 10)
 	recovered := NewEngineFrontend(record.Name, record.EngineName, record.VolumeName,
 		record.Frontend, record.SpecSize, 0, 0, updateCh)
+	recovered.VolumeNQN = record.VolumeNQN
+	recovered.VolumeNGUID = record.VolumeNGUID
+	recovered.ActivePath = record.ActivePath
+	recovered.PreferredPath = record.PreferredPath
+	recovered.NvmeTCPPathMap = map[string]*NvmeTCPPath{}
+	for _, path := range record.Paths {
+		address := getNvmeTCPPathAddress(path.TargetIP, path.TargetPort)
+		recovered.NvmeTCPPathMap[address] = &NvmeTCPPath{
+			TargetIP:   path.TargetIP,
+			TargetPort: path.TargetPort,
+			EngineName: path.EngineName,
+			Nqn:        path.Nqn,
+			Nguid:      path.Nguid,
+			ANAState:   path.ANAState,
+		}
+	}
 	if recovered.NvmeTcpFrontend != nil {
 		if record.TargetIP != "" {
 			recovered.NvmeTcpFrontend.TargetIP = record.TargetIP
-			recovered.EngineIP = record.TargetIP
 		}
 		if record.TargetPort != 0 {
 			recovered.NvmeTcpFrontend.TargetPort = record.TargetPort
@@ -390,7 +633,7 @@ func (s *TestSuite) TestRecoverEngineFrontendsRestoresTargetIPAndPort(c *C) {
 	got := recovered.Get()
 	c.Assert(got.State, Equals, string(lhtypes.InstanceStateRunning))
 
-	expectedNqn := helpertypes.GetNQN("engine-int")
+	expectedNqn := getStableVolumeNQN("vol-int")
 	expectedEndpoint := GetNvmfEndpoint(expectedNqn, "10.0.0.10", 5555)
 	c.Assert(got.Endpoint, Equals, expectedEndpoint)
 	c.Assert(got.TargetIp, Equals, "10.0.0.10")

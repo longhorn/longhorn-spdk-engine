@@ -540,8 +540,8 @@ func (s *TestSuite) TestSPDKEngineAndEngineFrontendCreateAndDeleteWithDifferentF
 			name:                 "FrontendSPDKTCPNvmf",
 			frontend:             types.FrontendSPDKTCPNvmf,
 			expectEngineEndpoint: true,
-			verifyFrontend: func(c *C, _ string, engineName string, engine *api.Engine, engineFrontend *api.EngineFrontend) {
-				nqn := helpertypes.GetNQN(engineName)
+			verifyFrontend: func(c *C, volumeName, _ string, engine *api.Engine, engineFrontend *api.EngineFrontend) {
+				nqn := helpertypes.GetNQN("volume-" + volumeName)
 				endpoint := server.GetNvmfEndpoint(nqn, engine.IP, engine.Port)
 				c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
