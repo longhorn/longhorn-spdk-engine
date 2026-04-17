@@ -22,8 +22,6 @@ ENV SRC_TAG=${SRC_TAG}
 
 RUN for i in {1..10}; do \
         zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:tools:compiler/16.0/devel:tools:compiler.repo && \
-        zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:/languages:/python:/Factory/16.0/devel:languages:python:Factory.repo && \
-        zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:/languages:/python:/backports/16.0/devel:languages:python:backports.repo && \
         zypper --gpg-auto-import-keys ref && break || sleep 1; \
     done
 
