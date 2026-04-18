@@ -2225,8 +2225,12 @@ func (e *Engine) BackupRestoreFinish(spdkClient *spdkclient.Client) error {
 			return err
 		}
 		e.log.Infof("Attaching replica %s with address %s before finishing restoration", replicaName, replicaAddress)
+		replicaAdrfam := spdktypes.NvmeAddressFamilyIPv4
+		if parsedIP := net.ParseIP(replicaIP); parsedIP != nil && parsedIP.To4() == nil {
+			replicaAdrfam = spdktypes.NvmeAddressFamilyIPv6
+		}
 		nvmeBdevNameList, err := spdkClient.BdevNvmeAttachController(replicaName, helpertypes.GetNQN(replicaName), replicaIP, replicaPort,
-			spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4,
+			spdktypes.NvmeTransportTypeTCP, replicaAdrfam,
 			int32(e.ctrlrLossTimeout), replicaReconnectDelaySec, int32(e.fastIOFailTimeoutSec), replicaMultipath)
 		if err != nil {
 			return err
@@ -3195,11 +3199,10 @@ func validateAndGetSingleNvmeInfo(replicaName string, bdev *spdktypes.BdevInfo) 
 }
 
 func validateNvmeTransport(replicaName, bdevName string, nvmeInfo spdktypes.NvmeNamespaceInfo) error {
-	if !strings.EqualFold(string(nvmeInfo.Trid.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
-		!strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
+	if !strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
 		return fmt.Errorf(
-			"found invalid address family %s and transport type %s in a remote NVMe base bdev %s during replica %s mode validation",
-			nvmeInfo.Trid.Adrfam, nvmeInfo.Trid.Trtype, bdevName, replicaName,
+			"found invalid transport type %s in a remote NVMe base bdev %s during replica %s mode validation",
+			nvmeInfo.Trid.Trtype, bdevName, replicaName,
 		)
 	}
 	return nil

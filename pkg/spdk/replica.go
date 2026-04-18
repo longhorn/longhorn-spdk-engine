@@ -662,8 +662,7 @@ func getExposedPort(subsystem *spdktypes.NvmfSubsystem) (exposedPort int32, err 
 
 	port := 0
 	for _, listenAddr := range subsystem.ListenAddresses {
-		if !strings.EqualFold(string(listenAddr.Adrfam), string(spdktypes.NvmeAddressFamilyIPv4)) ||
-			!strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
+		if !strings.EqualFold(string(listenAddr.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
 			continue
 		}
 		port, err = strconv.Atoi(listenAddr.Trsvcid)
@@ -1130,6 +1129,22 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 
 	if err := spdkClient.StartExposeBdev(r.Nqn, r.Head.UUID, generateNGUID(r.Name), r.IP, strconv.Itoa(int(r.PortStart))); err != nil {
 		return nil, err
+	}
+
+	// In dual-stack clusters, add a listener on the alternate address family so the engine
+	// can connect via either IPv4 or IPv6 depending on the data-engine-ip-family setting.
+	// getAlternateLocalIP returns an opposite-family local IP: IPv6 when r.IP is IPv4, and
+	// IPv4 when r.IP is IPv6. On single-stack nodes it returns "" and the block is skipped.
+	if altIP := getAlternateLocalIP(r.IP); altIP != "" {
+		portStr := strconv.Itoa(int(r.PortStart))
+		adrfam := spdktypes.NvmeAddressFamilyIPv6
+		if net.ParseIP(altIP).To4() != nil {
+			adrfam = spdktypes.NvmeAddressFamilyIPv4
+		}
+		r.log.Infof("Adding alternate-family dual-stack listener %v:%v for nqn %v", altIP, portStr, r.Nqn)
+		if _, err := spdkClient.NvmfSubsystemAddListener(r.Nqn, altIP, portStr, spdktypes.NvmeTransportTypeTCP, adrfam); err != nil {
+			r.log.WithError(err).Warnf("Failed to add alternate-family listener for nqn %v, single-stack only", r.Nqn)
+		}
 	}
 
 	r.IsExposed = true

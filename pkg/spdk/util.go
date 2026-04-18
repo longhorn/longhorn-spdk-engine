@@ -99,6 +99,13 @@ func exposeSnapshotLvolBdev(spdkClient *spdkclient.Client, lvsName, lvolName, ip
 }
 
 func splitHostPort(address string) (string, int32, error) {
+	// A bare IP (IPv4 or IPv6) has no port; return it directly.
+	// This must be checked before the colon test because IPv6 addresses
+	// contain colons but net.SplitHostPort requires [IPv6]:port notation.
+	if ip := net.ParseIP(address); ip != nil {
+		return address, 0, nil
+	}
+
 	if strings.Contains(address, ":") {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
@@ -143,6 +150,10 @@ func connectNVMfBdev(spdkClient *spdkclient.Client, controllerName, address stri
 		return "", err
 	}
 
+	adrfam := spdktypes.NvmeAddressFamilyIPv4
+	if parsedIP := net.ParseIP(ip); parsedIP != nil && parsedIP.To4() == nil {
+		adrfam = spdktypes.NvmeAddressFamilyIPv6
+	}
 	nvmeBdevNameList := []string{}
 	err = retry.Do(
 		func() error {
@@ -153,7 +164,7 @@ func connectNVMfBdev(spdkClient *spdkclient.Client, controllerName, address stri
 				ip,
 				port,
 				spdktypes.NvmeTransportTypeTCP,
-				spdktypes.NvmeAddressFamilyIPv4,
+				adrfam,
 				int32(ctrlrLossTimeout),
 				replicaReconnectDelaySec,
 				int32(fastIOFailTimeoutSec),
@@ -172,7 +183,6 @@ func connectNVMfBdev(spdkClient *spdkclient.Client, controllerName, address stri
 			)
 		}),
 	)
-
 	if err != nil {
 		return "", fmt.Errorf("attach NVMe controller failed after %d attempts: %w", maxRetries, err)
 	}
@@ -236,6 +246,79 @@ func GetLvsNameByUUID(spdkClient *spdkclient.Client, lvsUUID string) (string, er
 		return "", fmt.Errorf("expected exactly one lvstore for UUID %s, but found %d", lvsUUID, len(lvsList))
 	}
 	return lvsList[0].Name, nil
+}
+
+// isLocalIP returns true if the given IP address is assigned to a local network interface.
+// It checks all interfaces, supporting dual-stack pods where the primary pod IP
+// (from GetIPForPod) may be a different address family than the engine addresses.
+func isLocalIP(ipStr string) bool {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip != nil && ip.String() == ipStr {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// getAlternateLocalIP returns a local IP address of the opposite address family from ip.
+// If ip is IPv4, it returns the first global (non-loopback, non-link-local) IPv6 address
+// found on a local interface. If ip is IPv6, it returns the first global IPv4 address.
+// Returns an empty string if no such address is found or if ip cannot be parsed.
+func getAlternateLocalIP(ip string) string {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return ""
+	}
+	ipIsIPv4 := parsedIP.To4() != nil
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var localIP net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				localIP = v.IP
+			case *net.IPAddr:
+				localIP = v.IP
+			}
+			if localIP == nil || localIP.IsLoopback() || localIP.IsLinkLocalUnicast() {
+				continue
+			}
+			localIsIPv4 := localIP.To4() != nil
+			// Return an address only if its family is opposite to ip's family.
+			if ipIsIPv4 && !localIsIPv4 {
+				return localIP.String()
+			}
+			if !ipIsIPv4 && localIsIPv4 {
+				return localIP.String()
+			}
+		}
+	}
+	return ""
 }
 
 // ExtractBackingImageAndDiskUUID extracts the BackingImageName and DiskUUID from the string pattern "bi-${BackingImageName}-disk-${DiskUUID}"
