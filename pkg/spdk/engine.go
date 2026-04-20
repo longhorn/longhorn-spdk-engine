@@ -2721,7 +2721,9 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		return err
 	}
 
-	defer e.applyValidateAndUpdateErrorNoLock(err, &updateRequired)
+	defer func() {
+		e.applyValidateAndUpdateErrorNoLock(err, &updateRequired)
+	}()
 
 	bdevRaid, err := e.getRaidBdevNoLock(bdevMap)
 	if err != nil {
