@@ -2417,7 +2417,7 @@ func (r *Replica) SnapshotCloneSrcStart(spdkClient *spdkclient.Client, snapshotN
 	}
 	r.snapshotCloningSrcCache[dstReplicaName] = c
 
-	r.log.Infof("Clone src relica is starting snapshot %s clone for dst replica %v with cloning lvol address %v", snapshotName, dstReplicaName, dstCloningLvolAddress)
+	r.log.Infof("Clone src replica is starting snapshot %s clone for dst replica %v with cloning lvol address %v", snapshotName, dstReplicaName, dstCloningLvolAddress)
 
 	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
 		return r.snapshotLinkedCloneSrcStart(spdkClient, snapshotName, dstReplicaName)
