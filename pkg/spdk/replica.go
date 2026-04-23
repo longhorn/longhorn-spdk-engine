@@ -994,6 +994,11 @@ func constructSnapshotLvolMap(replicaName string, bdevLvolMap map[string]*spdkty
 			continue
 		}
 		for _, childLvolName := range bdevLvolMap[curSvcLvol.Name].DriverSpecific.Lvol.Clones {
+			// Exclude clone entrypoint lvols — they are tracked separately
+			if IsCloneEntrypointOfReplica(replicaName, childLvolName) || IsCloneEntrypointTmpHeadLvol(childLvolName) {
+				delete(curSvcLvol.Children, childLvolName)
+				continue
+			}
 			// Exclude the children lvols that does not belong to this replica. For example, the leftover rebuilding lvols of the previous rebuilding failed replicas
 			// or linked-clone lvol of another replica
 			if !IsReplicaLvol(replicaName, childLvolName) {
@@ -1026,7 +1031,7 @@ func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap
 			return nil, fmt.Errorf("cannot find the parent snapshot %s of the head for replica %s", headParentSnapshotLvolName, replicaName)
 		}
 		headSvcLvol = headParentSnapSvcLvol.Children[replicaName]
-	} else { // The parent of the head is nil or a backing image
+	} else { // The parent of the head is nil, a backing image, or a clone entrypoint
 		headSvcLvol = BdevLvolInfoToServiceLvol(headBdevLvol)
 	}
 	if headSvcLvol == nil {
@@ -1034,15 +1039,14 @@ func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap
 	}
 
 	newChain := []*Lvol{headSvcLvol}
-	// TODO: Considering the clone, this function or `constructSnapshotMap` may need to construct the children map for the head
 
 	// Build the majority of the chain with `snapshotMap` so that it does not need to worry about the snap svc lvol children map maintenance.
 	for curSvcLvol := snapshotLvolMap[headSvcLvol.Parent]; curSvcLvol != nil; curSvcLvol = snapshotLvolMap[curSvcLvol.Parent] {
 		newChain = append(newChain, curSvcLvol)
 	}
 
-	// Check if the root snap/head lvol has a parent. If YES, it means that this replica contains a backing image or
-	// this replica is linked-cloned from another replica
+	// Check if the root snap/head lvol has a parent. If YES, it means that this replica contains a backing image
+	// or this replica is a linked clone (parent is a clone entrypoint, which is handled externally).
 	var biSvcLvol *Lvol
 	rootLvol := newChain[len(newChain)-1]
 	if rootLvol.Parent != "" && types.IsBackingImageSnapLvolName(rootLvol.Parent) {
