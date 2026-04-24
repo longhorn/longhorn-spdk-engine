@@ -481,12 +481,66 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	r.BackingImage = newChain[0]
 	r.reconstructRequired = false
 
+	r.recoverCloneEntrypointInfo(bdevLvolMap)
+	r.recoverCloneReplicaInfo()
+
 	if r.State == types.InstanceStatePending {
 		r.State = types.InstanceStateStopped
 	}
 
 	return nil
 }
+
+// recoverCloneEntrypointInfo scans the bdevLvolMap for entrypoint lvols that belong
+// to this replica (as a source), and populates cloneEntrypointMap with their clone replica info.
+func (r *Replica) recoverCloneEntrypointInfo(bdevLvolMap map[string]*spdktypes.BdevInfo) {
+	r.cloneEntrypointMap = map[string]*CloneEntrypointInfo{}
+
+	for lvolName, bdevLvol := range bdevLvolMap {
+		if !IsCloneEntrypointOfReplica(r.Name, lvolName) {
+			continue
+		}
+		snapshotName := GetSnapshotNameFromCloneEntrypointLvolName(r.Name, lvolName)
+		epInfo := &CloneEntrypointInfo{
+			LvolName:         lvolName,
+			SnapshotName:     snapshotName,
+			SnapshotLvolName: GetReplicaSnapshotLvolName(r.Name, snapshotName),
+			CloneReplicas:    map[string]bool{},
+		}
+		for _, childLvolName := range bdevLvol.DriverSpecific.Lvol.Clones {
+			if IsCloneEntrypointTmpHeadLvol(childLvolName) {
+				continue
+			}
+			cloneReplicaName := GetCloneReplicaNameFromEntrypointChildLvol(childLvolName)
+			epInfo.CloneReplicas[cloneReplicaName] = true
+		}
+		r.cloneEntrypointMap[lvolName] = epInfo
+		r.log.Infof("Recovered clone entrypoint %s for snapshot %s with %d clone replicas",
+			lvolName, snapshotName, len(epInfo.CloneReplicas))
+	}
+}
+
+// recoverCloneReplicaInfo detects if this replica is a linked clone by checking
+// whether the root of its chain has a clone entrypoint as parent.
+func (r *Replica) recoverCloneReplicaInfo() {
+	r.isCloneReplica = false
+	r.cloneSourceReplicaName = ""
+	r.cloneEntrypointLvolName = ""
+
+	if len(r.ActiveChain) < 2 || r.ActiveChain[1] == nil {
+		return
+	}
+	rootLvol := r.ActiveChain[1]
+	if rootLvol.Parent == "" || !IsCloneEntrypointLvol(rootLvol.Parent) {
+		return
+	}
+	r.isCloneReplica = true
+	r.cloneEntrypointLvolName = rootLvol.Parent
+	r.cloneSourceReplicaName = GetSourceReplicaNameFromCloneEntrypointLvolName(rootLvol.Parent)
+	r.log.Infof("Recovered linked-clone info: source replica %s, entrypoint %s",
+		r.cloneSourceReplicaName, r.cloneEntrypointLvolName)
+}
+
 
 func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
 	defer func() {
