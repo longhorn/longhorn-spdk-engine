@@ -330,6 +330,17 @@ func GetSourceReplicaNameFromCloneEntrypointLvolName(epLvolName string) string {
 	return epLvolName[:idx]
 }
 
+// GetCloneReplicaNameFromEntrypointChildLvol extracts the clone replica name
+// from a direct child of a clone entrypoint. The child may be the clone
+// replica head (name == replicaName) or a snapshot taken after cloning
+// (name == replicaName-snap-xxx).
+func GetCloneReplicaNameFromEntrypointChildLvol(childLvolName string) string {
+	if idx := strings.Index(childLvolName, "-snap-"); idx > 0 {
+		return childLvolName[:idx]
+	}
+	return childLvolName
+}
+
 func GetNvmfEndpoint(nqn, ip string, port int32) string {
 	return fmt.Sprintf("nvmf://%s:%d/%s", ip, port, nqn)
 }
