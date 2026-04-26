@@ -1627,6 +1627,22 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 		if len(e.SnapshotMap[snapshotName].Children) > 1 {
 			return "", fmt.Errorf("engine %s cannot delete snapshot %s since it contains multiple children %+v", e.Name, snapshotName, e.SnapshotMap[snapshotName].Children)
 		}
+		// Guard: if any replica has an active clone entrypoint for this snapshot, the snapshot
+		// is the base of a linked-clone volume and must not be deleted. We check this at the
+		// engine level (before dispatching to replicas) so that a healthy replica is never
+		// incorrectly marked ERR just because it refused a guarded deletion.
+		for replicaName, replicaClient := range replicaClients {
+			r, err := replicaClient.ReplicaGet(replicaName)
+			if err != nil {
+				e.log.WithError(err).Warnf("Engine cannot verify clone-entrypoint guard for replica %s during snapshot %s deletion pre-check; skipping", replicaName, snapshotName)
+				continue
+			}
+			epLvolName := GetCloneEntrypointLvolName(replicaName, snapshotName)
+			if _, hasEP := r.CloneEntrypointMap[epLvolName]; hasEP {
+				return "", fmt.Errorf("cannot delete snapshot %s: replica %s has an active linked-clone entrypoint %s; delete the linked-clone volume first",
+					snapshotName, replicaName, epLvolName)
+			}
+		}
 	}
 
 	for replicaName := range replicaClients {
