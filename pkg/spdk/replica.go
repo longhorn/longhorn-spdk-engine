@@ -254,6 +254,17 @@ func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 		res.BackingImageName = backingImageName
 	}
 
+	res.IsCloneReplica = r.isCloneReplica
+	res.CloneSourceReplicaName = r.cloneSourceReplicaName
+	res.CloneEntrypointLvolName = r.cloneEntrypointLvolName
+
+	if len(r.cloneEntrypointMap) > 0 {
+		res.CloneEntrypointMap = make(map[string]int32, len(r.cloneEntrypointMap))
+		for epName, epInfo := range r.cloneEntrypointMap {
+			res.CloneEntrypointMap[epName] = int32(len(epInfo.CloneReplicas))
+		}
+	}
+
 	return res
 }
 
