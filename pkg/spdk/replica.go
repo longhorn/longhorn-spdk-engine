@@ -432,13 +432,20 @@ func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
 	}
 
 	r.syncCloneEntrypoints(spdkClient, bdevLvolMap)
+	if err := r.syncCloneReplicaInfo(spdkClient, bdevLvolMap); err != nil {
+		return err
+	}
 
 	subsystemMap, err := GetNvmfSubsystemMap(spdkClient)
 	if err != nil {
 		return err
 	}
 
-	return r.validateAndUpdate(bdevLvolMap, subsystemMap)
+	if err := r.validateAndUpdate(bdevLvolMap, subsystemMap); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // construct build Replica with the SnapshotLvolMap and SnapshotChain from the bdev lvol list.
@@ -551,6 +558,139 @@ func (r *Replica) recoverCloneReplicaInfo() {
 		r.cloneSourceReplicaName, r.cloneEntrypointLvolName)
 }
 
+// syncCloneReplicaInfo verifies and fixes the linked-clone source information
+// for a clone replica during Sync(). It uses the chain root's actual parent
+// from the fresh bdevLvolMap (via BaseSnapshot).
+func (r *Replica) syncCloneReplicaInfo(spdkClient *spdkclient.Client, bdevLvolMap map[string]*spdktypes.BdevInfo) (err error) {
+	if !r.isCloneReplica {
+		return
+	}
+
+	defer func() {
+		if err != nil {
+			if r.State != types.InstanceStateError {
+				r.State = types.InstanceStateError
+				r.log.WithError(err).Error("Found error during syncCloneReplicaInfo")
+			}
+			r.ErrorMsg = err.Error()
+		} else {
+			if r.State != types.InstanceStateError {
+				r.ErrorMsg = ""
+			}
+		}
+	}()
+
+	if len(r.ActiveChain) < 2 || r.ActiveChain[1] == nil {
+		return fmt.Errorf("clone replica %s has unexpectedly short chain (length %d), cannot sync clone info", r.Name, len(r.ActiveChain))
+	}
+
+	if r.cloneSourceReplicaName == "" || r.cloneEntrypointLvolName == "" {
+		return fmt.Errorf("clone replica has empty clone source volume name %s or entrypoint %s record",
+			r.cloneSourceReplicaName, r.cloneEntrypointLvolName)
+	}
+
+	rootLvolName := r.ActiveChain[1].Name
+	rootBdev, ok := bdevLvolMap[rootLvolName]
+	if !ok {
+		return fmt.Errorf("clone replica chain root lvol %s not found in bdevLvolMap, cannot sync clone info", rootLvolName)
+	}
+
+	actualParent := rootBdev.DriverSpecific.Lvol.BaseSnapshot
+
+	// Case 1: Parent matches the expected entrypoint — everything is fine
+	if actualParent == r.cloneEntrypointLvolName {
+		return nil
+	}
+
+	// Case 2: Parent is the expected entrypoint's source snapshot directly.
+	// The entrypoint was removed but the chain root got reparented to the snapshot.
+	// Fix: recreate the entrypoint and reparent.
+	srcSnapshotName := GetSnapshotNameFromCloneEntrypointLvolName(r.cloneSourceReplicaName, r.cloneEntrypointLvolName)
+	expectedSrcSnapshotLvolName := GetReplicaSnapshotLvolName(r.cloneSourceReplicaName, srcSnapshotName)
+	if actualParent == expectedSrcSnapshotLvolName {
+		r.log.Warnf("Clone replica chain root parent %s points directly to source snapshot instead of entrypoint %s, attempting repair",
+			actualParent, r.cloneEntrypointLvolName)
+
+		if err := r.repairCloneEntrypoint(spdkClient, actualParent, srcSnapshotName); err != nil {
+			return errors.Wrapf(err, "failed to repair clone entrypoint for this clone replica when it directly use the source snapshot without the entrypoint as isolation")
+		}
+		return
+	}
+
+	// Case 3: Parent is a snapshot of the same source replica (different snapshot than expected).
+	// Or parent is another replica's entrypoint/snapshot. Both are corruption.
+	return fmt.Errorf("clone replica chain root parent %s does not match expected entrypoint %s or source snapshot %s, marking as error",
+		actualParent, r.cloneEntrypointLvolName, expectedSrcSnapshotLvolName)
+}
+
+// repairCloneEntrypoint recreates the missing entrypoint by asking the source
+// replica (via gRPC) to ensure the entrypoint exists, then reparents the clone
+// replica's chain root to the entrypoint.
+func (r *Replica) repairCloneEntrypoint(spdkClient *spdkclient.Client, srcSnapshotLvolName, srcSnapshotName string) error {
+	if spdkClient == nil {
+		return fmt.Errorf("cannot repair clone entrypoint without SPDK client")
+	}
+
+	if len(r.ActiveChain) < 2 || r.ActiveChain[1] == nil {
+		return fmt.Errorf("cannot repair entrypoint: ActiveChain too short or nil root (len=%d)", len(r.ActiveChain))
+	}
+
+	epLvolName := r.cloneEntrypointLvolName
+	epAlias := spdktypes.GetLvolAlias(r.LvsName, epLvolName)
+
+	// Check if the entrypoint already exists (maybe it was recreated by the source replica)
+	epBdev, err := spdkClient.BdevLvolGetByName(epAlias, 0)
+	if err != nil {
+		// Entrypoint doesn't exist — ask the source replica to create it via gRPC
+		// so it registers the entrypoint in its cloneEntrypointMap.
+		// Source and clone replicas are co-located on the same node.
+		srcReplicaAddress := net.JoinHostPort(r.IP, strconv.Itoa(types.SPDKServicePort))
+		srcReplicaServiceCli, err := GetServiceClient(srcReplicaAddress)
+		if err != nil {
+			return errors.Wrapf(err, "failed to get service client for source replica %s at %s", r.cloneSourceReplicaName, srcReplicaAddress)
+		}
+		defer func() {
+			if errClose := srcReplicaServiceCli.Close(); errClose != nil {
+				r.log.WithError(errClose).Warnf("Failed to close service client for source replica %s", r.cloneSourceReplicaName)
+			}
+		}()
+
+		if err := srcReplicaServiceCli.ReplicaSnapshotCloneSrcStart(
+			r.cloneSourceReplicaName, srcSnapshotName, r.Name, "",
+			spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE,
+		); err != nil {
+			return errors.Wrapf(err, "failed to ask source replica %s to recreate entrypoint for snapshot %s", r.cloneSourceReplicaName, srcSnapshotName)
+		}
+
+		// Clean up the source replica's snapshotCloningSrcCache entry.
+		// Failure is non-fatal; the next SrcStart call will clean it up.
+		if err := srcReplicaServiceCli.ReplicaSnapshotCloneSrcFinish(r.cloneSourceReplicaName, r.Name); err != nil {
+			r.log.WithError(err).Warnf("Failed to finish clone src for source replica %s after entrypoint repair, proceeding anyway", r.cloneSourceReplicaName)
+		}
+
+		epBdev, err = spdkClient.BdevLvolGetByName(epAlias, 0)
+		if err != nil {
+			return errors.Wrapf(err, "failed to look up newly created entrypoint %s", epLvolName)
+		}
+	}
+
+	// Reparent the clone replica's chain root to the entrypoint using UUID
+	if r.ActiveChain[1].Alias == "" {
+		return fmt.Errorf("chain root lvol %s has empty alias, cannot reparent", r.ActiveChain[1].Name)
+	}
+	rootLvolAlias := r.ActiveChain[1].Alias
+	set, err := spdkClient.BdevLvolSetParent(rootLvolAlias, epBdev.UUID)
+	if err != nil {
+		return errors.Wrapf(err, "failed to set entrypoint %s as parent of %s", epLvolName, r.ActiveChain[1].Name)
+	}
+	if !set {
+		return fmt.Errorf("failed to set entrypoint %s as parent of %s", epLvolName, r.ActiveChain[1].Name)
+	}
+
+	r.ActiveChain[1].Parent = epLvolName
+	r.log.Infof("Repaired clone entrypoint: reparented %s to entrypoint %s", r.ActiveChain[1].Name, epLvolName)
+	return nil
+}
 
 func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, subsystemMap map[string]*spdktypes.NvmfSubsystem) (err error) {
 	defer func() {
@@ -2543,49 +2683,13 @@ func (r *Replica) snapshotLinkedCloneSrcStart(spdkClient *spdkclient.Client, sna
 	return nil
 }
 
-// createCloneEntrypoint creates an entrypoint lvol (empty snapshot) from the given snapshot.
-// Steps: clone snapshot → snapshot the clone → delete the writable leftover.
+// createCloneEntrypoint creates an entrypoint lvol (empty snapshot) from the given snapshot
+// and registers it in the source replica's cloneEntrypointMap.
 func (r *Replica) createCloneEntrypoint(spdkClient *spdkclient.Client, snapshotName string, snapLvol *Lvol) error {
 	epLvolName := GetCloneEntrypointLvolName(r.Name, snapshotName)
-	tmpHeadName := GetCloneEntrypointTmpHeadLvolName(r.Name, snapshotName)
-	tmpHeadAlias := spdktypes.GetLvolAlias(r.LvsName, tmpHeadName)
 
-	// Clean up any leftover tmp head from a previous failed attempt
-	if _, err := spdkClient.BdevLvolDelete(tmpHeadAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return errors.Wrapf(err, "failed to clean up leftover tmp head %s", tmpHeadName)
-	}
-
-	// Step 1: Clone the snapshot to get a writable tmp head
-	tmpHeadUUID, err := spdkClient.BdevLvolClone(snapLvol.UUID, tmpHeadName)
-	if err != nil {
-		return errors.Wrapf(err, "failed to clone snapshot %s for entrypoint creation", snapshotName)
-	}
-
-	// Step 2: Snapshot the tmp head to create the read-only entrypoint.
-	// After this: srcSnapshot → entrypoint(read-only) → tmpHead(writable, child of entrypoint)
-	epUUID, err := spdkClient.BdevLvolSnapshot(tmpHeadUUID, epLvolName, []spdkclient.Xattr{})
-	if err != nil {
-		// Best-effort cleanup of the tmp head
-		if _, delErr := spdkClient.BdevLvolDelete(tmpHeadAlias); delErr != nil {
-			r.log.WithError(delErr).Errorf("Failed to clean up tmp head %s after entrypoint snapshot failure", tmpHeadName)
-		}
-		return errors.Wrapf(err, "failed to snapshot tmp head for entrypoint %s", epLvolName)
-	}
-
-	// Step 3: Delete the writable leftover (the tmp head that is now a child of entrypoint)
-	// After BdevLvolSnapshot, the original lvol (tmpHead) is now a writable clone of the new snapshot.
-	// We need to re-fetch it since its UUID may have changed.
-	tmpHeadBdev, err := spdkClient.BdevLvolGetByName(tmpHeadAlias, 0)
-	if err != nil {
-		r.log.WithError(err).Warnf("Failed to fetch tmp head %s for cleanup, trying alias-based delete", tmpHeadName)
-	}
-	tmpHeadDeleteTarget := tmpHeadAlias
-	if err == nil {
-		tmpHeadDeleteTarget = tmpHeadBdev.UUID
-	}
-	if _, err := spdkClient.BdevLvolDelete(tmpHeadDeleteTarget); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		// Non-fatal: orphaned tmp-heads are cleaned up by syncCloneEntrypoints
-		log.WithError(err).Errorf("Failed to delete tmp head %s after entrypoint creation", tmpHeadName)
+	if err := createCloneEntrypointLvol(spdkClient, r.log, r.Name, r.LvsName, snapshotName, snapLvol.UUID); err != nil {
+		return err
 	}
 
 	r.cloneEntrypointMap[epLvolName] = &CloneEntrypointInfo{
@@ -2594,8 +2698,51 @@ func (r *Replica) createCloneEntrypoint(spdkClient *spdkclient.Client, snapshotN
 		SnapshotLvolName: GetReplicaSnapshotLvolName(r.Name, snapshotName),
 		CloneReplicas:    map[string]bool{},
 	}
+	return nil
+}
 
-	r.log.Infof("Created clone entrypoint %s (UUID %s) from snapshot %s", epLvolName, epUUID, snapshotName)
+// createCloneEntrypointLvol creates a clone entrypoint lvol via SPDK:
+// clone snapshot -> snapshot the clone -> delete the writable leftover.
+func createCloneEntrypointLvol(spdkClient *spdkclient.Client, log *safelog.SafeLogger, srcReplicaName, lvsName, snapshotName, snapUUID string) error {
+	epLvolName := GetCloneEntrypointLvolName(srcReplicaName, snapshotName)
+	tmpHeadName := GetCloneEntrypointTmpHeadLvolName(srcReplicaName, snapshotName)
+	tmpHeadAlias := spdktypes.GetLvolAlias(lvsName, tmpHeadName)
+
+	// Clean up any leftover tmp head from a previous failed attempt
+	if _, err := spdkClient.BdevLvolDelete(tmpHeadAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return errors.Wrapf(err, "failed to clean up leftover tmp head %s", tmpHeadName)
+	}
+
+	// Step 1: Clone the snapshot to get a writable tmp head
+	tmpHeadUUID, err := spdkClient.BdevLvolClone(snapUUID, tmpHeadName)
+	if err != nil {
+		return errors.Wrapf(err, "failed to clone snapshot %s for entrypoint creation", snapshotName)
+	}
+
+	// Step 2: Snapshot the tmp head to create the read-only entrypoint.
+	// After this: srcSnapshot → entrypoint(read-only) → tmpHead(writable, child of entrypoint)
+	epUUID, err := spdkClient.BdevLvolSnapshot(tmpHeadUUID, epLvolName, []spdkclient.Xattr{})
+	if err != nil {
+		if _, delErr := spdkClient.BdevLvolDelete(tmpHeadAlias); delErr != nil {
+			log.WithError(delErr).Errorf("Failed to clean up tmp head %s after entrypoint snapshot failure", tmpHeadName)
+		}
+		return errors.Wrapf(err, "failed to snapshot tmp head for entrypoint %s", epLvolName)
+	}
+
+	// Step 3: Delete the writable leftover (the tmp head that is now a child of entrypoint)
+	tmpHeadBdev, err := spdkClient.BdevLvolGetByName(tmpHeadAlias, 0)
+	if err != nil {
+		log.WithError(err).Warnf("Failed to fetch tmp head %s for cleanup, trying alias-based delete", tmpHeadName)
+	}
+	tmpHeadDeleteTarget := tmpHeadAlias
+	if err == nil {
+		tmpHeadDeleteTarget = tmpHeadBdev.UUID
+	}
+	if _, err := spdkClient.BdevLvolDelete(tmpHeadDeleteTarget); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		log.WithError(err).Warnf("Failed to delete tmp head %s after entrypoint creation, will be cleaned up by syncCloneEntrypoints", tmpHeadName)
+	}
+
+	log.Infof("Created clone entrypoint %s (UUID %s) from snapshot %s", epLvolName, epUUID, snapshotName)
 	return nil
 }
 
