@@ -1239,6 +1239,11 @@ func (r *Replica) cleanupLvolTrees(spdkClient *spdkclient.Client) error {
 	}
 
 	for lvolName, bdevLvol := range bdevLvolMap {
+		// Skip entrypoint lvols (normally already deleted, but guard against silent failures).
+		if IsCloneEntrypointLvol(lvolName) || IsCloneEntrypointTmpHeadLvol(lvolName) {
+			continue
+		}
+
 		if types.IsBackingImageSnapLvolName(lvolName) {
 			for _, childLvolName := range bdevLvol.DriverSpecific.Lvol.Clones {
 				if !IsReplicaLvol(r.Name, childLvolName) {
@@ -1317,6 +1322,16 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		return fmt.Errorf("waiting for volume restoration to stop")
 	}
 
+	// Forbid deletion while clone replicas still reference entrypoints.
+	if cleanupRequired {
+		for epName, epInfo := range r.cloneEntrypointMap {
+			if len(epInfo.CloneReplicas) > 0 {
+				return fmt.Errorf("cannot delete replica %s with cleanup: clone entrypoint %s still has %d active clone replicas",
+					r.Name, epName, len(epInfo.CloneReplicas))
+			}
+		}
+	}
+
 	if err := r.stopAllSnapshotHashing(spdkClient); err != nil {
 		return errors.Wrapf(err, "failed to stop all snapshot hashing before replica deletion with cleanupRequired %v", cleanupRequired)
 	}
@@ -1372,6 +1387,15 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 
 	if !cleanupRequired {
 		return nil
+	}
+
+	// Clean up childless entrypoint lvols before deleting snapshots they depend on
+	for epName := range r.cloneEntrypointMap {
+		epAlias := spdktypes.GetLvolAlias(r.LvsName, epName)
+		if _, err := spdkClient.BdevLvolDelete(epAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return errors.Wrapf(err, "failed to delete clone entrypoint %s during replica %s deletion", epName, r.Name)
+		}
+		delete(r.cloneEntrypointMap, epName)
 	}
 
 	// Use r.Alias here since we don't know if an errored replicas still contains the head lvol
@@ -1644,6 +1668,12 @@ func (r *Replica) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName str
 	}
 	if len(snapSvcLvol.Children) > 1 {
 		return nil, fmt.Errorf("cannot delete snapshot %s(%s) since it has %d children", snapshotName, snapLvolName, len(snapSvcLvol.Children))
+	}
+
+	epLvolName := GetCloneEntrypointLvolName(r.Name, snapshotName)
+	if _, exists := r.cloneEntrypointMap[epLvolName]; exists {
+		return nil, fmt.Errorf("cannot delete snapshot %s(%s) since clone entrypoint %s still exists",
+			snapshotName, snapLvolName, epLvolName)
 	}
 
 	defer func() {
