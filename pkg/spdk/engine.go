@@ -1431,9 +1431,10 @@ func getRebuildingSnapshotList(srcReplicaServiceCli *client.SPDKClient, srcRepli
 	}
 	ancestorSnapshotName, latestSnapshotName := "", ""
 	for snapshotName, snapApiLvol := range rpcSrcReplica.Snapshots {
-		// If the parent is empty, it's the ancestor snapshot
-		// Notice that the ancestor snapshot parent is still empty even if there is a backing image
-		if snapApiLvol.Parent == "" || types.IsBackingImageSnapLvolName(snapApiLvol.Parent) {
+		// The root/ancestor snapshot is the one whose parent is not in this replica's snapshot map.
+		// Parent is empty for normal replicas; for replicas with a backing image or linked-clone
+		// entrypoint, the parent name is not a valid snapshot key in rpcSrcReplica.Snapshots.
+		if snapApiLvol.Parent == "" || rpcSrcReplica.Snapshots[snapApiLvol.Parent] == nil {
 			ancestorSnapshotName = snapshotName
 		}
 		if snapApiLvol.Children[types.VolumeHead] {
@@ -3416,7 +3417,7 @@ func (e *Engine) resolveReplicaAncestor(replicaName string, view *BackendView,
 			return nil, false, false, false
 		}
 		for _, snapApiLvol := range view.Snapshots {
-			if snapApiLvol.Parent == "" {
+			if snapApiLvol.Parent == "" || view.Snapshots[snapApiLvol.Parent] == nil {
 				return snapApiLvol, false, true, true
 			}
 		}
