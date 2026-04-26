@@ -53,8 +53,9 @@ type Replica struct {
 	// Head should be the only writable lvol in the regular Replica lvol chain/map.
 	// And it is the last entry of ActiveChain if it is not nil.
 	Head *Lvol
-	// ActiveChain stores the backing image info in index 0.
-	// If a replica does not contain a backing image, the first entry will be nil.
+	// ActiveChain stores the chain base at index 0: a backing image lvol for
+	// replicas with a backing image, a clone entrypoint lvol for linked-clone
+	// replicas, or nil if neither applies.
 	// The last entry of the chain should be the head lvol if it exists.
 	ActiveChain []*Lvol
 	// SnapshotLvolMap map[<snapshot lvol name>]. <snapshot lvol name> consists of `<replica name>-snap-<snapshot name>`
@@ -109,10 +110,6 @@ type Replica struct {
 	cloneEntrypointMap map[string]*CloneEntrypointInfo
 
 	// Clone replica: linked-clone source information
-	// TODO: consider placing the entrypoint lvol at ActiveChain[0] for clone replicas,
-	// since it serves the same role as a backing image (read-only base of the chain).
-	// This would unify chain handling but requires updating BackingImage assignment,
-	// proto serialization, and rebuild paths.
 	isCloneReplica          bool
 	cloneSourceReplicaName  string
 	cloneEntrypointLvolName string
@@ -352,8 +349,9 @@ func (r *Replica) replicaLvolFilter(bdev *spdktypes.BdevInfo) bool {
 		return false
 	}
 	lvolName := spdktypes.GetLvolNameFromAlias(bdev.Aliases[0])
-	// it is okay to have backing image snapshot in the results, because we exclude it when finding root or construct the snapshot map
-	return IsReplicaLvol(r.Name, lvolName) || types.IsBackingImageSnapLvolName(lvolName)
+	// it is okay to have backing image snapshots or clone entrypoint lvols in the results,
+	// because we exclude them when finding root or constructing the snapshot map
+	return IsReplicaLvol(r.Name, lvolName) || types.IsBackingImageSnapLvolName(lvolName) || IsCloneEntrypointLvol(lvolName)
 }
 
 func (r *Replica) stopSnapshotHash(spdkClient *spdkclient.Client, parentLvol *Lvol) error {
@@ -485,7 +483,11 @@ func (r *Replica) construct(bdevLvolMap map[string]*spdktypes.BdevInfo) (err err
 	r.Head = newChain[len(newChain)-1]
 	r.ActiveChain = newChain
 	r.SnapshotLvolMap = newSnapshotLvolMap
-	r.BackingImage = newChain[0]
+	if newChain[0] != nil && types.IsBackingImageSnapLvolName(newChain[0].Name) {
+		r.BackingImage = newChain[0]
+	} else {
+		r.BackingImage = nil
+	}
 	r.reconstructRequired = false
 
 	r.recoverCloneEntrypointInfo(bdevLvolMap)
@@ -528,22 +530,18 @@ func (r *Replica) recoverCloneEntrypointInfo(bdevLvolMap map[string]*spdktypes.B
 }
 
 // recoverCloneReplicaInfo detects if this replica is a linked clone by checking
-// whether the root of its chain has a clone entrypoint as parent.
+// whether ActiveChain[0] is a clone entrypoint lvol.
 func (r *Replica) recoverCloneReplicaInfo() {
 	r.isCloneReplica = false
 	r.cloneSourceReplicaName = ""
 	r.cloneEntrypointLvolName = ""
 
-	if len(r.ActiveChain) < 2 || r.ActiveChain[1] == nil {
-		return
-	}
-	rootLvol := r.ActiveChain[1]
-	if rootLvol.Parent == "" || !IsCloneEntrypointLvol(rootLvol.Parent) {
+	if len(r.ActiveChain) == 0 || r.ActiveChain[0] == nil || !IsCloneEntrypointLvol(r.ActiveChain[0].Name) {
 		return
 	}
 	r.isCloneReplica = true
-	r.cloneEntrypointLvolName = rootLvol.Parent
-	r.cloneSourceReplicaName = GetSourceReplicaNameFromCloneEntrypointLvolName(rootLvol.Parent)
+	r.cloneEntrypointLvolName = r.ActiveChain[0].Name
+	r.cloneSourceReplicaName = GetSourceReplicaNameFromCloneEntrypointLvolName(r.ActiveChain[0].Name)
 	r.log.Infof("Recovered linked-clone info: source replica %s, entrypoint %s",
 		r.cloneSourceReplicaName, r.cloneEntrypointLvolName)
 }
@@ -559,6 +557,11 @@ func (r *Replica) syncCloneReplicaInfo(spdkClient *spdkclient.Client, bdevLvolMa
 	if len(r.ActiveChain) < 2 || r.ActiveChain[1] == nil {
 		r.log.Warnf("Clone replica %s has unexpectedly short chain (length %d), cannot sync clone info", r.Name, len(r.ActiveChain))
 		return
+	}
+
+	if r.ActiveChain[0] != nil && r.ActiveChain[0].Name != r.cloneEntrypointLvolName {
+		r.log.Warnf("Clone replica ActiveChain[0] name %s does not match expected entrypoint %s",
+			r.ActiveChain[0].Name, r.cloneEntrypointLvolName)
 	}
 
 	rootLvolName := r.ActiveChain[1].Name
@@ -665,6 +668,12 @@ func (r *Replica) repairCloneEntrypoint(spdkClient *spdkclient.Client, srcSnapsh
 	}
 
 	r.ActiveChain[1].Parent = epLvolName
+
+	// Update ActiveChain[0] to reflect the repaired entrypoint.
+	epSvcLvol := BdevLvolInfoToServiceLvol(&epBdev)
+	epSvcLvol.Children[r.ActiveChain[1].Name] = r.ActiveChain[1]
+	r.ActiveChain[0] = epSvcLvol
+
 	r.log.Infof("Repaired clone entrypoint: reparented %s to entrypoint %s", r.ActiveChain[1].Name, epLvolName)
 	return nil
 }
@@ -731,18 +740,18 @@ func (r *Replica) validateAndUpdate(bdevLvolMap map[string]*spdktypes.BdevInfo, 
 
 	for idx, svcLvol := range r.ActiveChain {
 		newSvcLvol := newChain[idx]
-		// Handle nil backing image separately
+		// Handle chain base (backing image or clone entrypoint) separately
 		if idx == 0 {
 			if svcLvol == nil && newSvcLvol == nil {
 				continue
 			}
 			if svcLvol != nil && newSvcLvol == nil {
-				return fmt.Errorf("replica current backing image is %v while the latest chain contains a nil backing image", svcLvol.Name)
+				return fmt.Errorf("replica current chain base is %v while the latest chain contains a nil chain base", svcLvol.Name)
 			}
 			if svcLvol == nil && newSvcLvol != nil {
-				return fmt.Errorf("replica current backing image is nil while the latest chain contains backing image %v", newSvcLvol.Name)
+				return fmt.Errorf("replica current chain base is nil while the latest chain contains chain base %v", newSvcLvol.Name)
 			}
-			// no need to compare the backing image
+			// no need to compare the chain base
 			continue
 		}
 
@@ -953,9 +962,9 @@ func (r *Replica) linkHeadWithParent() error {
 		return fmt.Errorf("invalid active chain length %d when updating head cache", len(r.ActiveChain))
 	}
 
-	if parentIndex == 0 && r.BackingImage != nil {
-		r.BackingImage.Lock()
-		defer r.BackingImage.Unlock()
+	if parentIndex == 0 && r.ActiveChain[0] != nil {
+		r.ActiveChain[0].Lock()
+		defer r.ActiveChain[0].Unlock()
 	}
 
 	parent := r.ActiveChain[parentIndex]
@@ -1143,7 +1152,7 @@ func getRootLvolName(replicaName string, bdevLvolMap map[string]*spdktypes.BdevI
 		if lvolName != replicaName && !IsReplicaSnapshotLvol(replicaName, lvolName) {
 			continue
 		}
-		// Consider that a backing image can be the parent of the replica root
+		// Consider that a backing image or clone entrypoint can be the parent of the replica root
 		if bdevLvol.DriverSpecific.Lvol.BaseSnapshot != "" && IsReplicaSnapshotLvol(replicaName, bdevLvol.DriverSpecific.Lvol.BaseSnapshot) {
 			continue
 		}
@@ -1226,9 +1235,9 @@ func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap
 		newChain = append(newChain, curSvcLvol)
 	}
 
-	// Check if the root snap/head lvol has a parent. If YES, it means that this replica contains a backing image
-	// or this replica is a linked clone (parent is a clone entrypoint, which is handled externally).
-	var biSvcLvol *Lvol
+	// Check if the root snap/head lvol has a parent. If YES, the parent is the chain base:
+	// a backing image for regular replicas, or a clone entrypoint for linked-clone replicas.
+	var baseSvcLvol *Lvol
 	rootLvol := newChain[len(newChain)-1]
 	if rootLvol.Parent != "" && types.IsBackingImageSnapLvolName(rootLvol.Parent) {
 		// Here we won't maintain the complete children map for the backing image Lvol since it may contain root lvols of other replicas
@@ -1236,10 +1245,17 @@ func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap
 		if biBdevLvol == nil {
 			return nil, fmt.Errorf("cannot find backing image lvol %v for the current bdev lvol map for replica %s", rootLvol.Parent, replicaName)
 		}
-		biSvcLvol = BdevLvolInfoToServiceLvol(biBdevLvol)
-		biSvcLvol.Children[rootLvol.Name] = rootLvol
+		baseSvcLvol = BdevLvolInfoToServiceLvol(biBdevLvol)
+		baseSvcLvol.Children[rootLvol.Name] = rootLvol
+	} else if rootLvol.Parent != "" && IsCloneEntrypointLvol(rootLvol.Parent) {
+		epBdevLvol := bdevLvolMap[rootLvol.Parent]
+		if epBdevLvol != nil {
+			baseSvcLvol = BdevLvolInfoToServiceLvol(epBdevLvol)
+			baseSvcLvol.Children[rootLvol.Name] = rootLvol
+		}
+		// If epBdevLvol is nil, the entrypoint was deleted; repair happens in syncCloneReplicaInfo.
 	}
-	newChain = append(newChain, biSvcLvol)
+	newChain = append(newChain, baseSvcLvol)
 
 	// Need to flip r.ActiveSnapshotChain. By convention the oldest one (backing image) should be at index 0
 	for head, tail := 0, len(newChain)-1; head < tail; head, tail = head+1, tail-1 {
@@ -1874,7 +1890,7 @@ func (r *Replica) removeLvolFromSnapshotLvolMapWithoutLock(snapsLvolName string)
 func (r *Replica) removeLvolFromActiveChainWithoutLock(snapLvolName string) int {
 	pos := -1
 	for idx, lvol := range r.ActiveChain {
-		// Cannot remove the backing image from the chain
+		// Cannot remove the chain base (backing image or clone entrypoint) from the chain
 		if idx == 0 {
 			continue
 		}
@@ -2480,6 +2496,19 @@ func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMod
 			return fmt.Errorf("failed to set entrypoint %v as the parent of %v", epAlias, r.Head.Alias)
 		}
 		r.log.Infof("Linked-clone finish: set entrypoint %v as parent of head %v for replica %v", epAlias, r.Head.Alias, r.Name)
+
+		// Update the in-memory chain to reflect the entrypoint as the chain base.
+		// Without this, validateAndUpdate will fail because r.ActiveChain[0] is nil
+		// while SPDK already shows the entrypoint as the chain base.
+		epBdevLvol, err := spdkClient.BdevLvolGetByName(epAlias, 0)
+		if err != nil {
+			return errors.Wrapf(err, "failed to get entrypoint bdev lvol %v after linked-clone finish for replica %v", epAlias, r.Name)
+		}
+		epSvcLvol := BdevLvolInfoToServiceLvol(&epBdevLvol)
+		epSvcLvol.Children = map[string]*Lvol{r.Head.Name: r.Head}
+		r.ActiveChain[0] = epSvcLvol
+		r.Head.Parent = r.cloneEntrypointLvolName
+
 		r.isSnapshotCloning = false
 		return nil
 	}
@@ -3808,8 +3837,14 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 		return "", false, fmt.Errorf("cannot find snapshot %s in the rebuilding snapshot list for replica %s shallow copy prepare", snapshotName, r.Name)
 	}
 
-	// For the ancestor snapshot of the rebuilding snapshot list, its parent will not record the backing image info
-	if srcSnapSvcLvol.Parent == "" {
+	// For the ancestor snapshot of the rebuilding snapshot list, its parent will not record the backing image info.
+	// The parent is also empty when the SRC replica is a linked-clone replica: the ancestor snapshot's parent
+	// is the clone entrypoint lvol, which does not exist on DST (a fresh regular replica). In that case we
+	// treat DST's parent as empty (or as the backing image, if one is present).
+	// TODO: for linked-clone SRC, DST rebuild should set up its own clone entrypoint so that it becomes a
+	// proper linked-clone replica; currently we create a flat base and accept potential data-completeness
+	// issues for volumes with pre-existing data in the source snapshot.
+	if srcSnapSvcLvol.Parent == "" || IsCloneEntrypointLvol(srcSnapSvcLvol.Parent) {
 		if r.BackingImage != nil {
 			dstSnapshotParentLvolName = r.BackingImage.Name
 		}
@@ -4244,9 +4279,12 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 	if srcSnapSvcLvol == nil {
 		return fmt.Errorf("cannot find snapshot %s in the rebuilding snapshot list during dst replica %s rebuilding snapshot creation", snapshotName, r.Name)
 	}
-	// Guarantee the snapshot lvol has the correct parent after rebuilding
+	// Guarantee the snapshot lvol has the correct parent after rebuilding.
+	// When the SRC replica is a linked-clone replica, the ancestor snapshot's parent is the clone
+	// entrypoint lvol, which does not exist on DST (a fresh regular replica). Treat it as empty.
+	// See also the matching comment in rebuildingDstShallowCopyPrepare.
 	dstSnapParentLvolName := ""
-	if srcSnapSvcLvol.Parent == "" {
+	if srcSnapSvcLvol.Parent == "" || IsCloneEntrypointLvol(srcSnapSvcLvol.Parent) {
 		if r.BackingImage != nil {
 			dstSnapParentLvolName = r.BackingImage.Name
 		}
