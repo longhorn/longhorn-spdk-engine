@@ -423,6 +423,8 @@ func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
 		return r.construct(bdevLvolMap)
 	}
 
+	r.syncCloneEntrypoints(spdkClient, bdevLvolMap)
+
 	subsystemMap, err := GetNvmfSubsystemMap(spdkClient)
 	if err != nil {
 		return err
@@ -2567,6 +2569,90 @@ func (r *Replica) createCloneEntrypoint(spdkClient *spdkclient.Client, snapshotN
 
 	r.log.Infof("Created clone entrypoint %s (UUID %s) from snapshot %s", epLvolName, epUUID, snapshotName)
 	return nil
+}
+
+// syncCloneEntrypoints refreshes cloneEntrypointMap from current SPDK state
+// and removes entrypoints that no longer have any clone replicas pointing to them.
+func (r *Replica) syncCloneEntrypoints(spdkClient *spdkclient.Client, bdevLvolMap map[string]*spdktypes.BdevInfo) {
+	// Clean up orphaned tmp-head lvols first so they don't block entrypoint deletion
+	epNamePrefix := GetCloneEntrypointLvolNamePrefix(r.Name)
+	for lvolName := range bdevLvolMap {
+		if !IsCloneEntrypointTmpHeadLvol(lvolName) {
+			continue
+		}
+		// Ensure this tmp-head belongs to this replica's entrypoint namespace
+		if !strings.HasPrefix(lvolName, epNamePrefix) {
+			continue
+		}
+		r.log.Infof("Cleaning up orphaned clone entrypoint tmp head %s", lvolName)
+		tmpAlias := spdktypes.GetLvolAlias(r.LvsName, lvolName)
+		if _, err := spdkClient.BdevLvolDelete(tmpAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			r.log.WithError(err).Errorf("Failed to delete orphaned tmp head %s", lvolName)
+		}
+	}
+
+	for epLvolName, epInfo := range r.cloneEntrypointMap {
+		bdevLvol, exists := bdevLvolMap[epLvolName]
+		if !exists {
+			r.log.Infof("Clone entrypoint %s no longer exists in SPDK, removing from map", epLvolName)
+			delete(r.cloneEntrypointMap, epLvolName)
+			continue
+		}
+
+		// Refresh clone replica list from SPDK
+		epInfo.CloneReplicas = map[string]bool{}
+		for _, childName := range bdevLvol.DriverSpecific.Lvol.Clones {
+			if IsCloneEntrypointTmpHeadLvol(childName) {
+				continue
+			}
+			cloneReplicaName := GetCloneReplicaNameFromEntrypointChildLvol(childName)
+			epInfo.CloneReplicas[cloneReplicaName] = true
+		}
+
+		// Auto-cleanup: no clone replicas left
+		if len(epInfo.CloneReplicas) == 0 {
+			r.log.Infof("Clone entrypoint %s has no remaining clone replicas, cleaning up", epLvolName)
+			epAlias := spdktypes.GetLvolAlias(r.LvsName, epLvolName)
+			if _, err := spdkClient.BdevLvolDelete(epAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+				r.log.WithError(err).Errorf("Failed to delete unused clone entrypoint %s", epLvolName)
+				continue
+			}
+			delete(r.cloneEntrypointMap, epLvolName)
+		}
+	}
+
+	// Discover new entrypoints that may have appeared (e.g., from a concurrent operation)
+	for lvolName, bdevLvol := range bdevLvolMap {
+		if !IsCloneEntrypointOfReplica(r.Name, lvolName) {
+			continue
+		}
+		if _, exists := r.cloneEntrypointMap[lvolName]; exists {
+			continue
+		}
+		snapshotName := GetSnapshotNameFromCloneEntrypointLvolName(r.Name, lvolName)
+		epInfo := &CloneEntrypointInfo{
+			LvolName:         lvolName,
+			SnapshotName:     snapshotName,
+			SnapshotLvolName: GetReplicaSnapshotLvolName(r.Name, snapshotName),
+			CloneReplicas:    map[string]bool{},
+		}
+		for _, childName := range bdevLvol.DriverSpecific.Lvol.Clones {
+			if IsCloneEntrypointTmpHeadLvol(childName) {
+				continue
+			}
+			cloneReplicaName := GetCloneReplicaNameFromEntrypointChildLvol(childName)
+			epInfo.CloneReplicas[cloneReplicaName] = true
+		}
+		if len(epInfo.CloneReplicas) == 0 {
+			epAlias := spdktypes.GetLvolAlias(r.LvsName, lvolName)
+			if _, err := spdkClient.BdevLvolDelete(epAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+				r.log.WithError(err).Errorf("Failed to delete orphaned clone entrypoint %s", lvolName)
+			}
+			continue
+		}
+		r.cloneEntrypointMap[lvolName] = epInfo
+		r.log.Infof("Discovered new clone entrypoint %s with %d clone replicas", lvolName, len(epInfo.CloneReplicas))
+	}
 }
 
 // SnapshotCloneSrcStart asks the src replica to start snapshot cloning
