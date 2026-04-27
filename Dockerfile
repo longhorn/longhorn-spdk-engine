@@ -27,10 +27,7 @@ RUN for i in {1..10}; do \
 
 RUN zypper -n ref && \
     zypper update -y
-
-# REMOVE ME: CI workaround for systemd-presets-branding-SLE-15.1-160099.8.1
-RUN zypper -n install systemd-presets-branding-SLE_transactional && \
-    zypper -n install --no-recommends cmake curl wget gcc13 unzip tar xsltproc docbook-xsl-stylesheets python3 python3-pip fuse3-devel \
+RUN zypper -n install cmake curl wget gcc13 unzip tar xsltproc docbook-xsl-stylesheets python3 python3-pip fuse3-devel \
               e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps jq git && \
     rm -rf /var/cache/zypp/*
 
