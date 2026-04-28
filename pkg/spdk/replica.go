@@ -682,7 +682,8 @@ func (r *Replica) repairCloneEntrypoint(spdkClient *spdkclient.Client, srcSnapsh
 
 	// Update ActiveChain[0] to reflect the repaired entrypoint.
 	epSvcLvol := BdevLvolInfoToServiceLvol(&epBdev)
-	epSvcLvol.Children[r.ActiveChain[1].Name] = r.ActiveChain[1]
+	// Keep only this replica's root lvol in Children.
+	epSvcLvol.Children = map[string]*Lvol{r.ActiveChain[1].Name: r.ActiveChain[1]}
 	r.ActiveChain[0] = epSvcLvol
 
 	r.log.Infof("Repaired clone entrypoint: reparented %s to entrypoint %s", r.ActiveChain[1].Name, epLvolName)
@@ -1051,7 +1052,24 @@ func (r *Replica) prepareHead(spdkClient *spdkclient.Client, backingImage *Backi
 	}
 
 	if backingImage != nil {
-		r.ActiveChain[0] = backingImage.Snapshot
+		// Create a per-replica copy of the backing image Lvol to avoid
+		// cross-replica mutation of the shared Children map.
+		biSnap := backingImage.Snapshot
+		biSnap.RLock()
+		r.ActiveChain[0] = &Lvol{
+			Name:              biSnap.Name,
+			UUID:              biSnap.UUID,
+			Alias:             biSnap.Alias,
+			SpecSize:          biSnap.SpecSize,
+			ActualSize:        biSnap.ActualSize,
+			Parent:            biSnap.Parent,
+			Children:          map[string]*Lvol{},
+			CreationTime:      biSnap.CreationTime,
+			UserCreated:       biSnap.UserCreated,
+			SnapshotTimestamp: biSnap.SnapshotTimestamp,
+			SnapshotChecksum:  biSnap.SnapshotChecksum,
+		}
+		biSnap.RUnlock()
 		r.BackingImage = r.ActiveChain[0]
 		r.log.WithField("backingImage", backingImage.Name)
 	}
@@ -1257,12 +1275,14 @@ func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap
 			return nil, fmt.Errorf("cannot find backing image lvol %v for the current bdev lvol map for replica %s", rootLvol.Parent, replicaName)
 		}
 		baseSvcLvol = BdevLvolInfoToServiceLvol(biBdevLvol)
-		baseSvcLvol.Children[rootLvol.Name] = rootLvol
+		// Keep only this replica's root lvol in Children.
+		baseSvcLvol.Children = map[string]*Lvol{rootLvol.Name: rootLvol}
 	} else if rootLvol.Parent != "" && IsCloneEntrypointLvol(rootLvol.Parent) {
 		epBdevLvol := bdevLvolMap[rootLvol.Parent]
 		if epBdevLvol != nil {
 			baseSvcLvol = BdevLvolInfoToServiceLvol(epBdevLvol)
-			baseSvcLvol.Children[rootLvol.Name] = rootLvol
+			// Keep only this replica's root lvol in Children.
+			baseSvcLvol.Children = map[string]*Lvol{rootLvol.Name: rootLvol}
 		}
 		// If epBdevLvol is nil, the entrypoint was deleted; repair happens in syncCloneReplicaInfo.
 	}
@@ -1880,7 +1900,7 @@ func (r *Replica) removeLvolFromSnapshotLvolMapWithoutLock(snapsLvolName string)
 	if IsReplicaSnapshotLvol(r.Name, deletingSvcLvol.Parent) {
 		parentSvcLvol = r.SnapshotLvolMap[deletingSvcLvol.Parent]
 	} else {
-		// Parent is either backing image or nil
+		// Parent is chain base (backing image, clone entrypoint, or nil)
 		parentSvcLvol = r.ActiveChain[0]
 	}
 	if parentSvcLvol != nil {
