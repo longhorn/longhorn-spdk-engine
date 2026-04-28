@@ -5,6 +5,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 
 	safelog "github.com/longhorn/longhorn-spdk-engine/pkg/log"
@@ -485,4 +486,193 @@ func (s *TestSuite) TestServiceReplicaToProtoReplicaCloneMetadata(c *C) {
 	c.Assert(proto.CloneSourceReplicaName, Equals, "")
 	c.Assert(proto.CloneEntrypointLvolName, Equals, "")
 	c.Assert(proto.CloneEntrypointMap, IsNil)
+}
+
+// makeBdevLvol is a test helper that creates a minimal BdevInfo suitable for
+// constructActiveChainFromSnapshotLvolMap. The alias is set to lvsName/lvolName.
+func makeBdevLvol(lvsName, lvolName, baseSnapshot string, clones []string) *spdktypes.BdevInfo {
+	return &spdktypes.BdevInfo{
+		BdevInfoBasic: spdktypes.BdevInfoBasic{
+			Aliases:   []string{spdktypes.GetLvolAlias(lvsName, lvolName)},
+			BlockSize: 512,
+			NumBlocks: 2048,
+			UUID:      fmt.Sprintf("uuid-%s", lvolName),
+		},
+		DriverSpecific: &spdktypes.BdevDriverSpecific{
+			Lvol: &spdktypes.BdevDriverSpecificLvol{
+				BaseSnapshot: baseSnapshot,
+				Clones:       clones,
+				Xattrs:       map[string]string{},
+			},
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestConstructActiveChainFiltersChildren — Clone replica filter out other lvols for EntryPoint Children
+// ---------------------------------------------------------------------------
+
+func (s *TestSuite) TestConstructActiveChainFiltersChildren(c *C) {
+	lvsName := "test-disk"
+	srcReplicaName := "src-r-00000001"
+	snapshotName := "snap-1"
+	epLvolName := GetCloneEntrypointLvolName(srcReplicaName, snapshotName)
+
+	replicaA := "clone-a-r-00000001"
+	replicaB := "clone-b-r-00000001"
+	rootSnapA := GetReplicaSnapshotLvolName(replicaA, snapshotName)
+	rootSnapB := GetReplicaSnapshotLvolName(replicaB, snapshotName)
+
+	// The clone entrypoint has both replicas' root snapshot lvols as clones.
+	bdevLvolMap := map[string]*spdktypes.BdevInfo{
+		epLvolName: makeBdevLvol(lvsName, epLvolName, "", []string{rootSnapA, rootSnapB}),
+		replicaA:   makeBdevLvol(lvsName, replicaA, rootSnapA, nil),
+		replicaB:   makeBdevLvol(lvsName, replicaB, rootSnapB, nil),
+	}
+
+	// snapshotLvolMap: each replica has a root snapshot whose Parent is the clone entrypoint.
+	snapshotLvolMapA := map[string]*Lvol{
+		rootSnapA: {
+			Name:   rootSnapA,
+			Parent: epLvolName,
+			Children: map[string]*Lvol{
+				replicaA: {Name: replicaA, Parent: rootSnapA},
+			},
+		},
+	}
+	snapshotLvolMapB := map[string]*Lvol{
+		rootSnapB: {
+			Name:   rootSnapB,
+			Parent: epLvolName,
+			Children: map[string]*Lvol{
+				replicaB: {Name: replicaB, Parent: rootSnapB},
+			},
+		},
+	}
+
+	// --- replica A ---
+	chainA, err := constructActiveChainFromSnapshotLvolMap(replicaA, snapshotLvolMapA, bdevLvolMap)
+	c.Assert(err, IsNil)
+	// Chain: [0]=clone entrypoint base, [1]=root snap, [2]=head
+	c.Assert(len(chainA) >= 2, Equals, true)
+	// chainA[0] is the entrypoint base; its Children should contain only rootSnapA.
+	c.Assert(len(chainA[0].Children), Equals, 1)
+	_, hasRootA := chainA[0].Children[rootSnapA]
+	c.Assert(hasRootA, Equals, true)
+
+	// --- replica B ---
+	chainB, err := constructActiveChainFromSnapshotLvolMap(replicaB, snapshotLvolMapB, bdevLvolMap)
+	c.Assert(err, IsNil)
+	c.Assert(len(chainB) >= 2, Equals, true)
+	c.Assert(len(chainB[0].Children), Equals, 1)
+	_, hasRootB := chainB[0].Children[rootSnapB]
+	c.Assert(hasRootB, Equals, true)
+
+	// --- Isolation: mutating one chain base does not affect the other ---
+	chainA[0].Children["extra-child"] = &Lvol{Name: "extra-child"}
+	c.Assert(len(chainA[0].Children), Equals, 2)
+	c.Assert(len(chainB[0].Children), Equals, 1) // B must be unaffected
+
+	// --- Backing image path ---
+	biLvolName := GetBackingImageSnapLvolName("my-image", "disk-uuid-1")
+	c.Assert(types.IsBackingImageSnapLvolName(biLvolName), Equals, true)
+
+	replicaC := "bi-r-00000001"
+	rootSnapC := GetReplicaSnapshotLvolName(replicaC, "snap-1")
+
+	replicaD := "bi-r-00000002"
+	rootSnapD := GetReplicaSnapshotLvolName(replicaD, "snap-1")
+
+	bdevLvolMapBI := map[string]*spdktypes.BdevInfo{
+		biLvolName: makeBdevLvol(lvsName, biLvolName, "", []string{rootSnapC, rootSnapD}),
+		replicaC:   makeBdevLvol(lvsName, replicaC, rootSnapC, nil),
+		replicaD:   makeBdevLvol(lvsName, replicaD, rootSnapD, nil),
+	}
+
+	snapshotLvolMapC := map[string]*Lvol{
+		rootSnapC: {
+			Name:   rootSnapC,
+			Parent: biLvolName,
+			Children: map[string]*Lvol{
+				replicaC: {Name: replicaC, Parent: rootSnapC},
+			},
+		},
+	}
+	snapshotLvolMapD := map[string]*Lvol{
+		rootSnapD: {
+			Name:   rootSnapD,
+			Parent: biLvolName,
+			Children: map[string]*Lvol{
+				replicaD: {Name: replicaD, Parent: rootSnapD},
+			},
+		},
+	}
+
+	chainC, err := constructActiveChainFromSnapshotLvolMap(replicaC, snapshotLvolMapC, bdevLvolMapBI)
+	c.Assert(err, IsNil)
+	c.Assert(len(chainC[0].Children), Equals, 1)
+	_, hasRootC := chainC[0].Children[rootSnapC]
+	c.Assert(hasRootC, Equals, true)
+
+	chainD, err := constructActiveChainFromSnapshotLvolMap(replicaD, snapshotLvolMapD, bdevLvolMapBI)
+	c.Assert(err, IsNil)
+	c.Assert(len(chainD[0].Children), Equals, 1)
+	_, hasRootD := chainD[0].Children[rootSnapD]
+	c.Assert(hasRootD, Equals, true)
+
+	// Isolation between backing-image chains
+	chainC[0].Children["injected"] = &Lvol{Name: "injected"}
+	c.Assert(len(chainC[0].Children), Equals, 2)
+	c.Assert(len(chainD[0].Children), Equals, 1) // D must be unaffected
+}
+
+// ---------------------------------------------------------------------------
+// repairCloneEntrypoint — guard conditions
+// ---------------------------------------------------------------------------
+
+func (s *TestSuite) TestRepairCloneEntrypointUpdatesActiveChain0(c *C) {
+	// A zero-value spdkclient.Client passes the nil check but has no real
+	// connection. This lets us test guards that execute before any SPDK RPC.
+	dummyClient := &spdkclient.Client{}
+
+	// Test 1: nil spdkClient → immediate error
+	r1 := newTestReplica("clone-r-00000001", "test-disk")
+	r1.ActiveChain = []*Lvol{
+		nil,
+		{Name: "clone-r-00000001-snap-snap-1", Alias: "test-disk/clone-r-00000001-snap-snap-1"},
+		{Name: "clone-r-00000001"},
+	}
+	r1.cloneEntrypointLvolName = "src-r-00000001-clone-ep-snap-1"
+	r1.LvsName = "test-disk"
+
+	err := r1.repairCloneEntrypoint(nil, "src-r-00000001-snap-snap-1", "snap-1")
+	c.Assert(err, NotNil)
+	c.Assert(err, ErrorMatches, ".*cannot repair clone entrypoint without SPDK client.*")
+
+	// Test 2: ActiveChain has fewer than 2 elements (len=1)
+	r2 := newTestReplica("clone-r-00000002", "test-disk")
+	r2.ActiveChain = []*Lvol{nil}
+	r2.LvsName = "test-disk"
+
+	err = r2.repairCloneEntrypoint(dummyClient, "src-snap", "snap-1")
+	c.Assert(err, NotNil)
+	c.Assert(err, ErrorMatches, ".*ActiveChain too short or nil root.*len=1.*")
+
+	// Test 3: Empty ActiveChain (len=0)
+	r3 := newTestReplica("clone-r-00000003", "test-disk")
+	r3.ActiveChain = []*Lvol{}
+	r3.LvsName = "test-disk"
+
+	err = r3.repairCloneEntrypoint(dummyClient, "src-snap", "snap-1")
+	c.Assert(err, NotNil)
+	c.Assert(err, ErrorMatches, ".*ActiveChain too short or nil root.*len=0.*")
+
+	// Test 4: ActiveChain[1] is nil
+	r4 := newTestReplica("clone-r-00000004", "test-disk")
+	r4.ActiveChain = []*Lvol{nil, nil, {Name: "clone-r-00000004"}}
+	r4.LvsName = "test-disk"
+
+	err = r4.repairCloneEntrypoint(dummyClient, "src-snap", "snap-1")
+	c.Assert(err, NotNil)
+	c.Assert(err, ErrorMatches, ".*ActiveChain too short or nil root.*len=3.*")
 }
