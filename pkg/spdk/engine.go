@@ -123,7 +123,6 @@ type Engine struct {
 	SpecSize   uint64
 	ActualSize uint64
 	Frontend   string
-	Endpoint   string
 
 	ctrlrLossTimeout     int
 	fastIOFailTimeoutSec int
@@ -717,7 +716,6 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 		ReplicaModeMap:        map[string]spdkrpc.ReplicaMode{},
 		Snapshots:             map[string]*spdkrpc.Lvol{},
 		Frontend:              e.Frontend,
-		Endpoint:              e.Endpoint,
 		State:                 string(e.State),
 		ErrorMsg:              e.ErrorMsg,
 		IsExpanding:           e.isExpanding,
@@ -2117,7 +2115,6 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, endpoin
 	defer func() {
 		if err != nil {
 			e.IsRestoring = false
-			e.Endpoint = ""
 		}
 	}()
 
@@ -2289,9 +2286,6 @@ func (e *Engine) completeBackupRestore(spdkClient *spdkclient.Client, backupSnap
 	if e.restore != nil {
 		oldSnapshotName = e.restore.SnapshotName
 	}
-
-	// Clear the endpoint; the EngineFrontend will tear down the initiator after doneCh closes.
-	e.Endpoint = ""
 
 	// Stop the temporary NVMe-TCP target and release its port.
 	if e.Frontend == types.FrontendEmpty {
