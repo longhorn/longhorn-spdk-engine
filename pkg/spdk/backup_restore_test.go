@@ -126,3 +126,48 @@ func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {
 	c.Assert(err, NotNil)
 	c.Assert(strings.Contains(err.Error(), "restore is in progress"), Equals, true)
 }
+
+func (s *TestSuite) TestRecordBackupRestoreStartErrorExposedInRestoreStatus(c *C) {
+	fmt.Println("Testing restore start errors are exposed through Engine.RestoreStatus")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1))
+	e.ReplicaStatusMap = map[string]*EngineReplicaStatus{
+		"replica-1": {Mode: lhtypes.ModeRW, Address: "10.0.0.1:1234"},
+		"replica-2": {Mode: lhtypes.ModeRW, Address: "10.0.0.2:1234"},
+	}
+	backupURL := "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a"
+	restoreErr := fmt.Errorf("backup was deleted")
+
+	e.Lock()
+	e.recordBackupRestoreStartErrorLocked(nil, backupURL, "", nil, restoreErr)
+	e.Unlock()
+
+	status, err := e.RestoreStatus()
+	c.Assert(err, IsNil)
+	c.Assert(status.Status, HasLen, 2)
+
+	for _, replicaStatus := range status.Status {
+		c.Assert(replicaStatus.IsRestoring, Equals, false)
+		c.Assert(replicaStatus.LastRestored, Equals, "")
+		c.Assert(replicaStatus.CurrentRestoringBackup, Equals, "backup-a")
+		c.Assert(replicaStatus.BackupUrl, Equals, backupURL)
+		c.Assert(replicaStatus.State, Equals, "error")
+		c.Assert(replicaStatus.Error, Equals, restoreErr.Error())
+	}
+}
+
+func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C) {
+	fmt.Println("Testing restore start errors preserve last restored backup")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1))
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-old&volume=vol-a", "backup-old", e, nil)
+	e.restore.FinishRestore()
+
+	e.Lock()
+	e.recordBackupRestoreStartErrorLocked(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-new&volume=vol-a", "", nil, fmt.Errorf("backup was deleted"))
+	e.Unlock()
+
+	c.Assert(e.restore.LastRestored, Equals, "backup-old")
+	c.Assert(e.restore.CurrentRestoringBackup, Equals, "backup-new")
+	c.Assert(string(e.restore.State), Equals, "error")
+}
