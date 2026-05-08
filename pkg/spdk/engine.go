@@ -2199,8 +2199,7 @@ func (e *Engine) recordBackupRestoreStartErrorLocked(spdkClient *spdkclient.Clie
 	} else {
 		e.restore.StartNewRestore(backupURL, backupName, true)
 	}
-	e.IsRestoring = false
-	e.restore.UpdateRestoreStatus(e.restore.SnapshotName, 0, restoreErr)
+	e.restore.UpdateRestoreStatus("", 0, restoreErr)
 }
 
 func (e *Engine) precheckBackupRestore(backupURL string) error {
