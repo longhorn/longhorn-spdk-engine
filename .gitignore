@@ -38,3 +38,6 @@ bin/
 .idea/
 *.iml
 *.ipr
+
+# cscope
+cscope.out*
