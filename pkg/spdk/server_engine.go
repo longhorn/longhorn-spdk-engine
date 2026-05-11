@@ -626,3 +626,37 @@ func (s *Server) EngineRestoreStatus(ctx context.Context, req *spdkrpc.RestoreSt
 	}
 	return resp, nil
 }
+
+func (s *Server) EngineVolumeSnapshotMaxCountSet(ctx context.Context, req *spdkrpc.EngineVolumeSnapshotMaxCountSetRequest) (*emptypb.Empty, error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name is required")
+	}
+
+	s.RLock()
+	e := s.engineMap[req.Name]
+	s.RUnlock()
+
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot max count set", req.Name)
+	}
+
+	e.VolumeSnapshotMaxCountSet(int(req.Count))
+	return &emptypb.Empty{}, nil
+}
+
+func (s *Server) EngineVolumeSnapshotMaxSizeSet(ctx context.Context, req *spdkrpc.EngineVolumeSnapshotMaxSizeSetRequest) (*emptypb.Empty, error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name is required")
+	}
+
+	s.RLock()
+	e := s.engineMap[req.Name]
+	s.RUnlock()
+
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot max size set", req.Name)
+	}
+
+	e.VolumeSnapshotMaxSizeSet(req.Size)
+	return &emptypb.Empty{}, nil
+}

@@ -145,6 +145,9 @@ type Engine struct {
 	lastExpansionFailedAt string
 	lastExpansionError    string
 
+	SnapshotMaxCount int
+	SnapshotMaxSize  int64
+
 	// UpdateCh should not be protected by the engine lock
 	UpdateCh chan interface{}
 
@@ -1485,8 +1488,30 @@ const (
 	SnapshotOperationHash   = SnapshotOperationType("snapshot-hash")
 )
 
+func (e *Engine) VolumeSnapshotMaxCountSet(count int) {
+	e.Lock()
+	defer e.Unlock()
+	e.SnapshotMaxCount = count
+	e.log.Infof("Set engine snapshot max count to %d", count)
+}
+
+func (e *Engine) VolumeSnapshotMaxSizeSet(size int64) {
+	e.Lock()
+	defer e.Unlock()
+	e.SnapshotMaxSize = size
+	e.log.Infof("Set engine snapshot max size to %d", size)
+}
+
 func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName string) (snapshotName string, err error) {
 	e.log.Infof("Creating snapshot %s", inputSnapshotName)
+
+	e.RLock()
+	maxCount := e.SnapshotMaxCount
+	e.RUnlock()
+	if maxCount > 0 && len(e.SnapshotMap) >= maxCount {
+		return "", fmt.Errorf("snapshot count %d has reached the maximum snapshot count %d",
+			len(e.SnapshotMap), maxCount)
+	}
 
 	opts := &api.SnapshotOptions{
 		UserCreated: true,

@@ -80,6 +80,9 @@ type Replica struct {
 	IsExposed               bool
 	SnapshotChecksumEnabled bool
 
+	SnapshotMaxCount int
+	SnapshotMaxSize  int64
+
 	// SnapshotLvolHashStatusMap map[<snapshot lvol name>]LvolHashStatus.
 	SnapshotLvolHashStatusMap sync.Map
 
@@ -1449,6 +1452,20 @@ func getSnapshotXattrsFromOptions(opts *api.SnapshotOptions) []spdkclient.Xattr 
 	}
 }
 
+func (r *Replica) VolumeSnapshotMaxCountSet(count int) {
+	r.Lock()
+	defer r.Unlock()
+	r.SnapshotMaxCount = count
+	r.log.Infof("Set replica snapshot max count to %d", count)
+}
+
+func (r *Replica) VolumeSnapshotMaxSizeSet(size int64) {
+	r.Lock()
+	defer r.Unlock()
+	r.SnapshotMaxSize = size
+	r.log.Infof("Set replica snapshot max size to %d", size)
+}
+
 func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string, opts *api.SnapshotOptions) (replica *spdkrpc.Replica, err error) {
 	updateRequired := false
 
@@ -1465,6 +1482,10 @@ func (r *Replica) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName str
 
 	if r.State != types.InstanceStateStopped && r.State != types.InstanceStateRunning {
 		return nil, fmt.Errorf("invalid state %v for replica %s snapshot creation", r.State, r.Name)
+	}
+
+	if r.SnapshotMaxCount > 0 && len(r.SnapshotLvolMap) >= r.SnapshotMaxCount {
+		return nil, fmt.Errorf("snapshot count %d has reached the maximum snapshot count %d for replica %s", len(r.SnapshotLvolMap), r.SnapshotMaxCount, r.Name)
 	}
 
 	snapLvolName := GetReplicaSnapshotLvolName(r.Name, snapshotName)

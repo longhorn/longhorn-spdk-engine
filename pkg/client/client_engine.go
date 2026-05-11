@@ -469,3 +469,29 @@ func (c *SPDKClient) EngineRestoreStatus(engineName string) (*spdkrpc.RestoreSta
 		EngineName: engineName,
 	})
 }
+
+// VolumeSnapshotMaxCountSet sets the maximum number of snapshots allowed for an engine.
+func (c *SPDKClient) VolumeSnapshotMaxCountSet(engineName string, count int) error {
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineVolumeSnapshotMaxCountSet(ctx, &spdkrpc.EngineVolumeSnapshotMaxCountSetRequest{
+		Name:  engineName,
+		Count: int32(count),
+	})
+	return errors.Wrapf(err, "failed to set snapshot max count for engine %v", engineName)
+}
+
+// VolumeSnapshotMaxSizeSet sets the maximum total size of snapshots allowed for an engine.
+func (c *SPDKClient) VolumeSnapshotMaxSizeSet(engineName string, size int64) error {
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineVolumeSnapshotMaxSizeSet(ctx, &spdkrpc.EngineVolumeSnapshotMaxSizeSetRequest{
+		Name: engineName,
+		Size: size,
+	})
+	return errors.Wrapf(err, "failed to set snapshot max size for engine %v", engineName)
+}
