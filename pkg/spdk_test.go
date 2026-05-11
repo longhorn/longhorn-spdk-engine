@@ -2103,9 +2103,9 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			// Before testing online rebuilding
 			// Crash replica2 and remove it from the engine
 			delete(replicaAddressMap, replicaName2)
-			err = spdkCli.ReplicaDelete(replicaName2, true)
-			c.Assert(err, IsNil)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName2, net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))))
+			c.Assert(err, IsNil)
+			err = spdkCli.ReplicaDelete(replicaName2, true)
 			c.Assert(err, IsNil)
 			engine, err = spdkCli.EngineGet(engineName)
 			c.Assert(err, IsNil)
@@ -2903,9 +2903,9 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			// Crash replica1
 			delete(replicaAddressMap, replicaName1)
-			err = spdkCli.ReplicaDelete(replicaName1, true)
-			c.Assert(err, IsNil)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))))
+			c.Assert(err, IsNil)
+			err = spdkCli.ReplicaDelete(replicaName1, true)
 			c.Assert(err, IsNil)
 			engine, err = spdkCli.EngineGet(engineName)
 			c.Assert(err, IsNil)
@@ -3001,9 +3001,9 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 
 			// Crash replica2
 			delete(replicaAddressMap, replicaName2)
-			err = spdkCli.ReplicaDelete(replicaName2, true)
-			c.Assert(err, IsNil)
 			err = spdkCli.EngineReplicaDelete(engineName, replicaName2, net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))))
+			c.Assert(err, IsNil)
+			err = spdkCli.ReplicaDelete(replicaName2, true)
 			c.Assert(err, IsNil)
 			engine, err = spdkCli.EngineGet(engineName)
 			c.Assert(err, IsNil)
