@@ -281,6 +281,44 @@ func (s *TestSuite) TestNewVerifyStateLockedCopiesMaps(c *C) {
 	c.Assert(ok, Equals, true)
 }
 
+func (s *TestSuite) TestApplyVerifiedStateSkipsConcurrentReplicaMutation(c *C) {
+	fmt.Println("Testing applyVerifiedState skips stale replica map overwrite after concurrent mutation")
+
+	r1 := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1))
+	r2 := NewReplica(context.Background(), "r2", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1))
+	replacement := NewReplica(context.Background(), "r2", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1))
+
+	server := &Server{
+		replicaMap: map[string]*Replica{
+			"r1": r1,
+			"r2": replacement,
+		},
+		replicaMapGen:   2, // bumped by delete + create
+		backingImageMap: map[string]*BackingImage{},
+	}
+
+	state := &verifyState{
+		replicaMap: map[string]*Replica{
+			"r1": r1,
+			"r2": r2,
+		},
+		replicaMapGen:         0, // captured before the mutations
+		replicaMapForSync:     map[string]*Replica{},
+		engineMapForSync:      map[string]*Engine{},
+		engineFrontendForSync: map[string]*EngineFrontend{},
+		backingImageMap:       map[string]*BackingImage{},
+		backingImageForSync:   map[string]*BackingImage{},
+	}
+
+	applied := server.applyVerifiedState(state)
+	c.Assert(applied, Equals, false)
+
+	server.RLock()
+	defer server.RUnlock()
+	c.Assert(server.replicaMap["r1"], Equals, r1)
+	c.Assert(server.replicaMap["r2"], Equals, replacement)
+}
+
 func (s *TestSuite) TestSyncVerifiedObjectsWithEmptyState(c *C) {
 	fmt.Println("Testing syncVerifiedObjects with empty state")
 
