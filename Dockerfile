@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.23.0@sha256:2780b5c3bab67f1f76c781860de469442999ed1a0d7992a5efdf2cffc0e3d769
-FROM registry.suse.com/bci/bci-base:16.1@sha256:5bc42645c4e3194f8cfe9f92624befcb94253a352aaaf94a903d763cab626237 AS base
+FROM registry.suse.com/bci/bci-base:16.1@sha256:edf32316d00400ef52c4d0ad80181e0f3d9fd457179017aa0241b7e60ce79998 AS base
 
 ARG TARGETARCH
 ARG http_proxy
