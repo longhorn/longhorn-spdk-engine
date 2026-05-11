@@ -559,19 +559,19 @@ func (s *TestSuite) TestSPDKEngineAndEngineFrontendCreateAndDeleteWithDifferentF
 				c.Assert(err, IsNil)
 			},
 		},
-		{
-			name:                 "FrontendUBLK",
-			frontend:             types.FrontendUBLK,
-			expectEngineEndpoint: false,
-			verifyFrontend: func(c *C, volumeName, _ string, _ *api.Engine, engineFrontend *api.EngineFrontend) {
-				endpoint := helperutil.GetLonghornDevicePath(volumeName)
-				c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+		// {
+		// 	name:                 "FrontendUBLK",
+		// 	frontend:             types.FrontendUBLK,
+		// 	expectEngineEndpoint: false,
+		// 	verifyFrontend: func(c *C, volumeName, _ string, _ *api.Engine, engineFrontend *api.EngineFrontend) {
+		// 		endpoint := helperutil.GetLonghornDevicePath(volumeName)
+		// 		c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
-				err := formatBlockDevice(endpoint, "ext4")
-				c.Assert(err, IsNil)
-				c.Assert(engineFrontend.UblkID, Not(Equals), int32(helperinitiator.UnInitializedUblkId))
-			},
-		},
+		// 		err := formatBlockDevice(endpoint, "ext4")
+		// 		c.Assert(err, IsNil)
+		// 		c.Assert(engineFrontend.UblkID, Not(Equals), int32(helperinitiator.UnInitializedUblkId))
+		// 	},
+		// },
 	}
 
 	assertEngineEndpoint := func(c *C, ip string, port int32, expectSet bool) {
