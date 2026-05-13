@@ -499,7 +499,7 @@ func (s *Server) EngineSnapshotClone(ctx context.Context, req *spdkrpc.EngineSna
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot clone", req.Name)
 	}
 
-	if err := e.SnapshotClone(req.SnapshotName, req.SrcEngineName, req.SrcEngineAddress, req.CloneMode); err != nil {
+	if err := e.SnapshotClone(req.SnapshotName, req.SrcEngineName, req.SrcEngineAddress, req.CloneMode, req.DstReplicaSrcReplicaPairMap); err != nil {
 		return nil, err
 	}
 	return &emptypb.Empty{}, nil
