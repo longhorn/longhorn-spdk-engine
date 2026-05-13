@@ -141,7 +141,7 @@ github.com/longhorn/go-spdk-helper/pkg/spdk/setup
 github.com/longhorn/go-spdk-helper/pkg/spdk/types
 github.com/longhorn/go-spdk-helper/pkg/types
 github.com/longhorn/go-spdk-helper/pkg/util
-# github.com/longhorn/types v0.0.0-20260417071722-2f1958bc30e5
+# github.com/longhorn/types v0.0.0-20260417071722-2f1958bc30e5 => github.com/shuo-wu/types v0.0.0-20260512064810-75bfc859ae77
 ## explicit; go 1.24.0
 github.com/longhorn/types/pkg/generated/enginerpc
 github.com/longhorn/types/pkg/generated/imrpc
@@ -451,3 +451,4 @@ sigs.k8s.io/randfill/bytesource
 # sigs.k8s.io/structured-merge-diff/v6 v6.3.2
 ## explicit; go 1.23
 sigs.k8s.io/structured-merge-diff/v6/value
+# github.com/longhorn/types => github.com/shuo-wu/types v0.0.0-20260512064810-75bfc859ae77
