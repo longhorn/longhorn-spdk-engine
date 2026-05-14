@@ -138,6 +138,8 @@ type Engine struct {
 	Head        *api.Lvol
 	SnapshotMap map[string]*api.Lvol
 
+	SnapshotMaxCount int32
+
 	IsRestoring           bool
 	RestoringSnapshotName string
 
@@ -174,7 +176,7 @@ type EngineReplicaStatus struct {
 	Mode     types.Mode
 }
 
-func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}) *Engine {
+func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}, snapshotMaxCount int32) *Engine {
 	log := logrus.StandardLogger().WithFields(logrus.Fields{
 		"engineName": engineName,
 		"volumeName": volumeName,
@@ -206,6 +208,8 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		NvmeTcpTarget: &NvmeTcpTarget{},
 
 		State: types.InstanceStatePending,
+
+		SnapshotMaxCount: snapshotMaxCount,
 
 		SnapshotMap: map[string]*api.Lvol{},
 
@@ -737,6 +741,7 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 		IsExpanding:           e.isExpanding,
 		LastExpansionError:    e.lastExpansionError,
 		LastExpansionFailedAt: e.lastExpansionFailedAt,
+		SnapshotMaxCount:      e.SnapshotMaxCount,
 	}
 
 	if e.NvmeTcpTarget != nil {
@@ -756,6 +761,17 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 	}
 
 	return res
+}
+
+func (e *Engine) SetSnapshotMaxCount(count int32) {
+	e.Lock()
+	e.SnapshotMaxCount = count
+	e.Unlock()
+
+	select {
+	case e.UpdateCh <- nil:
+	default:
+	}
 }
 
 type replicaAddFrontendSuspendResumeWrapper func(work func() error) error
@@ -1630,6 +1646,10 @@ func (e *Engine) closeReplicaClients(replicaClients map[string]*client.SPDKClien
 func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]*client.SPDKClient, snapshotName string, snapshotOp SnapshotOperationType) (string, error) {
 	if snapshotOp == SnapshotOperationCreate && snapshotName == "" {
 		snapshotName = util.UUID()[:8]
+	}
+
+	if snapshotOp == SnapshotOperationCreate && e.SnapshotMaxCount > 0 && int32(len(e.SnapshotMap)) >= e.SnapshotMaxCount {
+		return "", fmt.Errorf("snapshot count %d is equal or larger than snapshotMaxCount %d", len(e.SnapshotMap), e.SnapshotMaxCount)
 	}
 
 	if snapshotOp == SnapshotOperationDelete {
