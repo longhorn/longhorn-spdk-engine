@@ -15,7 +15,7 @@ import (
 func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateRWQualifies(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: RW mode qualifies for info update")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	rs := &EngineReplicaStatus{Mode: lhtypes.ModeRW, Address: "10.0.0.1:1234"}
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
@@ -27,7 +27,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateRWQualifies(c *C) {
 func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateWOQualifies(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: WO mode qualifies for info update")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	rs := &EngineReplicaStatus{Mode: lhtypes.ModeWO, Address: "10.0.0.1:1234"}
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
@@ -39,7 +39,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateWOQualifies(c *C) {
 func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateERRDoesNotQualify(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: ERR mode does not qualify")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	rs := &EngineReplicaStatus{Mode: lhtypes.ModeERR, Address: "10.0.0.1:1234"}
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
@@ -51,7 +51,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateERRDoesNotQualify(c *C) {
 func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateUnexpectedModeDowngradesToERR(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: unexpected mode is downgraded to ERR")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	rs := &EngineReplicaStatus{Mode: lhtypes.Mode("UNKNOWN"), Address: "10.0.0.1:1234"}
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
@@ -66,7 +66,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateUnexpectedModeDowngradesTo
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockEmptyMap(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: empty ReplicaStatusMap does not panic")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.ReplicaStatusMap = map[string]*EngineReplicaStatus{}
 
 	// Should not panic with empty map
@@ -76,7 +76,7 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockEmptyMap(c *C) {
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAllERRSkipped(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: all-ERR replicas are skipped without network calls")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.ReplicaStatusMap = map[string]*EngineReplicaStatus{
 		"replica-1": {Mode: lhtypes.ModeERR, Address: "10.0.0.1:1234"},
 		"replica-2": {Mode: lhtypes.ModeERR, Address: "10.0.0.2:1234"},
@@ -117,7 +117,7 @@ func (s *TestSuite) TestEngineFrontendTeardownRestoreInitiatorMarksStopped(c *C)
 func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {
 	fmt.Println("Testing Engine.ReplicaAdd is rejected while restore is in progress")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.State = lhtypes.InstanceStateRunning
 	e.IsRestoring = true
 
@@ -130,7 +130,7 @@ func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {
 func (s *TestSuite) TestRecordBackupRestoreStartErrorExposedInRestoreStatus(c *C) {
 	fmt.Println("Testing restore start errors are exposed through Engine.RestoreStatus")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.ReplicaStatusMap = map[string]*EngineReplicaStatus{
 		"replica-1": {Mode: lhtypes.ModeRW, Address: "10.0.0.1:1234"},
 		"replica-2": {Mode: lhtypes.ModeRW, Address: "10.0.0.2:1234"},
@@ -159,7 +159,7 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorExposedInRestoreStatus(c *C
 func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C) {
 	fmt.Println("Testing restore start errors preserve last restored backup")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-old&volume=vol-a", "backup-old", e, nil)
 	e.restore.FinishRestore()
 

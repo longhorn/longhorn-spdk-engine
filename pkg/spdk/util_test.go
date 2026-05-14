@@ -19,6 +19,8 @@ type TestSuite struct{}
 
 var _ = Suite(&TestSuite{})
 
+const defaultTestSnapshotMaxCount int32 = 2
+
 func (s *TestSuite) TestSplitHostPort(c *C) {
 	fmt.Println("Testing splitHostPort with various address formats")
 
@@ -133,7 +135,7 @@ func (s *TestSuite) TestExtractBackingImageAndDiskUUID(c *C) {
 }
 
 func (s *TestSuite) TestSetReplicaAdderInjectsRealFallback(c *C) {
-	e := NewEngine("test-engine", "test-volume", types.FrontendEmpty, 1, nil)
+	e := NewEngine("test-engine", "test-volume", types.FrontendEmpty, 1, nil, defaultTestSnapshotMaxCount)
 
 	firstMock := &MockReplicaAdder{}
 	e.SetReplicaAdder(firstMock)
