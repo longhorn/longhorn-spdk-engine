@@ -466,16 +466,12 @@ func (e *Engine) validateReplicaSize(replicaAddressMap map[string]string) error 
 	// Validate the engine & replica sizes before creating the engine
 	replicaSizeMap := make(map[string]uint64, len(replicaAddressMap))
 	for replicaName, replicaAddr := range replicaAddressMap {
-		replicaClient, err := GetServiceClient(replicaAddr)
+		replicaSize, err := e.getReplicaSpecSize(replicaName, replicaAddr)
 		if err != nil {
 			return err
 		}
-		replica, err := replicaClient.ReplicaGet(replicaName)
-		if err != nil {
-			return errors.Wrapf(err, "failed to get replica %v from %v", replicaName, replicaAddr)
-		}
 
-		replicaSizeMap[replicaName] = replica.SpecSize
+		replicaSizeMap[replicaName] = replicaSize
 	}
 
 	// check if all replica sizes are the same
@@ -496,6 +492,26 @@ func (e *Engine) validateReplicaSize(replicaAddressMap map[string]string) error 
 	}
 
 	return nil
+}
+
+func (e *Engine) getReplicaSpecSize(replicaName, replicaAddr string) (uint64, error) {
+	replicaClient, err := GetServiceClient(replicaAddr)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		errClose := replicaClient.Close()
+		if errClose != nil {
+			e.log.WithError(errClose).Errorf("Failed to close replica %s client with address %s when getting replica spec size", replicaName, replicaAddr)
+		}
+	}()
+
+	replica, err := replicaClient.ReplicaGet(replicaName)
+	if err != nil {
+		return 0, errors.Wrapf(err, "failed to get replica %v from %v", replicaName, replicaAddr)
+	}
+
+	return replica.SpecSize, nil
 }
 
 // filterSalvageCandidates updates the replicaAddressMap by retaining only replicas
