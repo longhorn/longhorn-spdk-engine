@@ -22,7 +22,7 @@ import (
 func (s *TestSuite) TestEngineFinishExpansionSuccessClearsErrorState(c *C) {
 	fmt.Println("Testing Engine finish expansion success clears error state")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.State = lhtypes.InstanceStateError
 	e.ErrorMsg = "previous failure"
 
@@ -36,7 +36,7 @@ func (s *TestSuite) TestEngineFinishExpansionSuccessClearsErrorState(c *C) {
 func (s *TestSuite) TestEngineFinishExpansionFailureSetsErrorState(c *C) {
 	fmt.Println("Testing Engine finish expansion failure sets error state")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.State = lhtypes.InstanceStateRunning
 	e.ErrorMsg = ""
 	e.SpecSize = 10
@@ -53,7 +53,7 @@ func (s *TestSuite) TestEngineFinishExpansionFailureSetsErrorState(c *C) {
 func (s *TestSuite) TestEngineFinishExpansionFailureRestoresOriginalSize(c *C) {
 	fmt.Println("Testing Engine finish expansion failure restores original size when spec size was updated during expand")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.SpecSize = 20
 
 	e.finishExpansion(10, 20, errors.New("expand failed"))
@@ -111,7 +111,7 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionFailureWithoutExpansion(c *
 func (s *TestSuite) TestEngineFinishExpansionPartialFailureKeepsOriginalSize(c *C) {
 	fmt.Println("Testing Engine finish expansion partial failure keeps original size")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.lastExpansionError = "replica expand failed"
 
 	e.finishExpansion(10, 20, nil)
@@ -125,7 +125,7 @@ func (s *TestSuite) TestEngineFinishExpansionPartialFailureKeepsOriginalSize(c *
 func (s *TestSuite) TestEngineFinishExpansionPartialFailureRestoresOriginalSize(c *C) {
 	fmt.Println("Testing Engine finish expansion partial failure restores original size when spec size was updated during expand")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.SpecSize = 20
 	e.lastExpansionError = "replica expand failed"
 
@@ -176,12 +176,12 @@ func (s *TestSuite) TestEngineFrontendRequireExpansionGuards(c *C) {
 func (s *TestSuite) TestEngineExpandPrecheckGuards(c *C) {
 	fmt.Println("Testing Engine expand precheck guards")
 
-	eInProgress := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	eInProgress := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	eInProgress.isExpanding = true
 	_, err := eInProgress.ExpandPrecheck(nil, 20)
 	c.Assert(errors.Is(err, ErrExpansionInProgress), Equals, true)
 
-	eRestoring := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	eRestoring := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	eRestoring.IsRestoring = true
 	_, err = eRestoring.ExpandPrecheck(nil, 20)
 	c.Assert(errors.Is(err, ErrRestoringInProgress), Equals, true)
@@ -190,7 +190,7 @@ func (s *TestSuite) TestEngineExpandPrecheckGuards(c *C) {
 func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	fmt.Println("Testing Engine handle replica expand result")
 
-	eAllFailed := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	eAllFailed := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	replicaClientsAllFailed := map[string]*clientpkg.SPDKClient{
 		"r1": nil,
 		"r2": nil,
@@ -203,7 +203,7 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	c.Assert(err, NotNil)
 	c.Assert(strings.Contains(err.Error(), "all replicas failed to expand"), Equals, true)
 
-	ePartial := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	ePartial := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	ePartial.ReplicaStatusMap = map[string]*EngineReplicaStatus{
 		"r1": &EngineReplicaStatus{Mode: lhtypes.ModeRW},
 		"r2": &EngineReplicaStatus{Mode: lhtypes.ModeRW},
@@ -306,7 +306,7 @@ func (s *TestSuite) TestEngineExpandPreservesANAState(c *C) {
 
 	// An engine with ANAState=inaccessible (e.g. a switchover target)
 	// should keep that state across Expand, not revert to optimized.
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	e.NvmeTcpTarget.ANAState = NvmeTCPANAStateInaccessible
 
 	// Verify the ANA state is preserved in the logic path that Expand uses.
@@ -320,7 +320,7 @@ func (s *TestSuite) TestEngineExpandPreservesANAState(c *C) {
 	c.Assert(err, IsNil)
 
 	// Verify that an empty ANAState defaults to optimized.
-	e2 := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e2 := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 	c.Assert(e2.NvmeTcpTarget.ANAState, Equals, NvmeTCPANAState(""))
 	defaultState := e2.NvmeTcpTarget.ANAState
 	if defaultState == "" {

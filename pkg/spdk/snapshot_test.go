@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
@@ -13,7 +14,7 @@ import (
 func (s *TestSuite) TestSnapshotOperationPreCheckCreateGeneratesName(c *C) {
 	fmt.Println("Testing snapshotOperationPreCheckWithoutLock generates snapshot name for create operation")
 
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 
 	snapshotName, err := e.snapshotOperationPreCheckWithoutLock(map[string]*client.SPDKClient{}, "", SnapshotOperationCreate)
 	c.Assert(err, IsNil)
@@ -24,11 +25,24 @@ func (s *TestSuite) TestSnapshotOperationPreCheckCreateGeneratesName(c *C) {
 func (s *TestSuite) TestSnapshotOperationPreCheckDeleteEmptyName(c *C) {
 	fmt.Println("Testing snapshotOperationPreCheckWithoutLock returns error for delete operation with empty snapshot name")
 
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1))
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
 
 	_, err := e.snapshotOperationPreCheckWithoutLock(map[string]*client.SPDKClient{}, "", SnapshotOperationDelete)
 	c.Assert(err, NotNil)
 	c.Assert(strings.Contains(err.Error(), "empty snapshot name"), Equals, true)
+}
+
+func (s *TestSuite) TestSnapshotOperationPreCheckCreateFailsWhenSnapshotMaxCountReached(c *C) {
+	fmt.Println("Testing snapshotOperationPreCheckWithoutLock returns error when snapshot max count is reached")
+
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount)
+	e.SnapshotMaxCount = 2
+	e.SnapshotMap["snap-1"] = &api.Lvol{Name: "snap-1"}
+	e.SnapshotMap["snap-2"] = &api.Lvol{Name: "snap-2"}
+
+	_, err := e.snapshotOperationPreCheckWithoutLock(map[string]*client.SPDKClient{}, "", SnapshotOperationCreate)
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "snapshot count 2 is equal or larger than snapshotMaxCount 2"), Equals, true)
 }
 
 func (s *TestSuite) TestEngineFrontendSnapshotOperationCreateFailsWhenInitiatorNil(c *C) {
