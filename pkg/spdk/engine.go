@@ -1608,6 +1608,7 @@ func (e *Engine) getReplicaClients() (replicaClients map[string]*client.SPDKClie
 		}
 		c, err := GetServiceClient(replicaStatus.Address)
 		if err != nil {
+			e.closeReplicaClients(replicaClients)
 			return nil, err
 		}
 		replicaClients[replicaName] = c
