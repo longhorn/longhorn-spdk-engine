@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/bitmap"
 	"github.com/cockroachdb/errors"
@@ -35,16 +36,18 @@ type Fragmap struct {
 type Backup struct {
 	sync.Mutex
 
-	spdkClient *spdkclient.Client
+	spdkClient    *spdkclient.Client
+	portAllocator *commonbitmap.Bitmap
 
-	Name          string
-	VolumeName    string
-	SnapshotName  string
-	replica       *Replica
-	fragmap       *Fragmap
-	IP            string
-	Port          int32
-	IsIncremental bool
+	Name           string
+	VolumeName     string
+	SnapshotName   string
+	replica        *Replica
+	replicaAddress string
+	fragmap        *Fragmap
+	IP             string
+	Port           int32
+	IsIncremental  bool
 
 	BackupURL string
 	State     btypes.ProgressState
@@ -53,9 +56,20 @@ type Backup struct {
 
 	subsystemNQN   string
 	controllerName string
-	initiator      *initiator.Initiator
+	initiator      nvmeInitiator
 	devFh          *os.File
 	executor       *commonns.Executor
+
+	// onTerminal is invoked (in a new goroutine) exactly once when the
+	// backup first reaches a terminal state (Complete or Error) AND
+	// CloseSnapshot has finished releasing all heavy resources.
+	// The server uses this hook to trigger pruning of retained backups.
+	onTerminal func()
+	// terminalSeen guards onTerminal so it fires at most once.
+	terminalSeen bool
+	// terminalAt records when the backup entered a terminal state,
+	// used by the pruning logic to evict the oldest entries first.
+	terminalAt time.Time
 
 	log logrus.FieldLogger
 }
@@ -63,7 +77,7 @@ type Backup struct {
 var _ backupstore.DeltaBlockBackupOperations = (*Backup)(nil)
 
 // NewBackup creates a new backup instance
-func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotName string, replica *Replica, superiorPortAllocator *commonbitmap.Bitmap) (*Backup, error) {
+func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotName string, replica *Replica, superiorPortAllocator *commonbitmap.Bitmap, onTerminal func()) (*Backup, error) {
 	log := logrus.WithFields(logrus.Fields{
 		"backupName":   backupName,
 		"volumeName":   volumeName,
@@ -71,6 +85,11 @@ func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotNa
 	})
 
 	log.Info("Initializing backup")
+
+	replicaAddress := ""
+	if replica != nil {
+		replicaAddress = replica.GetAddress()
+	}
 
 	podIP, err := commonnet.GetIPForPod()
 	if err != nil {
@@ -84,20 +103,26 @@ func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotNa
 
 	executor, err := helperutil.NewExecutor(commontypes.ProcDirectory)
 	if err != nil {
+		if releaseErr := superiorPortAllocator.ReleaseRange(port, port); releaseErr != nil {
+			log.WithError(releaseErr).Warnf("Failed to release port %v after executor creation failure", port)
+		}
 		return nil, errors.Wrapf(err, "failed to create executor")
 	}
 
 	return &Backup{
-		spdkClient:   spdkClient,
-		Name:         backupName,
-		VolumeName:   volumeName,
-		SnapshotName: snapshotName,
-		replica:      replica,
-		IP:           podIP,
-		Port:         port,
-		State:        btypes.ProgressStateInProgress,
-		log:          log,
-		executor:     executor,
+		spdkClient:     spdkClient,
+		portAllocator:  superiorPortAllocator,
+		Name:           backupName,
+		VolumeName:     volumeName,
+		SnapshotName:   snapshotName,
+		replica:        replica,
+		replicaAddress: replicaAddress,
+		IP:             podIP,
+		Port:           port,
+		State:          btypes.ProgressStateInProgress,
+		log:            log,
+		executor:       executor,
+		onTerminal:     onTerminal,
 	}, nil
 }
 
@@ -130,28 +155,59 @@ func (b *Backup) HasSnapshot(snapshotName, volumeName string) bool {
 }
 
 // OpenSnapshot opens the snapshot lvol for backup
-func (b *Backup) OpenSnapshot(snapshotName, volumeName string) error {
+func (b *Backup) OpenSnapshot(snapshotName, volumeName string) (err error) {
 	b.Lock()
 	defer b.Unlock()
 
 	b.log.Info("Preparing snapshot lvol bdev for backup")
-	frgmap, err := b.newFragmap()
+	frgmap, err := backupNewFragmap(b)
 	if err != nil {
 		return err
 	}
 	b.fragmap = frgmap
 
 	lvolName := GetReplicaSnapshotLvolName(b.replica.Name, snapshotName)
+	exposed := false
+	defer func() {
+		if err == nil {
+			return
+		}
+
+		if b.devFh != nil {
+			if errClose := b.devFh.Close(); errClose != nil {
+				b.log.WithError(errClose).Warnf("Failed to close NVMe device %v during backup open cleanup", b.devFh.Name())
+			}
+			b.devFh = nil
+		}
+
+		if b.initiator != nil {
+			if _, stopErr := b.initiator.Stop(nil, true, true, true); stopErr != nil {
+				b.log.WithError(stopErr).Warnf("Failed to stop NVMe initiator for snapshot lvol bdev %v during backup open cleanup", lvolName)
+			}
+			b.initiator = nil
+		}
+
+		if exposed {
+			if stopErr := backupStopExposeBdev(b.spdkClient, helpertypes.GetNQN(lvolName)); stopErr != nil {
+				b.log.WithError(stopErr).Warnf("Failed to unexpose snapshot lvol bdev %v during backup open cleanup", lvolName)
+			}
+		}
+
+		b.fragmap = nil
+		b.subsystemNQN = ""
+		b.controllerName = ""
+	}()
 
 	b.replica.Lock()
 	defer b.replica.Unlock()
 
 	b.log.Infof("Exposing snapshot lvol bdev %v", lvolName)
-	subsystemNQN, controllerName, err := exposeSnapshotLvolBdev(b.spdkClient, b.replica.LvsName, lvolName, b.IP, b.Port, b.executor)
+	subsystemNQN, controllerName, err := backupExposeSnapshotLvolBdev(b.spdkClient, b.replica.LvsName, lvolName, b.IP, b.Port, b.executor)
 	if err != nil {
 		b.log.WithError(err).Errorf("Failed to expose snapshot lvol bdev %v", lvolName)
 		return errors.Wrapf(err, "failed to expose snapshot lvol bdev %v", lvolName)
 	}
+	exposed = true
 	b.subsystemNQN = subsystemNQN
 	b.controllerName = controllerName
 
@@ -159,7 +215,7 @@ func (b *Backup) OpenSnapshot(snapshotName, volumeName string) error {
 	nvmeTCPInfo := &initiator.NVMeTCPInfo{
 		SubsystemNQN: helpertypes.GetNQN(lvolName),
 	}
-	i, err := initiator.NewInitiator(lvolName, initiator.HostProc, nvmeTCPInfo, nil)
+	i, err := newNVMeTCPInitiator(lvolName, nvmeTCPInfo)
 	if err != nil {
 		return errors.Wrapf(err, "failed to create NVMe initiator for snapshot lvol bdev %v", lvolName)
 	}
@@ -168,10 +224,10 @@ func (b *Backup) OpenSnapshot(snapshotName, volumeName string) error {
 	}
 	b.initiator = i
 
-	b.log.Infof("Opening NVMe device %v", b.initiator.Endpoint)
-	devFh, err := os.OpenFile(b.initiator.Endpoint, os.O_RDONLY, 0666)
+	b.log.Infof("Opening NVMe device %v", b.initiator.Endpoint())
+	devFh, err := openFile(b.initiator.Endpoint(), os.O_RDONLY, 0666)
 	if err != nil {
-		return errors.Wrapf(err, "failed to open NVMe device %v for snapshot lvol bdev %v", b.initiator.Endpoint, lvolName)
+		return errors.Wrapf(err, "failed to open NVMe device %v for snapshot lvol bdev %v", b.initiator.Endpoint(), lvolName)
 	}
 	b.devFh = devFh
 
@@ -222,24 +278,84 @@ func (b *Backup) CloseSnapshot(snapshotName, volumeName string) error {
 	b.Lock()
 	defer b.Unlock()
 
-	b.log.Infof("Closing NVMe device %v", b.initiator.Endpoint)
-	if err := b.devFh.Close(); err != nil {
-		return errors.Wrapf(err, "failed to close NVMe device %v", b.initiator.Endpoint)
+	var errs []error
+	endpoint := getDeviceEndpoint(b.initiator, b.devFh)
+
+	var lvolName string
+	if b.replica != nil {
+		lvolName = GetReplicaSnapshotLvolName(b.replica.Name, snapshotName)
 	}
 
-	b.log.Info("Stopping NVMe initiator")
-	if _, err := b.initiator.Stop(nil, true, true, true); err != nil {
-		return errors.Wrapf(err, "failed to stop NVMe initiator")
+	if b.devFh != nil {
+		if endpoint != "" {
+			b.log.Infof("Closing NVMe device %v", endpoint)
+		} else {
+			b.log.Info("Closing NVMe device")
+		}
+		if err := b.devFh.Close(); err != nil {
+			if endpoint != "" {
+				errs = append(errs, errors.Wrapf(err, "failed to close NVMe device %v", endpoint))
+			} else {
+				errs = append(errs, errors.Wrap(err, "failed to close NVMe device"))
+			}
+		}
 	}
 
-	b.log.Info("Unexposing snapshot lvol bdev")
-	lvolName := GetReplicaSnapshotLvolName(b.replica.Name, snapshotName)
-	err := b.spdkClient.StopExposeBdev(helpertypes.GetNQN(lvolName))
-	if err != nil {
-		return errors.Wrapf(err, "failed to unexpose snapshot lvol bdev %v", lvolName)
+	if b.initiator != nil {
+		b.log.Info("Stopping NVMe initiator")
+		if _, err := b.initiator.Stop(nil, true, true, true); err != nil {
+			errs = append(errs, errors.Wrapf(err, "failed to stop NVMe initiator"))
+		}
 	}
 
+	if lvolName != "" {
+		b.log.Info("Unexposing snapshot lvol bdev")
+		if err := backupStopExposeBdev(b.spdkClient, helpertypes.GetNQN(lvolName)); err != nil {
+			errs = append(errs, errors.Wrapf(err, "failed to unexpose snapshot lvol bdev %v", lvolName))
+		}
+	}
+
+	b.releaseHeavyResourcesLocked()
+	b.markTerminalHandledLocked()
+
+	if len(errs) > 0 {
+		return errors.Errorf("CloseSnapshot encountered %d error(s): %v", len(errs), errs)
+	}
 	return nil
+}
+
+// markTerminalHandledLocked fires the onTerminal callback exactly once
+// after all heavy resources have been released by releaseHeavyResourcesLocked.
+// It relies on CloseSnapshot always being called (via defer) by the
+// backupstore library after the backup goroutine exits.
+func (b *Backup) markTerminalHandledLocked() {
+	if !isBackupTerminalState(b.State) || b.terminalSeen {
+		return
+	}
+
+	b.terminalSeen = true
+	if b.terminalAt.IsZero() {
+		b.terminalAt = time.Now()
+	}
+	if b.onTerminal != nil {
+		go b.onTerminal()
+	}
+}
+
+func (b *Backup) releaseHeavyResourcesLocked() {
+	if b.portAllocator != nil && b.Port != 0 {
+		if err := b.portAllocator.ReleaseRange(b.Port, b.Port); err != nil {
+			b.log.WithError(err).Warnf("Failed to release port %v", b.Port)
+		}
+		b.portAllocator = nil
+	}
+	b.fragmap = nil
+	b.initiator = nil
+	b.devFh = nil
+	b.executor = nil
+	b.subsystemNQN = ""
+	b.controllerName = ""
+	b.replica = nil
 }
 
 // UpdateBackupStatus updates the backup status. The state is first-respected, but if
@@ -248,6 +364,11 @@ func (b *Backup) CloseSnapshot(snapshotName, volumeName string) error {
 func (b *Backup) UpdateBackupStatus(snapshotName, volumeName string, state string, progress int, url string, errString string) error {
 	b.Lock()
 	defer b.Unlock()
+
+	if isBackupTerminalState(b.State) {
+		b.log.Warnf("Backup %s for volume %s is already terminal in state %s, skipping status update", b.Name, b.VolumeName, b.State)
+		return nil
+	}
 
 	b.State = btypes.ProgressState(state)
 	b.Progress = progress
@@ -262,7 +383,15 @@ func (b *Backup) UpdateBackupStatus(snapshotName, volumeName string, state strin
 		}
 	}
 
+	if isBackupTerminalState(b.State) && b.terminalAt.IsZero() {
+		b.terminalAt = time.Now()
+	}
+
 	return nil
+}
+
+func isBackupTerminalState(state btypes.ProgressState) bool {
+	return state == btypes.ProgressStateComplete || state == btypes.ProgressStateError
 }
 
 func (b *Backup) newFragmap() (*Fragmap, error) {
