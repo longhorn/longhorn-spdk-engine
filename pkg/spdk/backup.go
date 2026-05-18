@@ -23,6 +23,7 @@ import (
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
 
+	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 )
 
@@ -208,8 +209,20 @@ func (b *Backup) CompareSnapshot(snapshotName, compareSnapshotName, volumeName s
 	return b.constructMappings(blockSize), nil
 }
 
-// ReadSnapshot reads the data from the block device exposed by NVMe/TCP TCP
+// ReadSnapshot reads the data from the block device exposed by NVMe/TCP TCP.
+// It checks replica health before reading so that the backup fails naturally
+// through backupstore's error path when the replica is no longer running,
+// matching v1 behavior where killing the replica process stops the backup.
 func (b *Backup) ReadSnapshot(snapshotName, volumeName string, offset int64, data []byte) error {
+	b.replica.RLock()
+	replicaState := b.replica.State
+	replicaName := b.replica.Name
+	b.replica.RUnlock()
+
+	if replicaState != types.InstanceStateRunning {
+		return fmt.Errorf("replica %s is in %s state", replicaName, replicaState)
+	}
+
 	b.Lock()
 	defer b.Unlock()
 
@@ -249,17 +262,20 @@ func (b *Backup) UpdateBackupStatus(snapshotName, volumeName string, state strin
 	b.Lock()
 	defer b.Unlock()
 
+	if b.State == btypes.ProgressStateComplete || b.State == btypes.ProgressStateError {
+		b.log.Warnf("Backup of volume %v snapshot %v already completed or failed, skip the status update", b.VolumeName, b.SnapshotName)
+		return nil
+	}
+
 	b.State = btypes.ProgressState(state)
 	b.Progress = progress
 	b.BackupURL = url
 	b.Error = errString
 
-	if b.Progress == 100 {
+	if b.Error != "" {
+		b.State = btypes.ProgressStateError
+	} else if b.Progress == 100 {
 		b.State = btypes.ProgressStateComplete
-	} else {
-		if b.Error != "" {
-			b.State = btypes.ProgressStateError
-		}
 	}
 
 	return nil
