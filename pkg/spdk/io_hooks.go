@@ -3,9 +3,10 @@ package spdk
 import (
 	"os"
 
+	"github.com/longhorn/go-spdk-helper/pkg/initiator"
+
 	commonnet "github.com/longhorn/go-common-libs/net"
 	commonns "github.com/longhorn/go-common-libs/ns"
-	"github.com/longhorn/go-spdk-helper/pkg/initiator"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"

@@ -17,9 +17,9 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/longhorn/backupstore"
-	btypes "github.com/longhorn/backupstore/types"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
+	btypes "github.com/longhorn/backupstore/types"
 	butil "github.com/longhorn/backupstore/util"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
