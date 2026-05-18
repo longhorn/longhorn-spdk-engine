@@ -177,26 +177,29 @@ func (b *Backup) OpenSnapshot(snapshotName, volumeName string) (err error) {
 		if b.devFh != nil {
 			if errClose := b.devFh.Close(); errClose != nil {
 				b.log.WithError(errClose).Warnf("Failed to close NVMe device %v during backup open cleanup", b.devFh.Name())
+			} else {
+				b.devFh = nil
 			}
-			b.devFh = nil
 		}
 
 		if b.initiator != nil {
 			if _, stopErr := b.initiator.Stop(nil, true, true, true); stopErr != nil {
 				b.log.WithError(stopErr).Warnf("Failed to stop NVMe initiator for snapshot lvol bdev %v during backup open cleanup", lvolName)
+			} else {
+				b.initiator = nil
 			}
-			b.initiator = nil
 		}
 
 		if exposed {
 			if stopErr := backupStopExposeBdev(b.spdkClient, helpertypes.GetNQN(lvolName)); stopErr != nil {
 				b.log.WithError(stopErr).Warnf("Failed to unexpose snapshot lvol bdev %v during backup open cleanup", lvolName)
+			} else {
+				b.subsystemNQN = ""
+				b.controllerName = ""
 			}
 		}
 
 		b.fragmap = nil
-		b.subsystemNQN = ""
-		b.controllerName = ""
 	}()
 
 	b.replica.Lock()
@@ -311,6 +314,8 @@ func (b *Backup) CloseSnapshot(snapshotName, volumeName string) error {
 			} else {
 				errs = append(errs, errors.Wrap(err, "failed to close NVMe device"))
 			}
+		} else {
+			b.devFh = nil
 		}
 	}
 
@@ -318,6 +323,8 @@ func (b *Backup) CloseSnapshot(snapshotName, volumeName string) error {
 		b.log.Info("Stopping NVMe initiator")
 		if _, err := b.initiator.Stop(nil, true, true, true); err != nil {
 			errs = append(errs, errors.Wrapf(err, "failed to stop NVMe initiator"))
+		} else {
+			b.initiator = nil
 		}
 	}
 
@@ -325,11 +332,16 @@ func (b *Backup) CloseSnapshot(snapshotName, volumeName string) error {
 		b.log.Info("Unexposing snapshot lvol bdev")
 		if err := backupStopExposeBdev(b.spdkClient, helpertypes.GetNQN(lvolName)); err != nil {
 			errs = append(errs, errors.Wrapf(err, "failed to unexpose snapshot lvol bdev %v", lvolName))
+		} else {
+			b.subsystemNQN = ""
+			b.controllerName = ""
 		}
 	}
 
-	b.releaseHeavyResourcesLocked()
-	b.markTerminalHandledLocked()
+	errs = append(errs, b.releaseHeavyResourcesLocked()...)
+	if len(errs) == 0 && !b.hasActiveSnapshotResourcesLocked() {
+		b.markTerminalHandledLocked()
+	}
 
 	if len(errs) > 0 {
 		return errors.Errorf("CloseSnapshot encountered %d error(s): %v", len(errs), errs)
@@ -355,20 +367,34 @@ func (b *Backup) markTerminalHandledLocked() {
 	}
 }
 
-func (b *Backup) releaseHeavyResourcesLocked() {
+func (b *Backup) releaseHeavyResourcesLocked() (errs []error) {
+	// Only release the port when all resources that depend on it have been
+	// cleaned up. If the NVMe-oF target is still exposed (subsystemNQN != "")
+	// or the kernel-side initiator/device is still connected, releasing the
+	// port risks reuse while the old target is still active.
 	if b.portAllocator != nil && b.Port != 0 {
-		if err := b.portAllocator.ReleaseRange(b.Port, b.Port); err != nil {
-			b.log.WithError(err).Warnf("Failed to release port %v", b.Port)
+		if b.subsystemNQN != "" || b.initiator != nil || b.devFh != nil {
+			b.log.Warnf("Skipping port %v release: resources still active (subsystemNQN=%q, initiator=%v, devFh=%v)",
+				b.Port, b.subsystemNQN, b.initiator != nil, b.devFh != nil)
+		} else {
+			if err := b.portAllocator.ReleaseRange(b.Port, b.Port); err != nil {
+				b.log.WithError(err).Warnf("Failed to release port %v", b.Port)
+				errs = append(errs, errors.Wrapf(err, "failed to release backup port %v", b.Port))
+			} else {
+				b.portAllocator = nil
+			}
 		}
-		b.portAllocator = nil
 	}
 	b.fragmap = nil
-	b.initiator = nil
-	b.devFh = nil
 	b.executor = nil
-	b.subsystemNQN = ""
-	b.controllerName = ""
-	b.replica = nil
+	if !b.hasActiveSnapshotResourcesLocked() {
+		b.replica = nil
+	}
+	return errs
+}
+
+func (b *Backup) hasActiveSnapshotResourcesLocked() bool {
+	return (b.portAllocator != nil && b.Port != 0) || b.subsystemNQN != "" || b.initiator != nil || b.devFh != nil
 }
 
 // UpdateBackupStatus updates the backup status. The state is first-respected, but if

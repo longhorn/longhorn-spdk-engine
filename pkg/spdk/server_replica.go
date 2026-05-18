@@ -796,10 +796,25 @@ func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCre
 
 	s.trackBackupLocked(backupName, backup)
 	if err := backup.BackupCreate(config); err != nil {
-		s.removeBackupLocked(backupName)
 		backup.Lock()
 		backup.releaseHeavyResourcesLocked()
-		backup.Unlock()
+		if backup.hasActiveSnapshotResourcesLocked() {
+			// Resources (NVMe-oF target, initiator, or port) are still
+			// active after a partial rollback failure.  Keep the backup
+			// in the map so it remains discoverable for monitoring and
+			// future prune/retry, and mark it as a terminal error.
+			backup.State = btypes.ProgressStateError
+			backup.Error = err.Error()
+			if backup.terminalAt.IsZero() {
+				backup.terminalAt = time.Now()
+			}
+			backup.markTerminalHandledLocked()
+			backup.log.Warnf("Backup %v creation failed with resources still active; keeping in map for observability", backupName)
+			backup.Unlock()
+		} else {
+			backup.Unlock()
+			s.removeBackupLocked(backupName)
+		}
 		err = errors.Wrapf(err, "failed to create backup %v for volume %v", backupName, req.VolumeName)
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "%v", err)
 	}
@@ -859,7 +874,7 @@ func (s *Server) pruneRetainedBackupsLocked() {
 		var entries []terminalEntry
 		for name, backup := range s.backupMap {
 			backup.Lock()
-			if backup.State == state && backup.terminalSeen {
+			if backup.State == state && backup.terminalSeen && !backup.hasActiveSnapshotResourcesLocked() {
 				entries = append(entries, terminalEntry{name, backup.terminalAt})
 			}
 			backup.Unlock()
