@@ -6,18 +6,19 @@ import (
 	"os"
 	"time"
 
-	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
-	commonns "github.com/longhorn/go-common-libs/ns"
 	"github.com/sirupsen/logrus"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/longhorn/go-spdk-helper/pkg/initiator"
+
+	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
+	commonns "github.com/longhorn/go-common-libs/ns"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
 	safelog "github.com/longhorn/longhorn-spdk-engine/pkg/log"
-
-	. "gopkg.in/check.v1"
 )
 
 type fakeNVMeInitiator struct {
