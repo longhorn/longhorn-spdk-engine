@@ -224,6 +224,9 @@ func (b *Backup) OpenSnapshot(snapshotName, volumeName string) (err error) {
 		return errors.Wrapf(err, "failed to create NVMe initiator for snapshot lvol bdev %v", lvolName)
 	}
 	if _, err := i.StartNvmeTCPInitiator(b.IP, strconv.Itoa(int(b.Port)), false, true); err != nil {
+		if _, stopErr := i.Stop(nil, true, true, true); stopErr != nil {
+			b.log.WithError(stopErr).Warnf("Failed to stop partially-started NVMe initiator for snapshot lvol bdev %v", lvolName)
+		}
 		return errors.Wrapf(err, "failed to start NVMe initiator for snapshot lvol bdev %v", lvolName)
 	}
 	b.initiator = i
