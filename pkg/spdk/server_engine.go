@@ -399,7 +399,7 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 		frontendSuspendResumeWrapper = buildGRPCReplicaAddFrontendSuspendResumeWrapper(efName, efAddress, log, s.newServiceClient)
 	}
 
-	if err := e.ReplicaAdd(spdkClient, req.ReplicaName, req.ReplicaAddress, req.FastSync, frontendSuspendResumeWrapper); err != nil {
+	if err := e.ReplicaAdd(spdkClient, req.ReplicaName, req.ReplicaAddress, req.FastSync, req.LinkedCloneSrcReplicaName, req.LinkedCloneSrcEngineName, req.LinkedCloneSrcEngineAddress, frontendSuspendResumeWrapper); err != nil {
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to add replica %s to engine %s: %v", req.ReplicaName, req.EngineName, err)
 	}
 	return &emptypb.Empty{}, nil
