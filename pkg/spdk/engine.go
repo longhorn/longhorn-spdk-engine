@@ -815,7 +815,7 @@ type replicaAddFrontendSuspendResumeWrapper func(work func() error) error
 //	 11. If finish returns error: mark dst replica ERR. SPDK resource cleanup is NOT retried —
 //	     it is the responsibility of the ReplicaAdder (mock should call Real.ReplicaAddFinish()
 //	     before returning error) or r.Delete() when the replica is subsequently removed.
-func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string, fastSync bool, frontendSuspendResumeWrapper replicaAddFrontendSuspendResumeWrapper) (err error) {
+func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstReplicaAddress string, fastSync bool, linkedCloneSrcReplicaName, linkedCloneSrcEngineName, linkedCloneSrcEngineAddress string, frontendSuspendResumeWrapper replicaAddFrontendSuspendResumeWrapper) (err error) {
 	updateRequired := false
 
 	e.Lock()
@@ -915,7 +915,7 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 		var startEngineErr error
 		var startUpdateRequired bool
 		rebuildingSnapshotList, startUpdateRequired, startEngineErr, setupErr = e.replicaAddStart(spdkClient,
-			srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress)
+			srcReplicaServiceCli, dstReplicaServiceCli, srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, linkedCloneSrcReplicaName, linkedCloneSrcEngineName, linkedCloneSrcEngineAddress)
 		updateRequired = updateRequired || startUpdateRequired
 		if startEngineErr != nil {
 			engineErr = startEngineErr
@@ -974,7 +974,7 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 //   - err: non-nil for replica-related operation errors
 func (e *Engine) replicaAddStart(spdkClient *spdkclient.Client,
 	srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient,
-	srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string,
+	srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress, linkedCloneSrcReplicaName, linkedCloneSrcEngineName, linkedCloneSrcEngineAddress string,
 ) (rebuildingSnapshotList []*api.Lvol, startUpdateRequired bool, engineErr, err error) {
 	snapshotName := GenerateRebuildingSnapshotName()
 	opts := &api.SnapshotOptions{
@@ -1003,7 +1003,7 @@ func (e *Engine) replicaAddStart(spdkClient *spdkclient.Client,
 	}
 
 	// The destination replica attaches the source replica exposed snapshot as the external snapshot then create a head based on it.
-	dstHeadLvolAddress, err := dstReplicaServiceCli.ReplicaRebuildingDstStart(dstReplicaName, srcReplicaName, srcReplicaAddress, snapshotName, externalSnapshotAddress, rebuildingSnapshotList)
+	dstHeadLvolAddress, err := dstReplicaServiceCli.ReplicaRebuildingDstStart(dstReplicaName, srcReplicaName, srcReplicaAddress, snapshotName, externalSnapshotAddress, linkedCloneSrcReplicaName, linkedCloneSrcEngineName, linkedCloneSrcEngineAddress, rebuildingSnapshotList)
 	if err != nil {
 		return nil, startUpdateRequired, nil, err
 	}
