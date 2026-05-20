@@ -3915,8 +3915,16 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 	}
 
 	// linked the root snapshot to the entry point of the clone src replica
-	if r.rebuildingDstCache.linkedCloneSrcReplicaName == "" {
+	if r.rebuildingDstCache.linkedCloneSrcReplicaName == "" &&
+		r.rebuildingDstCache.linkedCloneSrcEngineName == "" &&
+		r.rebuildingDstCache.linkedCloneSrcEngineAddress == "" {
 		return nil
+	}
+	if r.rebuildingDstCache.linkedCloneSrcReplicaName == "" ||
+		r.rebuildingDstCache.linkedCloneSrcEngineName == "" ||
+		r.rebuildingDstCache.linkedCloneSrcEngineAddress == "" {
+		return fmt.Errorf("replica %s has partial linked-clone src fields in rebuilding cache: replicaName=%q engineName=%q engineAddress=%q",
+			r.Name, r.rebuildingDstCache.linkedCloneSrcReplicaName, r.rebuildingDstCache.linkedCloneSrcEngineName, r.rebuildingDstCache.linkedCloneSrcEngineAddress)
 	}
 
 	linkedCloneSrcEngineServiceCli, err := GetServiceClient(r.rebuildingDstCache.linkedCloneSrcEngineAddress)
