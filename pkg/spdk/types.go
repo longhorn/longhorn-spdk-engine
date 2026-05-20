@@ -347,6 +347,18 @@ func GetSnapshotNameFromCloneEntrypointLvolName(replicaName, epLvolName string) 
 	return strings.TrimPrefix(epLvolName, GetCloneEntrypointLvolNamePrefix(replicaName))
 }
 
+func GetSnapshotNameFromCloneEntrypointLvolNameWithoutReplicaName(epLvolName string) (string, error) {
+	sepIdx := strings.Index(epLvolName, cloneEntrypointLvolSeparator)
+	if sepIdx < 0 {
+		return "", fmt.Errorf("invalid clone entrypoint name %q: missing %q separator", epLvolName, cloneEntrypointLvolSeparator)
+	}
+	snapshotName := epLvolName[sepIdx+len(cloneEntrypointLvolSeparator):]
+	if snapshotName == "" {
+		return "", fmt.Errorf("invalid clone entrypoint name %q: no content after %q separator", epLvolName, cloneEntrypointLvolSeparator)
+	}
+	return snapshotName, nil
+}
+
 func GetSourceReplicaNameFromCloneEntrypointLvolName(epLvolName string) string {
 	idx := strings.Index(epLvolName, cloneEntrypointLvolSeparator)
 	if idx < 0 {
