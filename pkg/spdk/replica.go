@@ -3710,6 +3710,11 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 		if types.IsBackingImageSnapLvolName(lvolName) {
 			continue
 		}
+		// Clone entrypoints are owned by their source replica, not by this dst replica.
+		// Deleting them here could break other healthy clone replicas sharing the same entrypoint.
+		if IsCloneEntrypointLvol(lvolName) {
+			continue
+		}
 		if lvolName == r.Name {
 			continue
 		}
@@ -3972,6 +3977,11 @@ func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client) error
 		}
 		for lvolName, lvol := range bdevLvolMap {
 			if types.IsBackingImageSnapLvolName(lvolName) {
+				continue
+			}
+			// Clone entrypoints are owned by their source replica, not by this dst replica.
+			// Deleting them here could break other healthy clone replicas sharing the same entrypoint.
+			if IsCloneEntrypointLvol(lvolName) {
 				continue
 			}
 			if lvolName == r.Name || IsRebuildingLvol(lvolName) || IsReplicaExpiredLvol(r.Name, lvolName) {
