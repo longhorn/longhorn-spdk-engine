@@ -143,6 +143,15 @@ type RebuildingDstCache struct {
 	externalSnapshotName     string
 	externalSnapshotBdevName string
 
+	// linkedCloneSrcReplicaName is the name of the source replica on the same LVS that
+	// this DST replica should be linked cloned from.
+	linkedCloneSrcReplicaName string
+	// linkedCloneSrcEngineName is the name of the engine that owns the source replica.
+	linkedCloneSrcEngineName string
+	// linkedCloneSrcEngineAddress is the gRPC address of the engine that owns the source
+	// replica, used to verify the source replica's mode before serving as a clone source.
+	linkedCloneSrcEngineAddress string
+
 	// rebuildingSnapshotMap is map[<snapshot name>]
 	rebuildingSnapshotMap map[string]*api.Lvol
 	rebuildingSize        uint64
@@ -632,7 +641,7 @@ func (r *Replica) syncCloneReplicaInfo(spdkClient *spdkclient.Client, bdevLvolMa
 		r.log.Warnf("Clone replica chain root parent %s points directly to source snapshot instead of entrypoint %s, attempting repair",
 			actualParent, r.cloneEntrypointLvolName)
 
-		if err := r.repairCloneEntrypoint(spdkClient, actualParent, srcSnapshotName); err != nil {
+		if err := r.repairCloneEntrypoint(spdkClient, srcSnapshotName); err != nil {
 			return errors.Wrapf(err, "failed to repair clone entrypoint for this clone replica when it directly use the source snapshot without the entrypoint as isolation")
 		}
 		return
@@ -647,7 +656,7 @@ func (r *Replica) syncCloneReplicaInfo(spdkClient *spdkclient.Client, bdevLvolMa
 // repairCloneEntrypoint recreates the missing entrypoint by asking the source
 // replica (via gRPC) to ensure the entrypoint exists, then reparents the clone
 // replica's chain root to the entrypoint.
-func (r *Replica) repairCloneEntrypoint(spdkClient *spdkclient.Client, srcSnapshotLvolName, srcSnapshotName string) error {
+func (r *Replica) repairCloneEntrypoint(spdkClient *spdkclient.Client, srcSnapshotName string) error {
 	if spdkClient == nil {
 		return fmt.Errorf("cannot repair clone entrypoint without SPDK client")
 	}
@@ -2822,6 +2831,20 @@ func createCloneEntrypointLvol(spdkClient *spdkclient.Client, log *safelog.SafeL
 	return nil
 }
 
+// findAncestorCloneEntrypointName scans the rebuilding snapshot map to find the ancestor snapshot
+// (the one whose parent is not another snapshot in the map) and returns its parent name if it is
+// a clone entrypoint lvol.  This is used in RebuildingDstFinish to detect when the DST is being
+// rebuilt as a linked-clone replica.
+func (r *Replica) findAncestorCloneEntrypointName() string {
+	snapshotMap := r.rebuildingDstCache.rebuildingSnapshotMap
+	for _, snap := range snapshotMap {
+		if IsCloneEntrypointLvol(snap.Parent) {
+			return snap.Parent
+		}
+	}
+	return ""
+}
+
 // syncCloneEntrypoints refreshes cloneEntrypointMap from current SPDK state
 // and removes entrypoints that no longer have any clone replicas pointing to them.
 func (r *Replica) syncCloneEntrypoints(spdkClient *spdkclient.Client, bdevLvolMap map[string]*spdktypes.BdevInfo) {
@@ -3280,6 +3303,8 @@ func (r *Replica) RebuildingSrcShallowCopyStart(spdkClient *spdkclient.Client, s
 	if shallowCopyOpID, err = spdkClient.BdevLvolStartShallowCopy(snapLvol.UUID, r.rebuildingSrcCache.dstRebuildingBdevName); err != nil {
 		return err
 	}
+	log.Infof("Rebuilding src replica started snapshot %s(%s)(%s) shallow copy %v to dst replica rebuilding bdev %s", snapshotName, snapLvol.Alias, snapLvol.UUID, shallowCopyOpID, r.rebuildingSrcCache.dstRebuildingBdevName)
+
 	r.rebuildingSrcCache.shallowCopySnapshotName = snapshotName
 	r.rebuildingSrcCache.shallowCopyOpID = shallowCopyOpID
 	r.rebuildingSrcCache.shallowCopyStatus = ShallowCopyStatus{}
@@ -3288,8 +3313,6 @@ func (r *Replica) RebuildingSrcShallowCopyStart(spdkClient *spdkclient.Client, s
 	if _, err = r.rebuildingSrcShallowCopyStatusUpdateAndHandlingNoLock(spdkClient); err != nil {
 		return err
 	}
-
-	log.Infof("Rebuilding src replica started snapshot %s(%s)(%s) shallow copy %v to dst replica rebuilding bdev %s", snapshotName, snapLvol.Alias, snapLvol.UUID, shallowCopyOpID, r.rebuildingSrcCache.dstRebuildingBdevName)
 
 	return
 }
@@ -3543,7 +3566,7 @@ func (r *Replica) RebuildingSrcShallowCopyCheck(snapshotName string) (status *sp
 // RebuildingDstStart asks the dst replica to create a new head lvol based on the external snapshot of the src replica and blindly expose it as a NVMf bdev.
 // It returns the new head lvol address <IP>:<Port>.
 // Notice that input `externalSnapshotAddress` is the alias of the external snapshot lvol if src and dst have on the same IP, otherwise it's the NVMf address of the external snapshot lvol.
-func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaName, srcReplicaAddress, externalSnapshotName, externalSnapshotAddress string, rebuildingSnapshotList []*api.Lvol) (address string, err error) {
+func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaName, srcReplicaAddress, externalSnapshotName, externalSnapshotAddress, linkedCloneSrcReplicaName, linkedCloneSrcEngineName, linkedCloneSrcEngineAddress string, rebuildingSnapshotList []*api.Lvol) (address string, err error) {
 	updateRequired := false
 
 	r.Lock()
@@ -3589,6 +3612,9 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	}
 	r.rebuildingDstCache.srcReplicaName = srcReplicaName
 	r.rebuildingDstCache.srcReplicaAddress = srcReplicaAddress
+	r.rebuildingDstCache.linkedCloneSrcReplicaName = linkedCloneSrcReplicaName
+	r.rebuildingDstCache.linkedCloneSrcEngineName = linkedCloneSrcEngineName
+	r.rebuildingDstCache.linkedCloneSrcEngineAddress = linkedCloneSrcEngineAddress
 	for _, apiLvol := range rebuildingSnapshotList {
 		r.rebuildingDstCache.rebuildingSnapshotMap[apiLvol.Name] = apiLvol
 		r.rebuildingDstCache.rebuildingSize += apiLvol.ActualSize
@@ -3779,6 +3805,19 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 			}
 		}
 
+		// Always perform cleanup to disconnect the external snapshot NVMe controller.
+		// Without this, subsequent ReplicaDelete would trigger bdev_nvme_detach_controller
+		// which can hang on same-node NVMe-oF connections.
+		_ = r.doCleanupForRebuildingDst(spdkClient)
+
+		// Mark completion only after cleanup so observers always see the final
+		// state (Complete or cleared) rather than Complete followed by "".
+		if err == nil {
+			r.rebuildingDstCache.processingState = types.ProgressStateComplete
+			r.rebuildingDstCache.rebuildingState = types.ProgressStateComplete
+			r.lastRebuildingAt = time.Now()
+		}
+
 		// Mark the rebuilding as complete after construction done
 		r.isRebuilding = false
 
@@ -3789,34 +3828,25 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 		return fmt.Errorf("invalid chain length %d for dst replica %v rebuilding finish", len(r.ActiveChain), r.Name)
 	}
 
-	// Switch from the external snapshot to use rebuilt snapshots
-	var setParentErr error
-	if r.rebuildingDstCache.rebuildingError == "" {
-		// Probably this lvol is the head
-		firstLvolAfterRebuilding := r.ActiveChain[1]
-		if firstLvolAfterRebuilding == nil {
-			return fmt.Errorf("cannot find the head or the first snapshot since rebuilding start for replica %s rebuilding finish", r.Name)
-		}
-		if _, setParentErr = spdkClient.BdevLvolSetParent(firstLvolAfterRebuilding.Alias, spdktypes.GetLvolAlias(r.LvsName, GetReplicaSnapshotLvolName(r.Name, r.rebuildingDstCache.externalSnapshotName))); setParentErr != nil {
-			r.log.WithError(setParentErr).Errorf("Rebuilding dst replica %s failed to set parent, will continue with cleanup", r.Name)
-		} else {
-			firstLvolAfterRebuilding.Parent = GetReplicaSnapshotLvolName(r.Name, r.rebuildingDstCache.externalSnapshotName)
-		}
-
-		if r.rebuildingDstCache.processedSnapshotsSize != r.rebuildingDstCache.rebuildingSize {
-			r.log.Warnf("Rebuilding dst replica detected that the rebuilding spec size %d does not match the total processed snapshots size %d when during the dst rebuilding finish", r.rebuildingDstCache.rebuildingSize, r.rebuildingDstCache.processedSnapshotsSize)
-			r.rebuildingDstCache.processedSnapshotsSize = r.rebuildingDstCache.rebuildingSize
-		}
+	if r.rebuildingDstCache.rebuildingError != "" {
+		return errors.New(r.rebuildingDstCache.rebuildingError)
 	}
 
-	// Always perform cleanup to disconnect the external snapshot NVMe controller.
-	// Without this, subsequent ReplicaDelete would trigger bdev_nvme_detach_controller
-	// which can hang on same-node NVMe-oF connections.
-	_ = r.doCleanupForRebuildingDst(spdkClient)
+	// Switch from the external snapshot to use rebuilt snapshots
+	// Probably this lvol is the head
+	firstLvolAfterRebuilding := r.ActiveChain[1]
+	if firstLvolAfterRebuilding == nil {
+		return fmt.Errorf("cannot find the head or the first snapshot since rebuilding start for replica %s rebuilding finish", r.Name)
+	}
+	parentLvolAlias := spdktypes.GetLvolAlias(r.LvsName, GetReplicaSnapshotLvolName(r.Name, r.rebuildingDstCache.externalSnapshotName))
+	if _, err := spdkClient.BdevLvolSetParent(firstLvolAfterRebuilding.Alias, parentLvolAlias); err != nil {
+		return errors.Wrapf(err, "failed to set parent to lvol %s for the first after-rebuilding lvol %s(%s) during the dst rebuilding finish", parentLvolAlias, firstLvolAfterRebuilding.Alias, firstLvolAfterRebuilding.UUID)
+	}
+	firstLvolAfterRebuilding.Parent = GetReplicaSnapshotLvolName(r.Name, r.rebuildingDstCache.externalSnapshotName)
 
-	// If setParent failed, propagate the error after cleanup is done
-	if setParentErr != nil {
-		return setParentErr
+	if r.rebuildingDstCache.processedSnapshotsSize != r.rebuildingDstCache.rebuildingSize {
+		r.log.Warnf("Rebuilding dst replica detected that the rebuilding spec size %d does not match the total processed snapshots size %d during the dst rebuilding finish", r.rebuildingDstCache.rebuildingSize, r.rebuildingDstCache.processedSnapshotsSize)
+		r.rebuildingDstCache.processedSnapshotsSize = r.rebuildingDstCache.rebuildingSize
 	}
 
 	bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, r.replicaLvolFilter)
@@ -3827,9 +3857,48 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 		return err
 	}
 
-	r.rebuildingDstCache.processingState = types.ProgressStateComplete
-	r.rebuildingDstCache.rebuildingState = types.ProgressStateComplete
-	r.lastRebuildingAt = time.Now()
+	// linked the root snapshot to the entry point of the clone src replica
+	if r.rebuildingDstCache.linkedCloneSrcReplicaName == "" {
+		return nil
+	}
+
+	linkedCloneSrcEngineServiceCli, err := GetServiceClient(r.rebuildingDstCache.linkedCloneSrcEngineAddress)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if errClose := linkedCloneSrcEngineServiceCli.Close(); errClose != nil {
+			r.log.WithError(errClose).Errorf("Replica %v failed to close linked clone src engine %v client with address %v during the dst rebuilding finish"+
+				" during snapshot clone", r.Name, r.rebuildingDstCache.linkedCloneSrcEngineName, r.rebuildingDstCache.linkedCloneSrcEngineAddress)
+		}
+	}()
+
+	linkedCloneSrcEngine, err := linkedCloneSrcEngineServiceCli.EngineGet(r.rebuildingDstCache.linkedCloneSrcEngineName)
+	if err != nil {
+		return err
+	}
+	if linkedCloneSrcEngine.State != types.InstanceStateRunning {
+		return fmt.Errorf("linked clone src engine %s is not running during the dst rebuilding finish", r.rebuildingDstCache.linkedCloneSrcEngineName)
+	}
+	if linkedCloneSrcEngine.ReplicaModeMap[r.rebuildingDstCache.linkedCloneSrcReplicaName] != types.ModeRW {
+		return fmt.Errorf("linked clone src replica %s is not in RW mode during the dst rebuilding finish", r.rebuildingDstCache.linkedCloneSrcReplicaName)
+	}
+
+	r.log.Infof("Rebuilding dst replica %s needs to link the root snapshot to the entry point of the clone src replica %s during the dst rebuilding finish", r.Name, r.rebuildingDstCache.linkedCloneSrcReplicaName)
+
+	rebuildingSrcEpName := r.findAncestorCloneEntrypointName()
+	epParentSnapName, err := GetSnapshotNameFromCloneEntrypointLvolNameWithoutReplicaName(rebuildingSrcEpName)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get the parent snapshot name from the clone entrypoint lvol name %s for dst replica %s rebuilding finish", rebuildingSrcEpName, r.Name)
+	}
+
+	r.isCloneReplica = true
+	r.cloneSourceReplicaName = r.rebuildingDstCache.linkedCloneSrcReplicaName
+	r.cloneEntrypointLvolName = GetCloneEntrypointLvolName(r.cloneSourceReplicaName, epParentSnapName)
+
+	if err := r.repairCloneEntrypoint(spdkClient, epParentSnapName); err != nil {
+		return errors.Wrapf(err, "failed to link the root snapshot to the entry point %s of the clone src replica %s during dst clone replica %s rebuilding finish", r.cloneEntrypointLvolName, r.cloneSourceReplicaName, r.Name)
+	}
 
 	return nil
 }
@@ -3935,6 +4004,9 @@ func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client) error
 	r.rebuildingDstCache.rebuildingSize = 0
 	r.rebuildingDstCache.rebuildingError = ""
 	r.rebuildingDstCache.rebuildingState = ""
+	r.rebuildingDstCache.linkedCloneSrcReplicaName = ""
+	r.rebuildingDstCache.linkedCloneSrcEngineName = ""
+	r.rebuildingDstCache.linkedCloneSrcEngineAddress = ""
 	r.rebuildingDstCache.processedSnapshotList = make([]string, 0)
 	r.rebuildingDstCache.processedSnapshotsSize = 0
 	r.rebuildingDstCache.processingSnapshotName = ""
@@ -3958,11 +4030,8 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 
 	// For the ancestor snapshot of the rebuilding snapshot list, its parent will not record the backing image info.
 	// The parent is also empty when the SRC replica is a linked-clone replica: the ancestor snapshot's parent
-	// is the clone entrypoint lvol, which does not exist on DST (a fresh regular replica). In that case we
-	// treat DST's parent as empty (or as the backing image, if one is present).
-	// TODO: for linked-clone SRC, DST rebuild should set up its own clone entrypoint so that it becomes a
-	// proper linked-clone replica; currently we create a flat base and accept potential data-completeness
-	// issues for volumes with pre-existing data in the source snapshot.
+	// is the clone entrypoint lvol, which does not exist on DST at this point.  The entrypoint parent will
+	// be set after all snapshots are rebuilt (in RebuildingDstFinish), not here.
 	if srcSnapSvcLvol.Parent == "" || IsCloneEntrypointLvol(srcSnapSvcLvol.Parent) {
 		if r.BackingImage != nil {
 			dstSnapshotParentLvolName = r.BackingImage.Name
@@ -4399,9 +4468,9 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 		return fmt.Errorf("cannot find snapshot %s in the rebuilding snapshot list during dst replica %s rebuilding snapshot creation", snapshotName, r.Name)
 	}
 	// Guarantee the snapshot lvol has the correct parent after rebuilding.
-	// When the SRC replica is a linked-clone replica, the ancestor snapshot's parent is the clone
-	// entrypoint lvol, which does not exist on DST (a fresh regular replica). Treat it as empty.
-	// See also the matching comment in rebuildingDstShallowCopyPrepare.
+	// The ancestor snapshot's parent is a clone entrypoint for linked-clone replicas; however the
+	// entrypoint does not exist on DST at this point — it will be set in RebuildingDstFinish.
+	// Treat it the same as an empty parent here so we do not accidentally call BdevLvolDetachParent.
 	dstSnapParentLvolName := ""
 	if srcSnapSvcLvol.Parent == "" || IsCloneEntrypointLvol(srcSnapSvcLvol.Parent) {
 		if r.BackingImage != nil {
