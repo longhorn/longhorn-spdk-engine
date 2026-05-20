@@ -2127,7 +2127,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(replica3.Head.CreationTime, Not(Equals), "")
 			c.Assert(replica3.Head.Parent, Equals, "")
 
-			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync)
+			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync, "")
 			c.Assert(err, IsNil)
 
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
@@ -2921,7 +2921,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(replica3.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica3.PortStart, Not(Equals), int32(0))
 			// Start the 1st rebuilding and wait for the completion
-			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync)
+			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName3, net.JoinHostPort(ip, strconv.Itoa(int(replica3.PortStart))), defaultTestFastSync, "")
 			c.Assert(err, IsNil)
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName3)
 			// While the volume head data written before rebuilding remains
@@ -3019,7 +3019,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(replica4.State, Equals, types.InstanceStateRunning)
 			c.Assert(replica4.PortStart, Not(Equals), int32(0))
 			// Start the 2nd rebuilding and wait for the completion
-			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName4, net.JoinHostPort(ip, strconv.Itoa(int(replica4.PortStart))), defaultTestFastSync)
+			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName4, net.JoinHostPort(ip, strconv.Itoa(int(replica4.PortStart))), defaultTestFastSync, "")
 			c.Assert(err, IsNil)
 			WaitForReplicaRebuildingComplete(c, spdkCli, engineName, replicaName4)
 			// While the volume head data written before rebuilding remains
@@ -3889,7 +3889,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
 			// And start the 1st rebuilding and wait for the completion
-			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))), defaultTestFastSync)
+			err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaName1, net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))), defaultTestFastSync, "")
 			c.Assert(err, IsNil)
 			// The rebuilding should be pretty fast since all existing snapshots and the previous head are there
 			WaitForReplicaRebuildingCompleteTimeout(c, spdkCli, engineName, replicaName1, 300)
@@ -4423,7 +4423,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
 	replicas[replicaNames[1]] = replica2
 	replica2Address := net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
 
-	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync, "")
 	c.Assert(err, IsNil)
 
 	// 8. Wait for Replica Add to Complete
@@ -4590,7 +4590,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	})
 
 	// Call ReplicaAdd (async)
-	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync, "")
 	c.Assert(err, IsNil) // Should be nil as it returns immediately
 
 	waitForReplicaERR(replicaNames[1])
@@ -4630,7 +4630,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 		},
 	})
 
-	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync, "")
 	c.Assert(err, IsNil)
 
 	waitForReplicaERR(replicaNames[1])
@@ -4664,7 +4664,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	}
 	internalEngine.SetReplicaAdder(finishErrMock)
 
-	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync, "")
 	c.Assert(err, IsNil)
 
 	waitForReplicaERR(replicaNames[1])
@@ -4703,7 +4703,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 		}
 	})
 
-	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync, "")
 	c.Assert(err, IsNil)
 
 	// Wait for the Phase 2 hook to fire and report lock status
@@ -4751,7 +4751,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	})
 	internalEngine.SetReplicaAdder(&server.MockReplicaAdder{})
 
-	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync)
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync, "")
 	c.Assert(err, IsNil)
 
 	err = retry.Do(func() error {
@@ -4852,7 +4852,7 @@ func (s *TestSuite) TestSPDKEngineReplicaAddWithoutEngineFrontendInfo(c *C) {
 	replicas[replicaNames[1]] = replica2
 	replica2Address := net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart)))
 
-	err = spdkCli.EngineReplicaAdd(engineName, replicaNames[1], replica2Address, defaultTestFastSync, "", "")
+	err = spdkCli.EngineReplicaAdd(engineName, replicaNames[1], replica2Address, defaultTestFastSync, "", "", "")
 	c.Assert(err, IsNil)
 
 	err = retry.Do(func() error {
