@@ -133,7 +133,7 @@ func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {
 	e.State = lhtypes.InstanceStateRunning
 	e.IsRestoring = true
 
-	err := e.ReplicaAdd(nil, "replica-new", "10.0.0.2:20000", false, nil)
+	err := e.ReplicaAdd(nil, "replica-new", "10.0.0.2:20000", false, "", "", "", nil)
 
 	c.Assert(err, NotNil)
 	c.Assert(strings.Contains(err.Error(), "restore is in progress"), Equals, true)
