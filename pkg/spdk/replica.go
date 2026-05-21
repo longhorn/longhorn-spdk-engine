@@ -669,9 +669,15 @@ func (r *Replica) syncCloneReplicaInfo(spdkClient *spdkclient.Client, bdevLvolMa
 		actualParent, r.cloneEntrypointLvolName, expectedSrcSnapshotLvolName)
 }
 
-// repairCloneEntrypoint recreates the missing entrypoint by asking the source
-// replica (via gRPC) to ensure the entrypoint exists, then reparents the clone
-// replica's chain root to the entrypoint.
+// repairCloneEntrypoint ensures the clone entrypoint exists and is correctly
+// parented to the source snapshot, then reparents the clone replica's chain
+// root to the entrypoint.
+//
+// The dst replica always asks the src replica to ensure the entrypoint via
+// ReplicaSnapshotCloneSrcStart. The src replica owns the snapshot and is
+// responsible for verifying and recreating the entrypoint if it is orphaned
+// (e.g. the snapshot was deleted during a concurrent rebuild). This avoids
+// split-brain: only one side (src) checks and mutates the ep lvol.
 func (r *Replica) repairCloneEntrypoint(spdkClient *spdkclient.Client, srcSnapshotName string) error {
 	if spdkClient == nil {
 		return fmt.Errorf("cannot repair clone entrypoint without SPDK client")
@@ -684,40 +690,37 @@ func (r *Replica) repairCloneEntrypoint(spdkClient *spdkclient.Client, srcSnapsh
 	epLvolName := r.cloneEntrypointLvolName
 	epAlias := spdktypes.GetLvolAlias(r.LvsName, epLvolName)
 
-	// Check if the entrypoint already exists (maybe it was recreated by the source replica)
+	// Always ask the source replica to ensure the entrypoint is valid.
+	// The src replica holds the lock on its own snapshot and cloneEntrypointMap,
+	// so it is the authoritative place to detect and fix an orphaned entrypoint.
+	// Source and clone replicas are co-located on the same node.
+	srcReplicaAddress := net.JoinHostPort(r.IP, strconv.Itoa(types.SPDKServicePort))
+	srcReplicaServiceCli, err := GetServiceClient(srcReplicaAddress)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get service client for source replica %s at %s", r.cloneSourceReplicaName, srcReplicaAddress)
+	}
+	defer func() {
+		if errClose := srcReplicaServiceCli.Close(); errClose != nil {
+			r.log.WithError(errClose).Warnf("Failed to close service client for source replica %s", r.cloneSourceReplicaName)
+		}
+	}()
+
+	if err := srcReplicaServiceCli.ReplicaSnapshotCloneSrcStart(
+		r.cloneSourceReplicaName, srcSnapshotName, r.Name, "",
+		spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE,
+	); err != nil {
+		return errors.Wrapf(err, "failed to ask source replica %s to ensure entrypoint for snapshot %s", r.cloneSourceReplicaName, srcSnapshotName)
+	}
+
+	// Clean up the source replica's snapshotCloningSrcCache entry.
+	// Failure is non-fatal; the next SrcStart call will clean it up.
+	if err := srcReplicaServiceCli.ReplicaSnapshotCloneSrcFinish(r.cloneSourceReplicaName, r.Name); err != nil {
+		r.log.WithError(err).Warnf("Failed to finish clone src for source replica %s after entrypoint repair, proceeding anyway", r.cloneSourceReplicaName)
+	}
+
 	epBdev, err := spdkClient.BdevLvolGetByName(epAlias, 0)
 	if err != nil {
-		// Entrypoint doesn't exist — ask the source replica to create it via gRPC
-		// so it registers the entrypoint in its cloneEntrypointMap.
-		// Source and clone replicas are co-located on the same node.
-		srcReplicaAddress := net.JoinHostPort(r.IP, strconv.Itoa(types.SPDKServicePort))
-		srcReplicaServiceCli, err := GetServiceClient(srcReplicaAddress)
-		if err != nil {
-			return errors.Wrapf(err, "failed to get service client for source replica %s at %s", r.cloneSourceReplicaName, srcReplicaAddress)
-		}
-		defer func() {
-			if errClose := srcReplicaServiceCli.Close(); errClose != nil {
-				r.log.WithError(errClose).Warnf("Failed to close service client for source replica %s", r.cloneSourceReplicaName)
-			}
-		}()
-
-		if err := srcReplicaServiceCli.ReplicaSnapshotCloneSrcStart(
-			r.cloneSourceReplicaName, srcSnapshotName, r.Name, "",
-			spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE,
-		); err != nil {
-			return errors.Wrapf(err, "failed to ask source replica %s to recreate entrypoint for snapshot %s", r.cloneSourceReplicaName, srcSnapshotName)
-		}
-
-		// Clean up the source replica's snapshotCloningSrcCache entry.
-		// Failure is non-fatal; the next SrcStart call will clean it up.
-		if err := srcReplicaServiceCli.ReplicaSnapshotCloneSrcFinish(r.cloneSourceReplicaName, r.Name); err != nil {
-			r.log.WithError(err).Warnf("Failed to finish clone src for source replica %s after entrypoint repair, proceeding anyway", r.cloneSourceReplicaName)
-		}
-
-		epBdev, err = spdkClient.BdevLvolGetByName(epAlias, 0)
-		if err != nil {
-			return errors.Wrapf(err, "failed to look up newly created entrypoint %s", epLvolName)
-		}
+		return errors.Wrapf(err, "failed to look up entrypoint %s after src ensure", epLvolName)
 	}
 
 	// Reparent the clone replica's chain root to the entrypoint using UUID
@@ -2783,14 +2786,40 @@ func (r *Replica) snapshotLinkedCloneSrcStart(spdkClient *spdkclient.Client, sna
 
 	epLvolName := GetCloneEntrypointLvolName(r.Name, snapshotName)
 
-	// Check if the entrypoint already exists
 	epInfo := r.cloneEntrypointMap[epLvolName]
 	if epInfo != nil {
-		if epInfo.CloneReplicas[dstReplicaName] {
-			r.log.Infof("Clone entrypoint %s already has dst replica %s registered", epLvolName, dstReplicaName)
-			return nil
+		// Verify the entrypoint lvol is still correctly parented to the src snapshot.
+		// If the src snapshot was deleted during a concurrent rebuild, SPDK merges its data
+		// into the entrypoint, making it an independent root lvol (BaseSnapshot == "").
+		// Detect this by querying SPDK directly and delete+recreate the orphaned entrypoint.
+		epAlias := spdktypes.GetLvolAlias(r.LvsName, epLvolName)
+		epBdev, err := spdkClient.BdevLvolGetByName(epAlias, 0)
+		if err != nil {
+			// Entrypoint is in the map but missing from SPDK — stale map entry; recreate.
+			r.log.WithError(err).Warnf("Clone entrypoint %s is in map but not found in SPDK; removing stale entry and recreating", epLvolName)
+			delete(r.cloneEntrypointMap, epLvolName)
+			epInfo = nil
+		} else {
+			entrypointParent := ""
+			if epBdev.DriverSpecific.Lvol != nil {
+				entrypointParent = epBdev.DriverSpecific.Lvol.BaseSnapshot
+			}
+			expectedParentLvolName := snapLvolName
+			if entrypointParent != expectedParentLvolName {
+				r.log.Warnf("Clone entrypoint %s has wrong or missing parent (got %q, expected %q); "+
+					"the src snapshot was likely collapsed into it during a concurrent rebuild. "+
+					"Deleting orphaned entrypoint to recreate from current src snapshot.",
+					epLvolName, entrypointParent, expectedParentLvolName)
+				if _, delErr := spdkClient.BdevLvolDelete(epBdev.UUID); delErr != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(delErr) {
+					return errors.Wrapf(delErr, "failed to delete orphaned entrypoint %s", epLvolName)
+				}
+				delete(r.cloneEntrypointMap, epLvolName)
+				epInfo = nil
+			}
 		}
-	} else {
+	}
+
+	if epInfo == nil {
 		// Create the entrypoint: clone the snapshot, snapshot the clone, delete the leftover
 		if err := r.createCloneEntrypoint(spdkClient, snapshotName, snapLvol); err != nil {
 			return err
