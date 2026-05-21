@@ -2092,6 +2092,9 @@ func (e *Engine) snapshotCloneLinkedN(snapshotName string, dstReplicaSrcReplicaP
 	}
 
 	e.log.Infof("Starting linked-clone on %d replicas simultaneously for snapshot %s", len(dstEntries), snapshotName)
+	for _, entry := range dstEntries {
+		e.log.Infof("  dst replica %s (addr %s) <- src replica %s (addr %s)", entry.name, entry.address, entry.srcReplicaName, entry.srcReplicaAddr)
+	}
 
 	e.isCloning = true
 	defer func() { e.isCloning = false }()
