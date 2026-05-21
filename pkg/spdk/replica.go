@@ -456,9 +456,17 @@ func (r *Replica) syncWithBdevLvolMap(spdkClient *spdkclient.Client, bdevLvolMap
 		return nil
 	}
 
-	r.syncCloneEntrypoints(spdkClient, bdevLvolMap)
-	if err := r.syncCloneReplicaInfo(spdkClient, bdevLvolMap); err != nil {
-		return err
+	// Skip clone management while this replica is being rebuilt as DST:
+	// - syncCloneEntrypoints: the replica may be a SRC for other failed replicas
+	//   that will rebuild after this one; auto-deleting entrypoints with 0 SPDK
+	//   children would break those subsequent rebuilds.
+	// - syncCloneReplicaInfo: ActiveChain is in a transitional state until
+	//   RebuildingDstFinish calls construct(); checking now produces false-positive errors.
+	if !r.isRebuilding {
+		r.syncCloneEntrypoints(spdkClient, bdevLvolMap)
+		if err := r.syncCloneReplicaInfo(spdkClient, bdevLvolMap); err != nil {
+			return err
+		}
 	}
 
 	if spdkClient == nil {
