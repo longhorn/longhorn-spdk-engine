@@ -2370,11 +2370,12 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 		r.cloneSourceReplicaName = srcReplicaName
 		r.cloneEntrypointLvolName = GetCloneEntrypointLvolName(srcReplicaName, snapshotName)
 
-		r.log.Infof("Clone dst replica updated clone state from %v to %v", r.snapshotCloningDstCache.cloningState, types.ProgressStateComplete)
+		r.log.Infof("Dst replica starting linked-clone: src replica %s (addr %s), snapshot %s, entrypoint %s", srcReplicaName, srcReplicaAddress, snapshotName, r.cloneEntrypointLvolName)
 		r.snapshotCloningDstCache.cloningState = types.ProgressStateComplete
 		if err := r.SnapshotCloneDstFinish(spdkClient, cloneMode); err != nil {
 			return err
 		}
+		r.log.Infof("Dst replica finished linked-clone: snapshot %s, entrypoint %s set as chain base", snapshotName, r.cloneEntrypointLvolName)
 		// Notify the src replica that the linked-clone dst has finished so it
 		// can clear the in-memory snapshotCloningSrcCache entry.  Without this,
 		// syncCloneEntrypoints would treat the entrypoint as "in-flight"
@@ -2748,6 +2749,7 @@ func (r *Replica) snapshotLinkedCloneSrcStart(spdkClient *spdkclient.Client, sna
 	}
 
 	epLvolName := GetCloneEntrypointLvolName(r.Name, snapshotName)
+	r.log.Infof("Src replica starting linked-clone: snapshot %s, entrypoint %s, dst replica %s", snapshotName, epLvolName, dstReplicaName)
 
 	epInfo := r.cloneEntrypointMap[epLvolName]
 	if epInfo != nil {
@@ -3109,6 +3111,7 @@ func (r *Replica) SnapshotCloneSrcFinish(spdkClient *spdkclient.Client, dstRepli
 	if err := doCleanupForSnapshotCloneSrc(spdkClient, c); err != nil {
 		return err
 	}
+	r.log.Infof("Src replica finishing linked-clone: clearing cache for dst replica %s (snapshot %s)", dstReplicaName, c.snapshotName)
 	delete(r.snapshotCloningSrcCache, dstReplicaName)
 	return nil
 }
@@ -3812,7 +3815,11 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 
 	r.isRebuilding = true
 
-	r.log.Infof("Rebuilding dst replica created a new head %s(%s) based on the external snapshot %s(%s)(%s) from src replica %s for rebuilding start", r.Head.Alias, dstHeadLvolAddress, externalSnapshotName, r.rebuildingDstCache.externalSnapshotBdevName, externalSnapshotAddress, srcReplicaName)
+	if linkedCloneSrcReplicaName != "" {
+		r.log.Infof("Rebuilding dst clone replica created a new head %s(%s) based on the external snapshot %s(%s)(%s) from src replica %s, linked-clone src replica %s (engine %s, addr %s) for rebuilding start", r.Head.Alias, dstHeadLvolAddress, externalSnapshotName, r.rebuildingDstCache.externalSnapshotBdevName, externalSnapshotAddress, srcReplicaName, linkedCloneSrcReplicaName, linkedCloneSrcEngineName, linkedCloneSrcEngineAddress)
+	} else {
+		r.log.Infof("Rebuilding dst replica created a new head %s(%s) based on the external snapshot %s(%s)(%s) from src replica %s for rebuilding start", r.Head.Alias, dstHeadLvolAddress, externalSnapshotName, r.rebuildingDstCache.externalSnapshotBdevName, externalSnapshotAddress, srcReplicaName)
+	}
 
 	return dstHeadLvolAddress, nil
 }
@@ -3956,6 +3963,8 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 	if err := r.repairCloneEntrypoint(spdkClient, epParentSnapName); err != nil {
 		return errors.Wrapf(err, "failed to link the root snapshot to the entry point %s of the clone src replica %s during dst clone replica %s rebuilding finish", r.cloneEntrypointLvolName, r.cloneSourceReplicaName, r.Name)
 	}
+
+	r.log.Infof("Rebuilding dst clone replica %s finished linking: chain root connected to entrypoint %s (src replica %s, engine %s, addr %s, snapshot %s)", r.Name, r.cloneEntrypointLvolName, r.cloneSourceReplicaName, r.rebuildingDstCache.linkedCloneSrcEngineName, r.rebuildingDstCache.linkedCloneSrcEngineAddress, epParentSnapName)
 
 	return nil
 }
