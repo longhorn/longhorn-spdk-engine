@@ -3029,6 +3029,21 @@ func (r *Replica) SnapshotCloneSrcStart(spdkClient *spdkclient.Client, snapshotN
 	r.Lock()
 	defer r.Unlock()
 
+	// The replica must be in a healthy, fully-built state before it can serve
+	// as a clone source.  The engine assigns mode RW only when:
+	//   - r.State == Running (not errored or stopped), and
+	//   - r.isRebuilding == false (not mid-shallow-copy as a rebuild DST)
+	// We cannot query the engine's backends map directly from here, so
+	// these two fields are our best local proxy.  Rejecting here prevents a
+	// WO or error-state replica from being used as a clone source, which
+	// would produce a corrupt or incomplete entrypoint/snapshot chain.
+	if r.State != types.InstanceStateRunning {
+		return fmt.Errorf("src replica %s is not running (state=%v), cannot serve as clone source", r.Name, r.State)
+	}
+	if r.isRebuilding {
+		return fmt.Errorf("src replica %s is currently being rebuilt (WO mode), cannot serve as clone source", r.Name)
+	}
+
 	if c := r.snapshotCloningSrcCache[dstReplicaName]; c != nil {
 		if err := doCleanupForSnapshotCloneSrc(spdkClient, c); err != nil {
 			return err
