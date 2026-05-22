@@ -428,13 +428,6 @@ func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
 		return err
 	}
 
-	return r.syncWithBdevLvolMap(spdkClient, bdevLvolMap)
-}
-
-// syncWithBdevLvolMap is the testable core of Sync(). It dispatches to
-// construct() for Pending replicas, or to the Running-path sync methods
-// otherwise. validateAndUpdate is skipped when spdkClient is nil (unit tests only).
-func (r *Replica) syncWithBdevLvolMap(spdkClient *spdkclient.Client, bdevLvolMap map[string]*spdktypes.BdevInfo) error {
 	if r.State == types.InstanceStatePending {
 		return r.construct(bdevLvolMap)
 	}
@@ -452,16 +445,16 @@ func (r *Replica) syncWithBdevLvolMap(spdkClient *spdkclient.Client, bdevLvolMap
 		return err
 	}
 
-	if spdkClient == nil {
-		return nil
-	}
-
 	subsystemMap, err := GetNvmfSubsystemMap(spdkClient)
 	if err != nil {
 		return err
 	}
 
-	return r.validateAndUpdate(bdevLvolMap, subsystemMap)
+	if err := r.validateAndUpdate(bdevLvolMap, subsystemMap); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // construct build Replica with the SnapshotLvolMap and SnapshotChain from the bdev lvol list.
