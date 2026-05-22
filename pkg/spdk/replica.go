@@ -2460,9 +2460,12 @@ func (r *Replica) monitorSnapshotClone(spdkCli *spdkclient.Client, ctx context.C
 			}
 		}
 
+		r.Lock()
 		if err := r.SnapshotCloneDstFinish(spdkCli, cloneMode); err != nil {
 			r.log.WithError(err).Errorf("Clone dst replica failed to finish snapshot %s cloning", snapshotName)
 		}
+		r.Unlock()
+		r.UpdateCh <- nil
 
 		if cancel != nil {
 			cancel()
@@ -2574,6 +2577,8 @@ func (r *Replica) SnapshotCloneDstStatusCheck() (status *spdkrpc.ReplicaSnapshot
 	}, nil
 }
 
+// SnapshotCloneDstFinish completes snapshot cloning on the destination replica.
+// r.Lock() must be held by the caller.
 func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMode spdkrpc.CloneMode) (err error) {
 	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
 		if r.Head == nil {
@@ -2623,17 +2628,6 @@ func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMod
 		return nil
 	}
 
-	updateRequired := false
-
-	r.Lock()
-	defer func() {
-		r.Unlock()
-
-		if updateRequired {
-			r.UpdateCh <- nil
-		}
-	}()
-
 	if !r.isSnapshotCloning {
 		return fmt.Errorf("replica %s is not in cloning", r.Name)
 	}
@@ -2653,8 +2647,6 @@ func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMod
 				r.ErrorMsg = ""
 			}
 		}
-
-		updateRequired = true
 	}()
 
 	if r.snapshotCloningDstCache.cloningState == types.ProgressStateComplete {
