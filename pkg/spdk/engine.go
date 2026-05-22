@@ -850,6 +850,23 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 		}
 	}
 
+	linkedCloneFieldCount := 0
+	for _, f := range []string{linkedCloneSrcReplicaName, linkedCloneSrcEngineName, linkedCloneSrcEngineAddress} {
+		if f != "" {
+			linkedCloneFieldCount++
+		}
+	}
+	if linkedCloneFieldCount != 0 && linkedCloneFieldCount != 3 {
+		return fmt.Errorf("engine %s replica %s add has partial linked-clone src fields: replicaName=%q engineName=%q engineAddress=%q",
+			e.Name, dstReplicaName, linkedCloneSrcReplicaName, linkedCloneSrcEngineName, linkedCloneSrcEngineAddress)
+	}
+
+	if linkedCloneFieldCount == 3 {
+		if err := e.checkLinkedCloneSrcReplicaMode(linkedCloneSrcEngineName, linkedCloneSrcEngineAddress, linkedCloneSrcReplicaName); err != nil {
+			return err
+		}
+	}
+
 	// engineErr will be set when the engine failed to do any non-recoverable operations, then there is no way to make the engine continue working. Typically, it's related to the frontend suspend or resume failures.
 	// While err means replica-related operation errors. It will fail the current replica add flow.
 	var engineErr error
@@ -1425,6 +1442,32 @@ func (e *Engine) getReplicaAddSrcReplica() (srcReplicaName, srcReplicaAddress st
 	return srcReplicaName, srcReplicaAddress, nil
 }
 
+// checkLinkedCloneSrcReplicaMode verifies that the linked-clone src replica is
+// RW in its engine before starting the rebuild.
+func (e *Engine) checkLinkedCloneSrcReplicaMode(linkedCloneSrcEngineName, linkedCloneSrcEngineAddress, linkedCloneSrcReplicaName string) error {
+	cli, err := GetServiceClient(linkedCloneSrcEngineAddress)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get service client for linked clone src engine %s at %s", linkedCloneSrcEngineName, linkedCloneSrcEngineAddress)
+	}
+	defer func() {
+		if errClose := cli.Close(); errClose != nil {
+			e.log.WithError(errClose).Warnf("Failed to close linked clone src engine %s client during pre-check", linkedCloneSrcEngineName)
+		}
+	}()
+
+	srcEngine, err := cli.EngineGet(linkedCloneSrcEngineName)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get linked clone src engine %s for replica mode pre-check", linkedCloneSrcEngineName)
+	}
+	if srcEngine.State != types.InstanceStateRunning {
+		return fmt.Errorf("linked clone src engine %s is not running (state %v) at replica add start", linkedCloneSrcEngineName, srcEngine.State)
+	}
+	if srcEngine.ReplicaModeMap[linkedCloneSrcReplicaName] != types.ModeRW {
+		return fmt.Errorf("linked clone src replica %s is not in RW mode (mode %v) at replica add start", linkedCloneSrcReplicaName, srcEngine.ReplicaModeMap[linkedCloneSrcReplicaName])
+	}
+	return nil
+}
+
 // getRebuildingSnapshotList fetches the snapshot tree from the src replica and
 // returns the ordered list of snapshots that need to be shallow-copied to the
 // dst replica. It finds the ancestor snapshot (empty parent or backing image
@@ -1907,6 +1950,10 @@ func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress str
 	if err != nil {
 		return err
 	}
+	if srcEngine.State != types.InstanceStateRunning {
+		return fmt.Errorf("engine %s cannot start snapshot %s clone with mode %s since its src engine %s is not running", e.Name, snapshotName, cloneMode, srcEngineName)
+	}
+
 	srcReplicas, err := srcEngineServiceCli.EngineReplicaList(srcEngineName)
 	if err != nil {
 		return err
