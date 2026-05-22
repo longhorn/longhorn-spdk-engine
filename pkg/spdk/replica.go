@@ -432,14 +432,6 @@ func (r *Replica) Sync(spdkClient *spdkclient.Client) (err error) {
 		return r.construct(bdevLvolMap)
 	}
 
-	// SnapshotCloneDstStart sets isSnapshotCloning before BdevLvolSetParent is
-	// called; do not sync until the clone dst finish completes and clears the flag.
-	// For linked-clone this window is always protected by r.Lock(), so this guard
-	// is a belt-and-suspenders safeguard against future refactoring.
-	if r.isSnapshotCloning {
-		return nil
-	}
-
 	r.syncCloneEntrypoints(spdkClient, bdevLvolMap)
 	if err := r.syncCloneReplicaInfo(spdkClient, bdevLvolMap); err != nil {
 		return err
@@ -602,7 +594,7 @@ func (r *Replica) syncCloneReplicaInfo(spdkClient *spdkclient.Client, bdevLvolMa
 		return fmt.Errorf("clone replica ActiveChain[0] name %s does not match expected entrypoint %s",
 			r.ActiveChain[0].Name, r.cloneEntrypointLvolName)
 	}
-
+	
 	rootLvolName := r.ActiveChain[1].Name
 	rootBdev, ok := bdevLvolMap[rootLvolName]
 	if !ok {
@@ -2345,21 +2337,7 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 
 		r.log.Infof("Clone dst replica updated clone state from %v to %v", r.snapshotCloningDstCache.cloningState, types.ProgressStateComplete)
 		r.snapshotCloningDstCache.cloningState = types.ProgressStateComplete
-		if err := r.SnapshotCloneDstFinish(spdkClient, cloneMode); err != nil {
-			return err
-		}
-		// Notify the src replica that the linked-clone dst has finished so it
-		// can clear the in-memory snapshotCloningSrcCache entry.  Without this,
-		// syncCloneEntrypoints would treat the entrypoint as "in-flight"
-		// indefinitely even after the clone has completed.
-		// This is an in-memory-only cleanup on the src side (no SPDK work).
-		if cleanupErr := srcReplicaServiceCli.ReplicaSnapshotCloneSrcFinish(
-			r.snapshotCloningDstCache.srcReplicaName, r.Name); cleanupErr != nil {
-			r.log.WithError(cleanupErr).Warnf("Failed to notify src replica %s of linked-clone finish for dst %s; "+
-				"the src cache will be cleared on the next SnapshotCloneSrcStart",
-				r.snapshotCloningDstCache.srcReplicaName, r.Name)
-		}
-		return nil
+		return r.SnapshotCloneDstFinish(spdkClient, cloneMode)
 	}
 
 	if r.snapshotCloningDstCache.cloningPort == 0 {
@@ -2556,24 +2534,9 @@ func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMod
 			return fmt.Errorf("clone entrypoint lvol name is empty for replica %s linked-clone finish", r.Name)
 		}
 		epAlias := spdktypes.GetLvolAlias(r.LvsName, r.cloneEntrypointLvolName)
-
-		// N replicas may call BdevLvolSetParent concurrently against the same
-		// entrypoint snapshot.  SPDK serialises the reactor, but the metadata
-		// update can still return EBUSY when another BdevLvolSetParent targeting
-		// the same parent is in flight.  Retry with linear back-off to absorb that.
-		const maxSetParentRetries = 10
-		var set bool
-		for i := 0; i < maxSetParentRetries; i++ {
-			var setParentErr error
-			set, setParentErr = spdkClient.BdevLvolSetParent(r.Head.Alias, epAlias)
-			if setParentErr == nil {
-				break
-			}
-			if !strings.Contains(setParentErr.Error(), "busy") || i == maxSetParentRetries-1 {
-				return setParentErr
-			}
-			r.log.WithError(setParentErr).Debugf("BdevLvolSetParent returned busy (attempt %d/%d), retrying", i+1, maxSetParentRetries)
-			time.Sleep(time.Duration(i+1) * 200 * time.Millisecond)
+		set, err := spdkClient.BdevLvolSetParent(r.Head.Alias, epAlias)
+		if err != nil {
+			return err
 		}
 		if !set {
 			return fmt.Errorf("failed to set entrypoint %v as the parent of %v", epAlias, r.Head.Alias)
@@ -2853,23 +2816,8 @@ func (r *Replica) syncCloneEntrypoints(spdkClient *spdkclient.Client, bdevLvolMa
 			epInfo.CloneReplicas[cloneReplicaName] = true
 		}
 
-		// Auto-cleanup: no clone replicas left.
-		// Skip deletion when there is an in-flight SnapshotCloneSrcStart for this
-		// entrypoint: BdevLvolSetParent on the dst side may not have committed to
-		// SPDK yet, so the child count from bdev_lvol_get_lvols can momentarily
-		// be 0 even though a clone operation is in progress.
+		// Auto-cleanup: no clone replicas left
 		if len(epInfo.CloneReplicas) == 0 {
-			hasActiveSrcOp := false
-			for _, c := range r.snapshotCloningSrcCache {
-				if c != nil && GetCloneEntrypointLvolName(r.Name, c.snapshotName) == epLvolName {
-					hasActiveSrcOp = true
-					break
-				}
-			}
-			if hasActiveSrcOp {
-				r.log.Debugf("Clone entrypoint %s has no SPDK clones but has an active clone src operation, deferring cleanup", epLvolName)
-				continue
-			}
 			r.log.Infof("Clone entrypoint %s has no remaining clone replicas, cleaning up", epLvolName)
 			epAlias := spdktypes.GetLvolAlias(r.LvsName, epLvolName)
 			if _, err := spdkClient.BdevLvolDelete(epAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
@@ -2903,20 +2851,6 @@ func (r *Replica) syncCloneEntrypoints(spdkClient *spdkclient.Client, bdevLvolMa
 			epInfo.CloneReplicas[cloneReplicaName] = true
 		}
 		if len(epInfo.CloneReplicas) == 0 {
-			// Skip deletion when an in-flight SnapshotCloneSrcStart is pending
-			// for this entrypoint (same race guard as loop 2 above).
-			hasActiveSrcOp := false
-			for _, c := range r.snapshotCloningSrcCache {
-				if c != nil && GetCloneEntrypointLvolName(r.Name, c.snapshotName) == lvolName {
-					hasActiveSrcOp = true
-					break
-				}
-			}
-			if hasActiveSrcOp {
-				r.cloneEntrypointMap[lvolName] = epInfo
-				r.log.Debugf("Discovered clone entrypoint %s with no SPDK clones but has an active clone src operation, adding to map without cleanup", lvolName)
-				continue
-			}
 			epAlias := spdktypes.GetLvolAlias(r.LvsName, lvolName)
 			if _, err := spdkClient.BdevLvolDelete(epAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 				r.log.WithError(err).Errorf("Failed to delete orphaned clone entrypoint %s", lvolName)

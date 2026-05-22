@@ -147,8 +147,6 @@ type Engine struct {
 	lastExpansionFailedAt string
 	lastExpansionError    string
 
-	isCloning bool // true while SnapshotClone is in progress (linked-clone mode only)
-
 	// UpdateCh should not be protected by the engine lock
 	UpdateCh chan interface{}
 
@@ -835,9 +833,6 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 	}
 	if e.IsRestoring {
 		return fmt.Errorf("cannot add replica %s while engine %s restore is in progress", dstReplicaName, e.Name)
-	}
-	if e.isCloning {
-		return fmt.Errorf("cannot add replica %s while engine %s linked-clone is in progress", dstReplicaName, e.Name)
 	}
 
 	if _, exists := e.ReplicaStatusMap[dstReplicaName]; exists {
@@ -1650,10 +1645,6 @@ func (e *Engine) closeReplicaClients(replicaClients map[string]*client.SPDKClien
 }
 
 func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]*client.SPDKClient, snapshotName string, snapshotOp SnapshotOperationType) (string, error) {
-	if e.isCloning {
-		return "", fmt.Errorf("cannot perform snapshot operation %v while engine %s linked-clone is in progress", snapshotOp, e.Name)
-	}
-
 	if snapshotOp == SnapshotOperationCreate && snapshotName == "" {
 		snapshotName = util.UUID()[:8]
 	}
@@ -1866,7 +1857,7 @@ type replicaCandidate struct {
 	address string
 }
 
-func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress string, cloneMode spdkrpc.CloneMode, dstReplicaSrcReplicaPairMap map[string]string) (err error) {
+func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress string, cloneMode spdkrpc.CloneMode) (err error) {
 	e.Lock()
 	defer e.Unlock()
 
@@ -1874,13 +1865,43 @@ func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress str
 		err = errors.Wrap(err, "failed to do SnapshotClone")
 	}()
 
-	e.log.Infof("Engine is starting cloning snapshot %s (cloneMode=%v)", snapshotName, cloneMode)
+	e.log.Infof("Engine is starting cloning snapshot %s", snapshotName)
 
-	if cloneMode != spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
-		// Deep-copy clone requires exactly 1 replica to avoid data inconsistency.
-		if len(e.ReplicaStatusMap) != 1 {
-			return fmt.Errorf("destination engine must only have 1 replica when doing deep-copy snapshot clone. Current replica count is %v", len(e.ReplicaStatusMap))
+	if len(e.ReplicaStatusMap) != 1 {
+		return fmt.Errorf("destination engine must only have 1 replica when doing snapshot clone. Current "+
+			"replica count is %v", len(e.ReplicaStatusMap))
+	}
+
+	dstReplicaName, dstReplicaAddr := "", ""
+	for rName, rStatus := range e.ReplicaStatusMap {
+		if rStatus.Mode != types.ModeRW {
+			continue
 		}
+		dstReplicaName = rName
+		dstReplicaAddr = rStatus.Address
+		break
+	}
+
+	if dstReplicaName == "" || dstReplicaAddr == "" {
+		return fmt.Errorf("cannot find a RW destination replica")
+	}
+
+	e.log.Infof("Selecting replica %v with address %v as dst replica for cloning", dstReplicaName, dstReplicaAddr)
+
+	dstReplicaServiceCli, err := GetServiceClient(dstReplicaAddr)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if errClose := dstReplicaServiceCli.Close(); errClose != nil {
+			e.log.WithError(errClose).Errorf("Engine %v failed to close dst replica %v client with address %v",
+				e.Name, dstReplicaName, dstReplicaAddr)
+		}
+	}()
+
+	dstReplica, err := dstReplicaServiceCli.ReplicaGet(dstReplicaName)
+	if err != nil {
+		return err
 	}
 
 	srcEngineServiceCli, err := GetServiceClient(srcEngineAddress)
@@ -1919,47 +1940,6 @@ func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress str
 		srcReplicaCandidates[rName] = replicaCandidate{ip: r.IP, lvsUUID: r.LvsUUID, address: rAddr}
 	}
 
-	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
-		if len(dstReplicaSrcReplicaPairMap) == 0 {
-			return fmt.Errorf("linked-clone snapshot clone requires a non-empty dst→src replica name map from the manager")
-		}
-		// New path: manager provided an explicit dst→src replica name map (proxy API >= 7).
-		return e.snapshotCloneLinkedN(snapshotName, dstReplicaSrcReplicaPairMap, srcReplicaCandidates)
-	}
-
-	// Deep-copy: single-replica path.
-	dstReplicaName, dstReplicaAddr := "", ""
-	for rName, rStatus := range e.ReplicaStatusMap {
-		if rStatus.Mode != types.ModeRW {
-			continue
-		}
-		dstReplicaName = rName
-		dstReplicaAddr = rStatus.Address
-		break
-	}
-
-	if dstReplicaName == "" || dstReplicaAddr == "" {
-		return fmt.Errorf("cannot find a RW destination replica")
-	}
-
-	e.log.Infof("Selecting replica %v with address %v as dst replica for cloning", dstReplicaName, dstReplicaAddr)
-
-	dstReplicaServiceCli, err := GetServiceClient(dstReplicaAddr)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if errClose := dstReplicaServiceCli.Close(); errClose != nil {
-			e.log.WithError(errClose).Errorf("Engine %v failed to close dst replica %v client with address %v",
-				e.Name, dstReplicaName, dstReplicaAddr)
-		}
-	}()
-
-	dstReplica, err := dstReplicaServiceCli.ReplicaGet(dstReplicaName)
-	if err != nil {
-		return err
-	}
-
 	srcReplicaName := ""
 	srcReplicaAddress := ""
 	for rName, cand := range srcReplicaCandidates {
@@ -1971,6 +1951,10 @@ func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress str
 	}
 
 	if srcReplicaName == "" || srcReplicaAddress == "" {
+		if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
+			return fmt.Errorf("cannot find the src replica at the same address %v and on same LvsUUID %v as the "+
+				"dst replica", dstReplica.IP, dstReplica.LvsUUID)
+		}
 		for rName, cand := range srcReplicaCandidates {
 			srcReplicaName = rName
 			srcReplicaAddress = cand.address
@@ -1983,113 +1967,6 @@ func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress str
 	}
 
 	return dstReplicaServiceCli.ReplicaSnapshotCloneDstStart(dstReplicaName, snapshotName, srcReplicaName, srcReplicaAddress, cloneMode)
-}
-
-// snapshotCloneLinkedN performs SnapshotCloneDstStart on ALL RW dst replicas simultaneously
-// (linked-clone mode only). It uses the explicit dst→src replica name map provided by the
-// manager (which already ran the scheduler) instead of auto-detecting by IP+lvsUUID co-location.
-// Must be called with the engine lock held.
-func (e *Engine) snapshotCloneLinkedN(snapshotName string, dstReplicaSrcReplicaPairMap map[string]string, srcReplicaCandidates map[string]replicaCandidate) error {
-	type dstEntry struct {
-		name           string
-		address        string
-		srcReplicaName string
-		srcReplicaAddr string
-	}
-
-	var dstEntries []dstEntry
-	for rName, rStatus := range e.ReplicaStatusMap {
-		if dstReplicaSrcReplicaPairMap[rName] == "" {
-			rStatus.Mode = types.ModeERR
-			e.log.Warnf("Dst replica %s is not included in the dst-src replica pair map for linked-clone, marking it ERR", rName)
-		}
-	}
-	for dstName, srcName := range dstReplicaSrcReplicaPairMap {
-		dstStatus, ok := e.ReplicaStatusMap[dstName]
-		if !ok || dstStatus == nil {
-			e.log.Warnf("Dst replica %s not found in engine ReplicaStatusMap, skipping", dstName)
-			continue
-		}
-		if dstStatus.Mode != types.ModeRW {
-			dstStatus.Mode = types.ModeERR
-			e.log.Warnf("Dst replica %s is not RW (mode=%v), marking it ERR for linked-clone", dstName, dstStatus.Mode)
-			continue
-		}
-
-		srcCand, ok := srcReplicaCandidates[srcName]
-		if !ok {
-			e.log.Errorf("Src replica %s not found in src engine replica list, marking the paired dst replica %s ERR", srcName, dstName)
-			dstStatus.Mode = types.ModeERR
-			continue
-		}
-
-		dstEntries = append(dstEntries, dstEntry{
-			name:           dstName,
-			address:        dstStatus.Address,
-			srcReplicaName: srcName,
-			srcReplicaAddr: srcCand.address,
-		})
-	}
-
-	if len(dstEntries) == 0 {
-		return fmt.Errorf("no valid dst-src replica pairs found for linked-clone")
-	}
-
-	e.log.Infof("Starting linked-clone on %d replicas simultaneously for snapshot %s", len(dstEntries), snapshotName)
-
-	e.isCloning = true
-	defer func() { e.isCloning = false }()
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	cloneErrs := make(map[string]error, len(dstEntries))
-
-	for _, entry := range dstEntries {
-		wg.Add(1)
-		go func(dst dstEntry) {
-			defer wg.Done()
-			cli, err := GetServiceClient(dst.address)
-			if err != nil {
-				mu.Lock()
-				cloneErrs[dst.name] = errors.Wrapf(err, "failed to get client for dst replica %s", dst.name)
-				mu.Unlock()
-				return
-			}
-			defer func() {
-				if errClose := cli.Close(); errClose != nil {
-					e.log.WithError(errClose).Warnf("Failed to close client for dst replica %s", dst.name)
-				}
-			}()
-
-			if err := cli.ReplicaSnapshotCloneDstStart(dst.name, snapshotName, dst.srcReplicaName, dst.srcReplicaAddr, spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE); err != nil {
-				mu.Lock()
-				cloneErrs[dst.name] = errors.Wrapf(err, "dst replica %s: SnapshotCloneDstStart failed", dst.name)
-				mu.Unlock()
-			}
-		}(entry)
-	}
-	wg.Wait()
-
-	// Mark failed replicas as ERR so the manager can schedule rebuilds for them.
-	var errList []error
-	for replicaName, cloneErr := range cloneErrs {
-		if rStatus, ok := e.ReplicaStatusMap[replicaName]; ok && rStatus != nil {
-			rStatus.Mode = types.ModeERR
-		}
-		e.log.WithError(cloneErr).Errorf("Dst replica %s failed during N-replica linked-clone", replicaName)
-		errList = append(errList, cloneErr)
-	}
-
-	if len(cloneErrs) == len(dstEntries) {
-		// All replicas failed — return a combined error.
-		return util.CombineErrors(errList...)
-	}
-
-	if len(cloneErrs) > 0 {
-		e.log.Warnf("%d/%d dst replicas failed during linked-clone and have been marked ERR for later rebuild",
-			len(cloneErrs), len(dstEntries))
-	}
-	return nil
 }
 
 func (e *Engine) getReplicaSnapshotHashStatus(replicaName, replicaAddress, snapshotName string) (*spdkrpc.ReplicaSnapshotHashStatusResponse, error) {
@@ -3060,10 +2937,6 @@ func (e *Engine) ExpandPrecheck(spdkClient *spdkclient.Client, size uint64) (req
 		return false, fmt.Errorf("%w", ErrRestoringInProgress)
 	}
 
-	if e.isCloning {
-		return false, fmt.Errorf("engine %s linked-clone is in progress", e.Name)
-	}
-
 	defer func() {
 		if err != nil {
 			e.log.WithError(err).Error("Engine precheck expansion failed")
@@ -3182,11 +3055,6 @@ func (e *Engine) shouldSkipValidateAndUpdateNoLock() bool {
 
 	if e.isExpanding {
 		e.log.Debug("Engine is expanding, will skip the validation and update")
-		return true
-	}
-
-	if e.isCloning {
-		e.log.Debug("Engine is cloning, will skip the validation and update")
 		return true
 	}
 
