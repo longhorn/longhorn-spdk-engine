@@ -15,6 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.uber.org/multierr"
 
+	retrygo "github.com/avast/retry-go/v4"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
@@ -43,6 +44,9 @@ const (
 	restorePeriodicRefreshInterval = 2 * time.Second
 
 	lvolRangeShallowCopyLength = uint64(1 << 8)
+
+	setParentRetryAttempts = 10
+	setParentRetryDelay    = 200 * time.Millisecond
 )
 
 type Replica struct {
@@ -2489,9 +2493,12 @@ func (r *Replica) monitorSnapshotClone(spdkCli *spdkclient.Client, ctx context.C
 			}
 		}
 
+		r.Lock()
 		if err := r.SnapshotCloneDstFinish(spdkCli, cloneMode); err != nil {
 			r.log.WithError(err).Errorf("Clone dst replica failed to finish snapshot %s cloning", snapshotName)
 		}
+		r.Unlock()
+		r.UpdateCh <- nil
 
 		if cancel != nil {
 			cancel()
@@ -2603,6 +2610,8 @@ func (r *Replica) SnapshotCloneDstStatusCheck() (status *spdkrpc.ReplicaSnapshot
 	}, nil
 }
 
+// SnapshotCloneDstFinish completes snapshot cloning on the destination replica.
+// r.Lock() must be held by the caller.
 func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMode spdkrpc.CloneMode) (err error) {
 	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
 		if r.Head == nil {
@@ -2614,22 +2623,27 @@ func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMod
 		epAlias := spdktypes.GetLvolAlias(r.LvsName, r.cloneEntrypointLvolName)
 
 		// N replicas may call BdevLvolSetParent concurrently against the same
-		// entrypoint snapshot.  SPDK serialises the reactor, but the metadata
-		// update can still return EBUSY when another BdevLvolSetParent targeting
-		// the same parent is in flight.  Retry with linear back-off to absorb that.
-		const maxSetParentRetries = 10
+		// entrypoint snapshot. SPDK can return EBUSY when another SetParent
+		// targeting the same parent is in flight. Retry to absorb that.
 		var set bool
-		for i := 0; i < maxSetParentRetries; i++ {
-			var setParentErr error
-			set, setParentErr = spdkClient.BdevLvolSetParent(r.Head.Alias, epAlias)
-			if setParentErr == nil {
-				break
-			}
-			if !strings.Contains(setParentErr.Error(), "busy") || i == maxSetParentRetries-1 {
+		if err := retrygo.Do(
+			func() error {
+				var setParentErr error
+				set, setParentErr = spdkClient.BdevLvolSetParent(r.Head.Alias, epAlias)
+				if setParentErr != nil && !strings.Contains(setParentErr.Error(), "busy") {
+					return retrygo.Unrecoverable(setParentErr)
+				}
 				return setParentErr
-			}
-			r.log.WithError(setParentErr).Debugf("BdevLvolSetParent returned busy (attempt %d/%d), retrying", i+1, maxSetParentRetries)
-			time.Sleep(time.Duration(i+1) * 200 * time.Millisecond)
+			},
+			retrygo.Attempts(setParentRetryAttempts),
+			retrygo.Delay(setParentRetryDelay),
+			retrygo.DelayType(retrygo.BackOffDelay),
+			retrygo.LastErrorOnly(true),
+			retrygo.OnRetry(func(n uint, err error) {
+				r.log.WithError(err).Debugf("BdevLvolSetParent returned busy (attempt %d), probably there is another SetParent targeting the same parent in flight, retrying", n+1)
+			}),
+		); err != nil {
+			return err
 		}
 		if !set {
 			return fmt.Errorf("failed to set entrypoint %v as the parent of %v", epAlias, r.Head.Alias)
@@ -2652,17 +2666,6 @@ func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMod
 		return nil
 	}
 
-	updateRequired := false
-
-	r.Lock()
-	defer func() {
-		r.Unlock()
-
-		if updateRequired {
-			r.UpdateCh <- nil
-		}
-	}()
-
 	if !r.isSnapshotCloning {
 		return fmt.Errorf("replica %s is not in cloning", r.Name)
 	}
@@ -2682,8 +2685,6 @@ func (r *Replica) SnapshotCloneDstFinish(spdkClient *spdkclient.Client, cloneMod
 				r.ErrorMsg = ""
 			}
 		}
-
-		updateRequired = true
 	}()
 
 	if r.snapshotCloningDstCache.cloningState == types.ProgressStateComplete {
