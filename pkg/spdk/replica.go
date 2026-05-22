@@ -104,19 +104,6 @@ type Replica struct {
 	// The cloning source replica should cache this info
 	snapshotCloningSrcCache map[string]*SnapshotCloningSrcCache
 
-	// Source replica: entrypoint lvols created for linked clones.
-	// Key: entrypoint lvol name
-	cloneEntrypointMap map[string]*CloneEntrypointInfo
-
-	// Clone replica: linked-clone source information
-	// TODO: consider placing the entrypoint lvol at ActiveChain[0] for clone replicas,
-	// since it serves the same role as a backing image (read-only base of the chain).
-	// This would unify chain handling but requires updating BackingImage assignment,
-	// proto serialization, and rebuild paths.
-	isCloneReplica          bool
-	cloneSourceReplicaName  string
-	cloneEntrypointLvolName string
-
 	isRestoring bool
 	restore     *Restore
 
@@ -219,13 +206,6 @@ type DeepCopyStatus struct {
 	Error             string `json:"error,omitempty"`
 }
 
-type CloneEntrypointInfo struct {
-	LvolName         string
-	SnapshotName     string
-	SnapshotLvolName string
-	CloneReplicas    map[string]bool
-}
-
 func ServiceReplicaToProtoReplica(r *Replica) *spdkrpc.Replica {
 	res := &spdkrpc.Replica{
 		Name:      r.Name,
@@ -301,7 +281,6 @@ func NewReplica(ctx context.Context, replicaName, lvsName, lvsUUID string, specS
 		rebuildingSrcCache: RebuildingSrcCache{},
 
 		snapshotCloningSrcCache: map[string]*SnapshotCloningSrcCache{},
-		cloneEntrypointMap:      map[string]*CloneEntrypointInfo{},
 
 		restore: &Restore{},
 
