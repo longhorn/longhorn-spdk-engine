@@ -421,6 +421,7 @@ func (s *TestSuite) TestRecoverFromHostBlockdevReconnectsPersistedTarget(c *C) {
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
 	ef.NvmeTcpFrontend.TargetPort = 4420
 	ef.getInitiatorEndpointFn = func() string { return "/dev/longhorn/vol-r" }
+	ef.checkTargetReachableFn = func(address string) error { return nil }
 
 	loadCalls := 0
 	ef.loadInitiatorNVMeDeviceInfoFn = func(transportAddress, transportServiceID, subsystemNQN string) error {
@@ -470,6 +471,59 @@ func (s *TestSuite) TestRecoverFromHostBlockdevReconnectsPersistedTarget(c *C) {
 	c.Assert(got.Endpoint, Equals, "/dev/longhorn/vol-r")
 	c.Assert(got.TargetIp, Equals, "10.0.0.8")
 	c.Assert(got.TargetPort, Equals, int32(4420))
+
+	select {
+	case <-updateCh:
+	case <-time.After(time.Second):
+		c.Fatal("expected update on UpdateCh")
+	}
+}
+
+func (s *TestSuite) TestRecoverFromHostBlockdevSkipsReconnectWhenTargetUnreachable(c *C) {
+	updateCh := make(chan interface{}, 1)
+
+	ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh)
+	ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
+	ef.NvmeTcpFrontend.TargetPort = 4420
+
+	loadCalls := 0
+	ef.loadInitiatorNVMeDeviceInfoFn = func(transportAddress, transportServiceID, subsystemNQN string) error {
+		loadCalls++
+		c.Assert(subsystemNQN, Equals, getStableVolumeNQN("vol-r"))
+		if loadCalls == 1 {
+			c.Assert(transportAddress, Equals, "10.0.0.8")
+			c.Assert(transportServiceID, Equals, "4420")
+			return fmt.Errorf("%s", helpertypes.ErrorMessageCannotFindValidNvmeDevice)
+		}
+		c.Assert(transportAddress, Equals, "")
+		c.Assert(transportServiceID, Equals, "")
+		return fmt.Errorf("%s", helpertypes.ErrorMessageCannotFindValidNvmeDevice)
+	}
+
+	reconnectCalled := false
+	ef.reconnectNvmeTCPPathFn = func(transportAddress, transportServiceID string) error {
+		reconnectCalled = true
+		return nil
+	}
+	ef.checkTargetReachableFn = func(address string) error {
+		c.Assert(address, Equals, "10.0.0.8:4420")
+		return fmt.Errorf("dial tcp %s: i/o timeout", address)
+	}
+	ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error {
+		c.Fatal("loadInitiatorEndpoint should not run when reachability check fails")
+		return nil
+	}
+
+	err := ef.RecoverFromHost(nil)
+	c.Assert(err, NotNil)
+	c.Assert(err.Error(), Matches, ".*not reachable during recovery.*")
+	c.Assert(reconnectCalled, Equals, false)
+	c.Assert(loadCalls, Equals, 2)
+
+	got := ef.Get()
+	c.Assert(got.State, Equals, string(lhtypes.InstanceStateError))
+	c.Assert(got.ErrorMsg, Matches, ".*not reachable during recovery.*")
 
 	select {
 	case <-updateCh:
