@@ -27,12 +27,18 @@ func (s *Server) EngineFrontendSuspend(ctx context.Context, req *spdkrpc.EngineF
 
 	s.RLock()
 	ef := s.engineFrontendMap[req.Name]
-	spdkClient := s.spdkClient
 	s.RUnlock()
 
 	if ef == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine frontend %v for suspension", req.Name)
 	}
+
+	unlockVolumeHost := s.acquireVolumeHostLock(ef.VolumeName)
+	defer unlockVolumeHost()
+
+	s.RLock()
+	spdkClient := s.spdkClient
+	s.RUnlock()
 
 	err = ef.Suspend(spdkClient)
 	if err != nil {
@@ -50,12 +56,18 @@ func (s *Server) EngineFrontendResume(ctx context.Context, req *spdkrpc.EngineFr
 
 	s.RLock()
 	ef := s.engineFrontendMap[req.Name]
-	spdkClient := s.spdkClient
 	s.RUnlock()
 
 	if ef == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine frontend %v for resumption", req.Name)
 	}
+
+	unlockVolumeHost := s.acquireVolumeHostLock(ef.VolumeName)
+	defer unlockVolumeHost()
+
+	s.RLock()
+	spdkClient := s.spdkClient
+	s.RUnlock()
 
 	err = ef.Resume(spdkClient)
 	if err != nil {
@@ -327,7 +339,6 @@ func (s *Server) EngineFrontendCreate(ctx context.Context, req *spdkrpc.EngineFr
 func (s *Server) EngineFrontendDelete(ctx context.Context, req *spdkrpc.EngineFrontendDeleteRequest) (ret *emptypb.Empty, err error) {
 	s.RLock()
 	ef := s.engineFrontendMap[req.Name]
-	spdkClient := s.spdkClient
 	s.RUnlock()
 
 	defer func() {
@@ -343,6 +354,13 @@ func (s *Server) EngineFrontendDelete(ctx context.Context, req *spdkrpc.EngineFr
 	if ef == nil {
 		return &emptypb.Empty{}, nil
 	}
+
+	unlockVolumeHost := s.acquireVolumeHostLock(ef.VolumeName)
+	defer unlockVolumeHost()
+
+	s.RLock()
+	spdkClient := s.spdkClient
+	s.RUnlock()
 
 	if err := ef.Delete(spdkClient); err != nil {
 		return nil, toEngineFrontendLifecycleGRPCError(err, "failed to delete engine frontend %v", req.Name)
@@ -424,7 +442,6 @@ func (s *Server) EngineFrontendExpand(ctx context.Context, req *spdkrpc.EngineFr
 
 	s.RLock()
 	ef := s.engineFrontendMap[req.Name]
-	spdkClient := s.spdkClient
 	s.RUnlock()
 
 	if ef == nil {
@@ -434,6 +451,13 @@ func (s *Server) EngineFrontendExpand(ctx context.Context, req *spdkrpc.EngineFr
 	if types.IsUblkFrontend(ef.Frontend) {
 		return nil, grpcstatus.Errorf(grpccodes.Unimplemented, "cannot expand ublk frontend engine %v", ef.Name)
 	}
+
+	unlockVolumeHost := s.acquireVolumeHostLock(ef.VolumeName)
+	defer unlockVolumeHost()
+
+	s.RLock()
+	spdkClient := s.spdkClient
+	s.RUnlock()
 
 	err = ef.Expand(ctx, spdkClient, req.Size)
 	if err != nil {
