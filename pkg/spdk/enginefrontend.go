@@ -155,6 +155,22 @@ type UblkFrontend struct {
 	UblkID int32
 }
 
+func (ef *EngineFrontend) setMetadataDirLocked(metadataDir string) {
+	ef.metadataDir = metadataDir
+}
+
+func (ef *EngineFrontend) setMetadataDir(metadataDir string) {
+	ef.Lock()
+	defer ef.Unlock()
+	ef.setMetadataDirLocked(metadataDir)
+}
+
+func (ef *EngineFrontend) getMetadataDir() string {
+	ef.RLock()
+	defer ef.RUnlock()
+	return ef.metadataDir
+}
+
 func getUblkQueueDepth(ublkQueueDepth int32) int32 {
 	if ublkQueueDepth == 0 {
 		return types.DefaultUblkQueueDepth
@@ -2620,6 +2636,17 @@ func (ef *EngineFrontend) RecoverFromHost(spdkClient *spdkclient.Client) error {
 		return nil
 
 	case types.FrontendSPDKTCPBlockdev:
+		// Early cancellation check before creating the NVMe-TCP initiator.
+		// If a concurrent EngineFrontendCreate already completed for this
+		// volume (evicted us and connected its own NVMe controller), we must
+		// not proceed — creating an initiator and then calling Delete/Stop
+		// would disconnect the NEW ef's controller via DisconnectTarget
+		// (which disconnects ALL controllers for the subsystem NQN).
+		if ef.isRecoveryCancelled() {
+			recoverErr = ErrRecoveryCancelled
+			return recoverErr
+		}
+
 		// Recover the NVMe-oF initiator (blockdev frontend with dm-device).
 		i, nqn, nguid, err := ef.newNvmeTcpInitiator()
 		if err != nil {
@@ -2679,7 +2706,7 @@ func (ef *EngineFrontend) RecoverFromHost(spdkClient *spdkclient.Client) error {
 					reconnected = true
 				} else {
 					ef.log.WithError(loadErr).Warnf("NVMe device not found on host during recovery of engine frontend %s, removing persisted record", ef.Name)
-					if removeErr := removeEngineFrontendRecord(ef.metadataDir, ef.VolumeName); removeErr != nil {
+					if removeErr := removeEngineFrontendRecord(ef.getMetadataDir(), ef.VolumeName); removeErr != nil {
 						ef.log.WithError(removeErr).Warn("Failed to remove engine frontend record")
 					}
 					deviceNotFound = true
