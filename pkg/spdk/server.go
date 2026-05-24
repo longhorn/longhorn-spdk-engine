@@ -1132,6 +1132,11 @@ func (s *Server) recoverEngineFrontends(ctx context.Context) {
 
 			if current != ef {
 				logrus.Warnf("Engine frontend %s was superseded during recovery, cleaning up recovered resources", record.Name)
+				// The eviction path in EngineFrontendCreate already decided
+				// whether metadataDir should be kept (pre-create eviction,
+				// where no new record exists yet) or cleared (post-create
+				// eviction with successful Create, where a new record was
+				// written). Respect that decision — do not override here.
 				if deleteErr := ef.Delete(spdkClient); deleteErr != nil {
 					logrus.WithError(deleteErr).Warnf("Failed to clean up superseded engine frontend %s", record.Name)
 				}

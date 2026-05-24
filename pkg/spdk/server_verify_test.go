@@ -374,6 +374,7 @@ func (s *TestSuite) TestEngineFrontendCreateReturnsAlreadyExistsForDuplicate(c *
 	updateCh := make(chan interface{}, 1)
 
 	existing := NewEngineFrontend("ef-dup", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh)
+	existing.State = lhtypes.InstanceStateRunning
 
 	srv := &Server{
 		engineFrontendMap: map[string]*EngineFrontend{
@@ -586,4 +587,95 @@ func (s *TestSuite) TestEngineFrontendDeleteWaitsForVolumeHostLock(c *C) {
 	case <-time.After(time.Second):
 		c.Fatal("delete did not resume after releasing the per-volume host lock")
 	}
+}
+
+func (s *TestSuite) TestEngineFrontendCreateInvalidAddressDoesNotEvictPendingEf(c *C) {
+	fmt.Println("Testing EngineFrontendCreate with invalid address does not evict a Pending frontend")
+
+	updateCh := make(chan interface{}, 1)
+	existing := NewEngineFrontend("ef-recovering", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh)
+	// State is Pending (the default from NewEngineFrontend), simulating an
+	// in-progress async recovery.
+
+	srv := &Server{
+		engineFrontendMap: map[string]*EngineFrontend{
+			"ef-recovering": existing,
+		},
+		volumeHostLocks: map[string]*volumeHostLockEntry{},
+		updateChs: map[lhtypes.InstanceType]chan interface{}{
+			lhtypes.InstanceTypeEngineFrontend: updateCh,
+		},
+	}
+
+	// Use an un-bracketed IPv6 address that splitHostPort rejects.
+	_, err := srv.EngineFrontendCreate(context.Background(), &spdkrpc.EngineFrontendCreateRequest{
+		Name:          "ef-recovering",
+		EngineName:    "engine-b",
+		VolumeName:    "vol-a",
+		Frontend:      lhtypes.FrontendSPDKTCPNvmf,
+		SpecSize:      2048,
+		TargetAddress: "2001:db8::1:9502",
+	})
+	c.Assert(err, NotNil)
+	st, ok := grpcstatus.FromError(err)
+	c.Assert(ok, Equals, true)
+	c.Assert(st.Code(), Equals, grpccodes.InvalidArgument)
+
+	// The existing Pending frontend must still be in the map, untouched.
+	srv.RLock()
+	ef := srv.engineFrontendMap["ef-recovering"]
+	srv.RUnlock()
+	c.Assert(ef, Equals, existing)
+	c.Assert(ef.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStatePending))
+}
+
+func (s *TestSuite) TestEngineFrontendCreateEvictsMultiplePendingRecoveries(c *C) {
+	fmt.Println("Testing EngineFrontendCreate evicts both name and volume Pending recoveries in one request")
+
+	updateCh := make(chan interface{}, 1)
+	sameName := NewEngineFrontend("ef-new", "engine-old-name", "vol-old", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh)
+	sameName.metadataDir = "/tmp/name-recovery"
+	sameVolume := NewEngineFrontend("ef-old-volume", "engine-old-volume", "vol-new", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh)
+	sameVolume.metadataDir = "/tmp/volume-recovery"
+
+	srv := &Server{
+		engineFrontendMap: map[string]*EngineFrontend{
+			sameName.Name:   sameName,
+			sameVolume.Name: sameVolume,
+		},
+		volumeHostLocks: map[string]*volumeHostLockEntry{},
+		updateChs: map[lhtypes.InstanceType]chan interface{}{
+			lhtypes.InstanceTypeEngineFrontend: updateCh,
+		},
+	}
+
+	resp, err := srv.EngineFrontendCreate(context.Background(), &spdkrpc.EngineFrontendCreateRequest{
+		Name:       "ef-new",
+		EngineName: "engine-new",
+		VolumeName: "vol-new",
+		Frontend:   lhtypes.FrontendSPDKTCPNvmf,
+		SpecSize:   2048,
+	})
+	c.Assert(err, IsNil)
+	c.Assert(resp, NotNil)
+
+	srv.RLock()
+	created := srv.engineFrontendMap["ef-new"]
+	_, sameVolumeStillMapped := srv.engineFrontendMap["ef-old-volume"]
+	srv.RUnlock()
+
+	c.Assert(created, NotNil)
+	c.Assert(created, Not(Equals), sameName)
+	c.Assert(created.VolumeName, Equals, "vol-new")
+	c.Assert(sameVolumeStillMapped, Equals, false)
+
+	sameName.RLock()
+	c.Assert(sameName.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateTerminating))
+	c.Assert(sameName.metadataDir, Equals, "/tmp/name-recovery")
+	sameName.RUnlock()
+
+	sameVolume.RLock()
+	c.Assert(sameVolume.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateTerminating))
+	c.Assert(sameVolume.metadataDir, Equals, "")
+	sameVolume.RUnlock()
 }
