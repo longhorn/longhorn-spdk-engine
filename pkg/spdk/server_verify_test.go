@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"time"
 
 	cockroacherrors "github.com/cockroachdb/errors"
 	grpccodes "google.golang.org/grpc/codes"
@@ -340,6 +342,7 @@ func (s *TestSuite) TestEngineFrontendCreateRegistersNewFrontend(c *C) {
 
 	srv := &Server{
 		engineFrontendMap: map[string]*EngineFrontend{},
+		volumeHostLocks:   map[string]*volumeHostLockEntry{},
 		updateChs: map[lhtypes.InstanceType]chan interface{}{
 			lhtypes.InstanceTypeEngineFrontend: make(chan interface{}, 1),
 		},
@@ -376,6 +379,7 @@ func (s *TestSuite) TestEngineFrontendCreateReturnsAlreadyExistsForDuplicate(c *
 		engineFrontendMap: map[string]*EngineFrontend{
 			"ef-dup": existing,
 		},
+		volumeHostLocks: map[string]*volumeHostLockEntry{},
 		updateChs: map[lhtypes.InstanceType]chan interface{}{
 			lhtypes.InstanceTypeEngineFrontend: updateCh,
 		},
@@ -406,6 +410,7 @@ func (s *TestSuite) TestEngineFrontendCreateDoesNotRegisterFailedFrontend(c *C) 
 
 	srv := &Server{
 		engineFrontendMap: map[string]*EngineFrontend{},
+		volumeHostLocks:   map[string]*volumeHostLockEntry{},
 		updateChs: map[lhtypes.InstanceType]chan interface{}{
 			lhtypes.InstanceTypeEngineFrontend: make(chan interface{}, 1),
 		},
@@ -493,6 +498,7 @@ func (s *TestSuite) TestEngineFrontendLifecycleRPCsMapKnownErrors(c *C) {
 			engineFrontendMap: map[string]*EngineFrontend{
 				"ef-test": ef,
 			},
+			volumeHostLocks: map[string]*volumeHostLockEntry{},
 		}
 	}
 
@@ -529,4 +535,55 @@ func (s *TestSuite) TestEngineFrontendLifecycleRPCsMapKnownErrors(c *C) {
 	st, ok = grpcstatus.FromError(err)
 	c.Assert(ok, Equals, true)
 	c.Assert(st.Code(), Equals, grpccodes.FailedPrecondition)
+}
+
+func (s *TestSuite) TestEngineFrontendDeleteWaitsForVolumeHostLock(c *C) {
+	ef := NewEngineFrontend("ef-test", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}, 1))
+	srv := &Server{
+		engineFrontendMap: map[string]*EngineFrontend{
+			"ef-test": ef,
+		},
+		volumeHostLocks: map[string]*volumeHostLockEntry{},
+	}
+
+	// Pre-acquire the per-volume lock to simulate an ongoing operation.
+	unlockVolumeHost := srv.acquireVolumeHostLock("vol-a")
+
+	// Hold the server write lock as a scheduling barrier.
+	// EngineFrontendDelete calls s.RLock() before acquireVolumeHostLock,
+	// so the goroutine will block at s.RLock() until we release the
+	// write lock, proving it has been scheduled and is inside Delete.
+	srv.Lock()
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := srv.EngineFrontendDelete(context.Background(), &spdkrpc.EngineFrontendDeleteRequest{Name: "ef-test"})
+		done <- err
+	}()
+
+	// Wait for the goroutine to be scheduled.
+	<-started
+
+	// Release the write lock so the goroutine proceeds past s.RLock().
+	// It will then reach acquireVolumeHostLock and block on the mutex
+	// (the only remaining blocking call before ef.Delete).
+	srv.Unlock()
+	runtime.Gosched()
+
+	select {
+	case err := <-done:
+		c.Fatalf("delete should wait for the per-volume host lock, got early result: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	unlockVolumeHost()
+
+	select {
+	case err := <-done:
+		c.Assert(err, IsNil)
+	case <-time.After(time.Second):
+		c.Fatal("delete did not resume after releasing the per-volume host lock")
+	}
 }
