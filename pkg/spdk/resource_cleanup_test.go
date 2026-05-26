@@ -369,12 +369,10 @@ func (s *TestSuite) TestPrepareFromSyncOpenFileFailureStopsInitiatorAndUnexposes
 
 	origOpenFile := openFile
 	origNewNVMeTCPInitiator := newNVMeTCPInitiator
-	origBackingImageGetServiceClient := backingImageGetServiceClient
 	origBackingImageDiscoverAndConnectNVMeTarget := backingImageDiscoverAndConnectNVMeTarget
 	defer func() {
 		openFile = origOpenFile
 		newNVMeTCPInitiator = origNewNVMeTCPInitiator
-		backingImageGetServiceClient = origBackingImageGetServiceClient
 		backingImageDiscoverAndConnectNVMeTarget = origBackingImageDiscoverAndConnectNVMeTarget
 	}()
 
@@ -387,9 +385,6 @@ func (s *TestSuite) TestPrepareFromSyncOpenFileFailureStopsInitiatorAndUnexposes
 	newNVMeTCPInitiator = func(string, *initiator.NVMeTCPInfo) (nvmeInitiator, error) {
 		return fakeInitiator, nil
 	}
-	backingImageGetServiceClient = func(string) (backingImageServiceClient, error) {
-		return fakeServiceClient, nil
-	}
 	backingImageDiscoverAndConnectNVMeTarget = func(string, int32, int, time.Duration) (string, string, error) {
 		return "", "", nil
 	}
@@ -398,6 +393,9 @@ func (s *TestSuite) TestPrepareFromSyncOpenFileFailureStopsInitiatorAndUnexposes
 		ctx:  context.Background(),
 		Name: "bi-a",
 		log:  safelog.NewSafeLogger(logrus.New()),
+		newServiceClient: func(string) (backingImageServiceClient, error) {
+			return fakeServiceClient, nil
+		},
 	}
 
 	err := bi.prepareFromSync(nil, "remote-address", "src-lvs-uuid")
@@ -407,4 +405,38 @@ func (s *TestSuite) TestPrepareFromSyncOpenFileFailureStopsInitiatorAndUnexposes
 	c.Assert(fakeServiceClient.closeCalled, Equals, true)
 	c.Assert(fakeInitiator.startCalled, Equals, true)
 	c.Assert(fakeInitiator.stopCalled, Equals, true)
+}
+
+func (s *TestSuite) TestPrepareFromSyncUsesNewServiceClientField(c *C) {
+	c.Log("prepareFromSync must call the BackingImage.newServiceClient field, not GetServiceClient")
+
+	factoryCalled := false
+	fakeServiceClient := &fakeBackingImageServiceClient{exposedAddress: "10.0.0.1:1000"}
+
+	bi := &BackingImage{
+		ctx:  context.Background(),
+		Name: "bi-factory-check",
+		log:  safelog.NewSafeLogger(logrus.New()),
+		newServiceClient: func(string) (backingImageServiceClient, error) {
+			factoryCalled = true
+			return fakeServiceClient, nil
+		},
+	}
+
+	// Stub downstream hook so prepareFromSync stops after newServiceClient is called.
+	origDiscover := backingImageDiscoverAndConnectNVMeTarget
+	defer func() { backingImageDiscoverAndConnectNVMeTarget = origDiscover }()
+	backingImageDiscoverAndConnectNVMeTarget = func(string, int32, int, time.Duration) (string, string, error) {
+		return "", "", fmt.Errorf("intentional stop for factory assertion")
+	}
+
+	tmpFile, err := os.CreateTemp("", "bi-factory-test-*")
+	c.Assert(err, IsNil)
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	defer func() { _ = tmpFile.Close() }()
+
+	_ = bi.prepareFromSync(tmpFile, "10.0.0.1:8500", "fake-lvs-uuid")
+
+	c.Assert(factoryCalled, Equals, true,
+		Commentf("BackingImage.newServiceClient must be invoked by prepareFromSync"))
 }

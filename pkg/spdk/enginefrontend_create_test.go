@@ -15,7 +15,7 @@ import (
 func (s *TestSuite) TestEngineFrontendCreateReturnsErrorForFrontendFailure(c *C) {
 	fmt.Println("Testing EngineFrontend.Create returns an error while preserving the error state")
 
-	ef := NewEngineFrontend("ef-test", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-test", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.NvmeTcpFrontend = nil
 
 	resp, err := ef.Create(nil, "10.0.0.1:9502")
@@ -34,7 +34,7 @@ func (s *TestSuite) TestCreateDoesNotHoldLockWhileSendingUpdate(c *C) {
 	fmt.Println("Testing Create does not hold the lock while sending update")
 
 	// Unbuffered channel: Create will block on the send after setting state.
-	ef := NewEngineFrontend("ef-create-lock", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}))
+	ef := NewEngineFrontend("ef-create-lock", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}), nil)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -88,7 +88,7 @@ func (s *TestSuite) TestCreateDoesNotHoldLockWhileSendingUpdate(c *C) {
 func (s *TestSuite) TestConcurrentCreateHasSingleWinner(c *C) {
 	fmt.Println("Testing concurrent Create has a single winner")
 
-	ef := NewEngineFrontend("ef-create-concurrent", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}, 32))
+	ef := NewEngineFrontend("ef-create-concurrent", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}, 32), nil)
 
 	const workers = 20
 	startCh := make(chan struct{})

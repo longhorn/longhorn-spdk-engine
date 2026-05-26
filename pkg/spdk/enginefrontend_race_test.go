@@ -12,7 +12,7 @@ import (
 func (s *TestSuite) TestEngineFrontendResumeConcurrentWithValidateAndUpdate(c *C) {
 	fmt.Println("Testing EngineFrontend.Resume concurrent with ValidateAndUpdate")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}, 4096))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}, 4096), nil)
 	ef.State = lhtypes.InstanceStateRunning
 
 	const iterations = 200
