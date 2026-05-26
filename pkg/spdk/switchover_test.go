@@ -30,7 +30,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetNvmfSuccess(c *C) {
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP NVMe-oF frontend with successful switchover")
 
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh, nil)
 
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.Nqn = "nqn.2014-08.org.nvmexpress:uuid:test-a"
@@ -69,7 +69,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevRunningUsesMultipa
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP Blockdev frontend uses multipath connect while running")
 
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -120,7 +120,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevRunningUsesMultipa
 func (s *TestSuite) TestEngineFrontendGetExportsMultipathState(c *C) {
 	fmt.Println("Testing EngineFrontend.Get exports multipath path state")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -160,7 +160,7 @@ func (s *TestSuite) TestEngineFrontendGetExportsMultipathState(c *C) {
 func (s *TestSuite) TestEngineFrontendSuspendIdempotent(c *C) {
 	fmt.Println("Testing EngineFrontend.Suspend is idempotent when already suspended")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateSuspended
 
 	err := ef.Suspend(nil)
@@ -172,7 +172,7 @@ func (s *TestSuite) TestServerEngineFrontendSwitchOverLookupByEngineName(c *C) {
 	fmt.Println("Testing Server.EngineFrontendSwitchOver lookup by engine name")
 
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.Nqn = "nqn.2014-08.org.nvmexpress:uuid:test-a"
 	stubSwitchoverANASync(ef, nil)
@@ -200,8 +200,8 @@ func (s *TestSuite) TestServerEngineFrontendSwitchOverAmbiguousEngineName(c *C) 
 
 	srv := &Server{
 		engineFrontendMap: map[string]*EngineFrontend{
-			"ef-a": NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1)),
-			"ef-b": NewEngineFrontend("ef-b", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1)),
+			"ef-a": NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil),
+			"ef-b": NewEngineFrontend("ef-b", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil),
 		},
 	}
 
@@ -239,7 +239,7 @@ func (s *TestSuite) TestServerEngineFrontendSwitchOverInvalidAddress(c *C) {
 func (s *TestSuite) TestServerEngineFrontendSwitchOverBlockdevRunning(c *C) {
 	fmt.Println("Testing Server.EngineFrontendSwitchOver for blockdev frontend while running")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -274,7 +274,7 @@ func (s *TestSuite) TestServerEngineFrontendSwitchOverBlockdevRunning(c *C) {
 func (s *TestSuite) TestServerEngineFrontendSwitchOverRejectedDuringRestore(c *C) {
 	fmt.Println("Testing Server.EngineFrontendSwitchOver is rejected during restore")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.IsRestoring = true
 
@@ -299,7 +299,7 @@ func (s *TestSuite) TestServerEngineFrontendSwitchOverRejectedDuringRestore(c *C
 func (s *TestSuite) TestServerEngineFrontendSwitchOverRejectedDuringExpand(c *C) {
 	fmt.Println("Testing Server.EngineFrontendSwitchOver is rejected during expansion")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.isExpanding = true
 
@@ -324,7 +324,7 @@ func (s *TestSuite) TestServerEngineFrontendSwitchOverRejectedDuringExpand(c *C)
 func (s *TestSuite) TestEngineFrontendSwitchOverTargetResolveEngineNameFallback(c *C) {
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP NVMe-oF frontend with engine name fallback")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.resolveEngineNameByTargetAddressFn = func(targetAddress string) (string, error) {
 		return "engine-c", nil
@@ -339,7 +339,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetResolveEngineNameFallback(
 func (s *TestSuite) TestEngineFrontendSwitchOverTargetUsesPathMetadataForRemoteANASync(c *C) {
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget resolves remote ANA sync metadata from path records")
 
-	ef := NewEngineFrontend("ef-a", "", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -369,7 +369,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevNoOpWithoutSuspend
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP Blockdev frontend with no-op switchover without suspend")
 
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -398,7 +398,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevConnectFailurePres
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP Blockdev frontend preserves original state on connect failure")
 
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 
 	oldEngineName := "engine-a"
@@ -460,7 +460,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevANASyncFailurePres
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP Blockdev frontend preserves original state on ANA sync failure")
 
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 
 	oldEngineName := "engine-a"
@@ -533,7 +533,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevCreatesInitiatorFo
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP Blockdev frontend creates initiator before multipath connect")
 
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -578,7 +578,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevAlreadyConnectedRe
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP Blockdev frontend reloads initiator state when target path is already connected")
 
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -639,7 +639,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevReloadsInitiatorSt
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget for SPDK TCP Blockdev frontend reloads initiator state after ANA sync")
 
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -708,7 +708,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevInProgressGuard(c 
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget in-progress guard for SPDK TCP Blockdev frontend")
 
 	updateCh := make(chan interface{}, 2)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateSuspended
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -776,7 +776,7 @@ func (s *TestSuite) TestEngineFrontendDeleteRejectedDuringSwitchOver(c *C) {
 	fmt.Println("Testing EngineFrontend.Delete is rejected while switch over is in progress")
 
 	updateCh := make(chan interface{}, 2)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -839,7 +839,7 @@ func (s *TestSuite) TestEngineFrontendDeleteRejectedDuringSwitchOver(c *C) {
 func (s *TestSuite) TestEngineFrontendSwitchOverTargetRejectedDuringExpand(c *C) {
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget is rejected while expansion is in progress")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.isExpanding = true
 
@@ -851,7 +851,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetRejectedDuringExpand(c *C)
 func (s *TestSuite) TestEngineFrontendSwitchOverTargetRejectedDuringRestore(c *C) {
 	fmt.Println("Testing EngineFrontend.SwitchOverTarget is rejected while restore is in progress")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.IsRestoring = true
 
@@ -863,7 +863,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetRejectedDuringRestore(c *C
 func (s *TestSuite) TestServerEngineFrontendSwitchOverEngineNotFound(c *C) {
 	fmt.Println("Testing Server.EngineFrontendSwitchOver with target engine not found")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.resolveEngineNameByTargetAddressFn = func(targetAddress string) (string, error) {
 		return "", ErrSwitchOverTargetEngineNotFound
@@ -889,7 +889,7 @@ func (s *TestSuite) TestServerEngineFrontendSwitchOverEngineNotFound(c *C) {
 func (s *TestSuite) TestCreateUblkFrontendNilReturnsCorrectErrorField(c *C) {
 	fmt.Println("Testing createUblkFrontend with nil UblkFrontend returns error referencing UblkFrontend")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendUBLK, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendUBLK, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.UblkFrontend = nil // force nil
 
 	err := ef.createUblkFrontend(nil)
@@ -900,7 +900,7 @@ func (s *TestSuite) TestCreateUblkFrontendNilReturnsCorrectErrorField(c *C) {
 }
 
 func (s *TestSuite) TestPromoteNVMeTCPPathLockedDemotesOldActivePath(c *C) {
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 
 	oldAddress := ef.upsertNVMeTCPPathLocked("10.0.0.1", 2000, "engine-a", getStableVolumeNQN("vol-a"), getStableVolumeNGUID("vol-a"), NvmeTCPANAStateOptimized)
 	newAddress := ef.upsertNVMeTCPPathLocked("10.0.0.2", 3000, "engine-b", getStableVolumeNQN("vol-a"), getStableVolumeNGUID("vol-a"), NvmeTCPANAStateNonOptimized)
@@ -916,7 +916,7 @@ func (s *TestSuite) TestPromoteNVMeTCPPathLockedDemotesOldActivePath(c *C) {
 }
 
 func (s *TestSuite) TestRemoveNVMeTCPPathLockedUpdatesSelectors(c *C) {
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 
 	firstAddress := ef.upsertNVMeTCPPathLocked("10.0.0.1", 2000, "engine-a", getStableVolumeNQN("vol-a"), getStableVolumeNGUID("vol-a"), NvmeTCPANAStateNonOptimized)
 	secondAddress := ef.upsertNVMeTCPPathLocked("10.0.0.2", 3000, "engine-b", getStableVolumeNQN("vol-a"), getStableVolumeNGUID("vol-a"), NvmeTCPANAStateOptimized)
@@ -936,7 +936,7 @@ func (s *TestSuite) TestRemoveNVMeTCPPathLockedUpdatesSelectors(c *C) {
 
 func (s *TestSuite) TestEngineFrontendDeleteClearsNVMeTCPPathState(c *C) {
 	updateCh := make(chan interface{}, 1)
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 2000
@@ -954,7 +954,7 @@ func (s *TestSuite) TestEngineFrontendDeleteClearsNVMeTCPPathState(c *C) {
 func (s *TestSuite) TestIsInitiatorCreationRequiredUblkReturnsTrue(c *C) {
 	fmt.Println("Testing isInitiatorCreationRequired returns true for UBLK frontend")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendUBLK, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendUBLK, 1024, 0, 0, make(chan interface{}, 1), nil)
 
 	required, err := ef.isInitiatorCreationRequired("10.0.0.1")
 	c.Assert(err, IsNil)
@@ -964,7 +964,7 @@ func (s *TestSuite) TestIsInitiatorCreationRequiredUblkReturnsTrue(c *C) {
 func (s *TestSuite) TestIsInitiatorCreationRequiredNvmeTcpBlockdevNewEngine(c *C) {
 	fmt.Println("Testing isInitiatorCreationRequired returns true for new NVMe/TCP blockdev engine (port=0)")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 
 	required, err := ef.isInitiatorCreationRequired("10.0.0.1")
 	c.Assert(err, IsNil)
@@ -974,7 +974,7 @@ func (s *TestSuite) TestIsInitiatorCreationRequiredNvmeTcpBlockdevNewEngine(c *C
 func (s *TestSuite) TestIsInitiatorCreationRequiredNvmeTcpBlockdevExistingEngine(c *C) {
 	fmt.Println("Testing isInitiatorCreationRequired returns false for existing NVMe/TCP blockdev engine (port!=0)")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.NvmeTcpFrontend.TargetPort = 3000
 
 	required, err := ef.isInitiatorCreationRequired("10.0.0.1")
@@ -985,7 +985,7 @@ func (s *TestSuite) TestIsInitiatorCreationRequiredNvmeTcpBlockdevExistingEngine
 func (s *TestSuite) TestIsInitiatorCreationRequiredNilNvmeTcpFrontendReturnsError(c *C) {
 	fmt.Println("Testing isInitiatorCreationRequired returns error when NvmeTcpFrontend is nil for non-UBLK frontend")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.NvmeTcpFrontend = nil
 
 	_, err := ef.isInitiatorCreationRequired("10.0.0.1")
@@ -996,7 +996,7 @@ func (s *TestSuite) TestIsInitiatorCreationRequiredNilNvmeTcpFrontendReturnsErro
 func (s *TestSuite) TestSyncRemoteEngineTargetANAStatesSubsystemNotFoundIsNonFatal(c *C) {
 	fmt.Println("Testing syncRemoteEngineTargetANAStates treats old engine subsystem-not-found as success")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 
 	var calls []string
 	ef.setRemoteEngineTargetANAStateFn = func(targetIP, engineName string, anaState NvmeTCPANAState) error {
@@ -1018,7 +1018,7 @@ func (s *TestSuite) TestSyncRemoteEngineTargetANAStatesSubsystemNotFoundIsNonFat
 func (s *TestSuite) TestSyncRemoteEngineTargetANAStatesOtherErrorStillFails(c *C) {
 	fmt.Println("Testing syncRemoteEngineTargetANAStates propagates non-subsystem errors on old engine")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 
 	ef.setRemoteEngineTargetANAStateFn = func(targetIP, engineName string, anaState NvmeTCPANAState) error {
 		if engineName == "engine-a" && anaState == NvmeTCPANAStateInaccessible {
@@ -1035,7 +1035,7 @@ func (s *TestSuite) TestSyncRemoteEngineTargetANAStatesOtherErrorStillFails(c *C
 func (s *TestSuite) TestSyncRemoteEngineTargetANAStatesPhase3FailureRollsBack(c *C) {
 	fmt.Println("Testing syncRemoteEngineTargetANAStates rolls back ANA states when phase 3 promotion fails")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 
 	var calls []string
 	ef.setRemoteEngineTargetANAStateFn = func(targetIP, engineName string, anaState NvmeTCPANAState) error {
@@ -1061,7 +1061,7 @@ func (s *TestSuite) TestSyncRemoteEngineTargetANAStatesPhase3FailureRollsBack(c 
 func (s *TestSuite) TestEngineFrontendSwitchOverTargetNvmfPromotingFailureRollsBackANAStates(c *C) {
 	fmt.Println("Testing switchOverTargetNvmfPhased promoting rolls back ANA states on promotion failure")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, make(chan interface{}, 1), nil)
 
 	updateRequired := false
 	var calls []string
@@ -1088,7 +1088,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetNvmfPromotingFailureRollsB
 func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevPromotingStep2FailureRollsBackANAStates(c *C) {
 	fmt.Println("Testing switchOverTargetBlockdevPhased promoting rolls back ANA states when Step 2 (loadInitiatorNVMeDeviceInfo) fails")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 	// Populate old path so resolveRemoteEngineName succeeds.
 	ef.NvmeTCPPathMap["10.0.0.1:2000"] = &NvmeTCPPath{
 		TargetIP:   "10.0.0.1",
@@ -1137,7 +1137,7 @@ func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevPromotingStep2Fail
 func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevPromotingStep3FailureRollsBackANAStates(c *C) {
 	fmt.Println("Testing switchOverTargetBlockdevPhased promoting rolls back ANA states when Step 3 (loadInitiatorEndpoint) fails")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1))
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 	ef.NvmeTCPPathMap["10.0.0.1:2000"] = &NvmeTCPPath{
 		TargetIP:   "10.0.0.1",
 		TargetPort: 2000,

@@ -195,7 +195,7 @@ func LaunchTestSPDKTargetDaemon(c *C, execute func(envs []string, name string, a
 func launchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error), wg *sync.WaitGroup) *server.Server {
 
 	LaunchTestSPDKTargetDaemon(c, execute)
-	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort)
+	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort, nil)
 	c.Assert(err, IsNil)
 
 	spdkGRPCListener, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
@@ -429,7 +429,7 @@ func (s *TestSuite) TestReplicaCreateWithStateChecks(c *C) {
 func (s *TestSuite) TestReplicaDeletePendingWithoutCleanupIsNoop(c *C) {
 	fmt.Println("Testing SPDK pending replica delete without cleanup is no-op")
 
-	r := server.NewReplica(context.Background(), "test-replica-pending", "test-lvs", "test-lvs-uuid", 0, true, make(chan interface{}, 1))
+	r := server.NewReplica(context.Background(), "test-replica-pending", "test-lvs", "test-lvs-uuid", 0, true, make(chan interface{}, 1), nil)
 	c.Assert(r, NotNil)
 	c.Assert(string(r.State), Equals, types.InstanceStatePending)
 
