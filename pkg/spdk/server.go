@@ -3,6 +3,7 @@ package spdk
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1079,6 +1080,22 @@ func (s *Server) recoverEngineFrontends(ctx context.Context) {
 			continue
 		}
 
+		// Skip recovery if the metadata file no longer exists on disk.
+		// A concurrent EngineFrontendCreate may have already claimed this
+		// volume and removed/replaced the old record. Do not touch any
+		// host resources (initiator, dm) for an engine frontend whose
+		// persisted record is gone.
+		metaPath := engineFrontendRecordPath(s.metadataDir, record.VolumeName)
+		if _, statErr := os.Stat(metaPath); os.IsNotExist(statErr) {
+			logrus.Warnf("Engine frontend %s metadata file %s no longer exists, skipping recovery (not touching host resources)", record.Name, metaPath)
+			s.Lock()
+			if s.engineFrontendMap[record.Name] == ef {
+				delete(s.engineFrontendMap, record.Name)
+			}
+			s.Unlock()
+			continue
+		}
+
 		// Hold the per-volume host lock for the entire recovery lifecycle
 		// (RecoverFromHost + cleanup/Delete) so that a concurrent
 		// EngineFrontendCreate for the same volume cannot start its own
@@ -1099,25 +1116,19 @@ func (s *Server) recoverEngineFrontends(ctx context.Context) {
 
 		if recoverErr != nil {
 			if errors.Is(recoverErr, ErrRecoverDeviceNotFound) {
-				logrus.Warnf("Removing engine frontend %s from map: device not found on host", record.Name)
+				logrus.Warnf("Engine frontend %s recovery: device not found on host, keeping metadata for next attempt", record.Name)
 			} else if errors.Is(recoverErr, ErrRecoveryCancelled) {
-				logrus.Infof("Recovery of engine frontend %s cancelled: evicted by concurrent operation", record.Name)
+				logrus.Infof("Engine frontend %s recovery cancelled: evicted by concurrent operation", record.Name)
 			} else {
-				logrus.WithError(recoverErr).Warnf("Removing engine frontend %s from map: recovery failed", record.Name)
+				logrus.WithError(recoverErr).Warnf("Engine frontend %s recovery failed, not removing existing initiator/dm resources", record.Name)
 			}
 
-			// Properly shut down the frontend instance (close stopCh,
-			// clean up any partially-recovered initiator, remove the
-			// persisted record) before removing it from the map.
-			// This follows the same pattern as the race-loser cleanup
-			// in EngineFrontendCreate.
-			if deleteErr := ef.Delete(spdkClient); deleteErr != nil {
-				logrus.WithError(deleteErr).Warnf("Failed to clean up engine frontend %s during recovery removal", record.Name)
-			}
-
-			// Only remove from map if this entry still belongs to us.
-			// A concurrent EngineFrontendCreate may have already evicted
-			// us and registered a new frontend under the same name.
+			// Do NOT call ef.Delete() here — recovery must never tear down
+			// existing host initiators or device mapper devices that may
+			// still be serving I/O. Only remove the in-memory object from
+			// the map so the stale recovery ef does not shadow a future Create.
+			// The persisted metadata file is intentionally preserved so that
+			// the next restart can attempt recovery again.
 			s.Lock()
 			if s.engineFrontendMap[record.Name] == ef {
 				delete(s.engineFrontendMap, record.Name)
@@ -1131,15 +1142,10 @@ func (s *Server) recoverEngineFrontends(ctx context.Context) {
 			s.RUnlock()
 
 			if current != ef {
-				logrus.Warnf("Engine frontend %s was superseded during recovery, cleaning up recovered resources", record.Name)
-				// The eviction path in EngineFrontendCreate already decided
-				// whether metadataDir should be kept (pre-create eviction,
-				// where no new record exists yet) or cleared (post-create
-				// eviction with successful Create, where a new record was
-				// written). Respect that decision — do not override here.
-				if deleteErr := ef.Delete(spdkClient); deleteErr != nil {
-					logrus.WithError(deleteErr).Warnf("Failed to clean up superseded engine frontend %s", record.Name)
-				}
+				logrus.Warnf("Engine frontend %s was superseded during recovery, not removing existing initiator/dm resources", record.Name)
+				// Do NOT call ef.Delete() — the existing host initiator/dm
+				// belongs to the new frontend that superseded us. Tearing it
+				// down would disrupt active I/O.
 			}
 		}
 
