@@ -84,3 +84,29 @@ func (s *TestSuite) TestIsUioPciGeneric(c *C) {
 		c.Assert(result, Equals, tc.expected, Commentf("Expected %v for driver %s, got %v", tc.expected, tc.driver, result))
 	}
 }
+
+func (s *TestSuite) TestIsBDF(c *C) {
+	fmt.Println("Testing isBDF with various path strings")
+
+	testCases := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{
+			name:     "BDF path",
+			path:     "0000:00:10.0",
+			expected: true,
+		},
+		{
+			name:     "/dev/disk/by-path path",
+			path:     "/dev/disk/by-path/pci-0000:00:10.0-nvme-1",
+			expected: false,
+		},
+	}
+	for _, tc := range testCases {
+		c.Logf("Running test case: %s", tc.name)
+		result := isBDF(tc.path)
+		c.Assert(result, Equals, tc.expected, Commentf("Expected %v for path %s, got %v", tc.expected, tc.path, result))
+	}
+}
