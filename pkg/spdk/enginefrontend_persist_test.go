@@ -559,6 +559,7 @@ func (s *TestSuite) TestRecoverFromHostBlockdevUsesPersistedTargetForControllerS
 		reconnectCalled = true
 		return nil
 	}
+	ef.checkTargetReachableFn = func(address string) error { return nil }
 	ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error { return nil }
 
 	err := ef.RecoverFromHost(nil)
@@ -614,6 +615,7 @@ func (s *TestSuite) TestRecoverFromHostBlockdevStalePersistedTargetFallsBackToAn
 		reconnectCalled = true
 		return nil
 	}
+	ef.checkTargetReachableFn = func(address string) error { return nil }
 	ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error { return nil }
 
 	err := ef.RecoverFromHost(nil)
