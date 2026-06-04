@@ -626,7 +626,7 @@ func (s *Server) EngineBackupRestore(ctx context.Context, req *spdkrpc.EngineBac
 		"engine":         tempEF.EngineName,
 		"volume":         tempEF.VolumeName,
 		"frontend":       tempEF.Frontend,
-		"replicas":       len(e.ReplicaStatusMap),
+		"replicas":       len(e.upstreams),
 		"specSize":       e.SpecSize,
 	}).Info("Creating temporary engine frontend for backup restore request")
 
