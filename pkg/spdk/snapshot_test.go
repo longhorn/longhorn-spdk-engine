@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
-	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
 	. "gopkg.in/check.v1"
@@ -16,7 +15,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckCreateGeneratesName(c *C) {
 
 	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 
-	snapshotName, err := e.snapshotOperationPreCheckWithoutLock(map[string]*client.SPDKClient{}, "", SnapshotOperationCreate)
+	snapshotName, err := e.snapshotOperationPreCheckWithoutLock("", SnapshotOperationCreate)
 	c.Assert(err, IsNil)
 	c.Assert(snapshotName, Not(Equals), "")
 	c.Assert(len(snapshotName), Equals, 8)
@@ -27,7 +26,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckDeleteEmptyName(c *C) {
 
 	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 
-	_, err := e.snapshotOperationPreCheckWithoutLock(map[string]*client.SPDKClient{}, "", SnapshotOperationDelete)
+	_, err := e.snapshotOperationPreCheckWithoutLock("", SnapshotOperationDelete)
 	c.Assert(err, NotNil)
 	c.Assert(strings.Contains(err.Error(), "empty snapshot name"), Equals, true)
 }
@@ -40,7 +39,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckCreateFailsWhenSnapshotMaxCount
 	e.SnapshotMap["snap-1"] = &api.Lvol{Name: "snap-1"}
 	e.SnapshotMap["snap-2"] = &api.Lvol{Name: "snap-2"}
 
-	_, err := e.snapshotOperationPreCheckWithoutLock(map[string]*client.SPDKClient{}, "", SnapshotOperationCreate)
+	_, err := e.snapshotOperationPreCheckWithoutLock("", SnapshotOperationCreate)
 	c.Assert(err, NotNil)
 	c.Assert(strings.Contains(err.Error(), "snapshot count 2 is equal or larger than snapshotMaxCount 2"), Equals, true)
 }
