@@ -3242,7 +3242,7 @@ func (e *Engine) validateReplicaStatusMapNoLock(bdevMap map[string]*spdktypes.Bd
 }
 
 type replicaInspection struct {
-	replica           *api.Replica
+	view              *UpstreamView
 	ancestor          *api.Lvol
 	foundBackingImage bool
 	foundSnapshot     bool
@@ -3253,7 +3253,7 @@ type replicaInspection struct {
 // replica, resolves its ancestor lineage, and selects the replica with the earliest
 // ancestor CreationTime as the info source. Must be called with the Engine lock held.
 func (e *Engine) checkAndUpdateInfoFromReplicasNoLock() {
-	replicaMap := map[string]*api.Replica{}
+	replicaViewMap := map[string]*UpstreamView{}
 	replicaAncestorMap := map[string]*api.Lvol{}
 	hasBackingImage := false
 	hasSnapshot := false
@@ -3275,11 +3275,11 @@ func (e *Engine) checkAndUpdateInfoFromReplicasNoLock() {
 			hasSnapshot = true
 		}
 
-		replicaMap[replicaName] = inspection.replica
+		replicaViewMap[replicaName] = inspection.view
 		replicaAncestorMap[replicaName] = inspection.ancestor
 	}
 
-	e.selectAndApplyEarliestReplicaInfo(replicaMap, replicaAncestorMap, hasBackingImage, hasSnapshot)
+	e.selectAndApplyEarliestReplicaInfo(replicaViewMap, replicaAncestorMap, hasBackingImage, hasSnapshot)
 }
 
 // ensureReplicaModeForInfoUpdate checks whether a replica's mode qualifies it
@@ -3298,45 +3298,34 @@ func (e *Engine) ensureReplicaModeForInfoUpdate(replicaName string, replicaStatu
 	return false
 }
 
-// inspectReplicaForInfoUpdate validates and inspects a replica as an info source candidate.
+// inspectReplicaForInfoUpdate validates and inspects an upstream as an info source candidate.
 //
-// Here, "info source" means the replica selected as the source of truth for this update round,
-// i.e. the replica whose data may be used to update engine state such as SnapshotMap, Head,
+// Here, "info source" means the upstream selected as the source of truth for this update round,
+// i.e. the upstream whose data may be used to update engine state such as SnapshotMap, Head,
 // and ActualSize.
 //
 // Flow:
-//  1. Build replica service client and fetch replica object.
-//  2. If the replica is WO (rebuilding), only check shallow-copy state; do not use it as an info source.
-//  3. If the replica is RW, resolve its ancestor (backing image snapshot / oldest snapshot / head)
+//  1. Fetch the upstream view via Upstream.Get() (ReplicaGet for RAID1, ShardGroupGet for EC).
+//  2. If the upstream is WO (rebuilding), only check shallow-copy state; do not use it as an info source.
+//  3. If the upstream is RW, resolve its ancestor (backing image snapshot / oldest snapshot / head)
 //     based on current global context (hasBackingImage, hasSnapshot).
 func (e *Engine) inspectReplicaForInfoUpdate(replicaName string, replicaStatus Upstream, hasBackingImage bool, hasSnapshot bool) (*replicaInspection, bool) {
-	replicaServiceCli, err := e.newServiceClient(replicaStatus.Address())
+	view, err := replicaStatus.Get()
 	if err != nil {
-		e.log.WithError(err).Errorf("Engine failed to get service client for replica %s with address %s, will skip this replica and continue info update for other replicas", replicaName, replicaStatus.Address())
-		return nil, false
-	}
-	defer func() {
-		if errClose := replicaServiceCli.Close(); errClose != nil {
-			e.log.WithError(errClose).Errorf("Engine failed to close replica %s client with address %s during check and update info from replica", replicaName, replicaStatus.Address())
-		}
-	}()
-
-	replica, err := replicaServiceCli.ReplicaGet(replicaName)
-	if err != nil {
-		e.log.WithError(err).Warnf("Engine failed to get replica %s with address %s, mark the mode from %v to ERR", replicaName, replicaStatus.Address(), replicaStatus.Mode())
+		e.log.WithError(err).Warnf("Engine failed to get upstream %s with address %s, mark the mode from %v to ERR", replicaName, replicaStatus.Address(), replicaStatus.Mode())
 		replicaStatus.SetMode(types.ModeERR)
 		return nil, false
 	}
 
 	if replicaStatus.Mode() == types.ModeWO {
-		if err := e.handleWOReplicaDuringInfoUpdate(replicaServiceCli, replicaName, replicaStatus); err != nil {
+		if err := e.handleWOReplicaDuringInfoUpdate(replicaName, replicaStatus); err != nil {
 			e.log.WithError(err).Warn("Skip WO replica during info update")
 		}
 		return nil, false
 	}
 
-	inspection := &replicaInspection{replica: replica}
-	ancestor, foundBackingImage, foundSnapshot, ok := e.resolveReplicaAncestor(replicaServiceCli, replicaName, replica, replicaStatus, hasBackingImage, hasSnapshot)
+	inspection := &replicaInspection{view: view}
+	ancestor, foundBackingImage, foundSnapshot, ok := e.resolveReplicaAncestor(replicaName, view, replicaStatus, hasBackingImage, hasSnapshot)
 	if !ok {
 		return nil, false
 	}
@@ -3347,8 +3336,25 @@ func (e *Engine) inspectReplicaForInfoUpdate(replicaName string, replicaStatus U
 	return inspection, true
 }
 
-func (e *Engine) handleWOReplicaDuringInfoUpdate(replicaServiceCli *client.SPDKClient, replicaName string, replicaStatus Upstream) error {
-	shallowCopyStatus, err := replicaServiceCli.ReplicaRebuildingDstShallowCopyCheck(replicaName)
+// handleWOReplicaDuringInfoUpdate inspects a rebuilding (WO) RAID1 replica's
+// shallow-copy state. WO is RAID1-only - EC volumes do not surface
+// rebuild-in-progress at the engine layer (rebuild is driven inside the
+// ShardGroup process via ShardGroupShardRebuildStart). The lazy SPDK client
+// is constructed inline because this is the only RAID1-specific use of
+// ReplicaRebuildingDstShallowCopyCheck and it is not on the Upstream
+// interface.
+func (e *Engine) handleWOReplicaDuringInfoUpdate(replicaName string, replicaStatus Upstream) error {
+	serviceClient, err := e.newServiceClient(replicaStatus.Address())
+	if err != nil {
+		return errors.Wrapf(err, "failed to get service client for replica %s during WO shallow-copy check", replicaName)
+	}
+	defer func() {
+		if errClose := serviceClient.Close(); errClose != nil {
+			e.log.WithError(errClose).Warnf("Failed to close replica %s client during WO shallow-copy check", replicaName)
+		}
+	}()
+
+	shallowCopyStatus, err := serviceClient.ReplicaRebuildingDstShallowCopyCheck(replicaName)
 	if err != nil {
 		return errors.Wrapf(err, "Engine failed to get rebuilding replica %s shallow copy info, will skip this replica and continue info update for other replicas", replicaName)
 	}
@@ -3360,41 +3366,41 @@ func (e *Engine) handleWOReplicaDuringInfoUpdate(replicaServiceCli *client.SPDKC
 	return nil
 }
 
-// resolveReplicaAncestor determines the ancestor lvol used to compare replica lineage
+// resolveReplicaAncestor determines the ancestor lvol used to compare upstream lineage
 // during engine info refresh.
 //
-// Selection order per replica:
-// 1. Backing image snapshot (if the replica has a backing image)
+// Selection order per upstream:
+// 1. Backing image snapshot (if the upstream has a backing image)
 // 2. Oldest snapshot (snapshot with empty Parent)
 // 3. Head (when no snapshots exist)
 //
-// It also enforces cross-replica consistency for this round:
-// - If any replica has backing image lineage, replicas without backing image lineage are skipped.
-// - If any replica has snapshot lineage (and no backing image lineage), replicas without snapshots are skipped.
+// It also enforces cross-upstream consistency for this round:
+// - If any upstream has backing image lineage, upstreams without backing image lineage are skipped.
+// - If any upstream has snapshot lineage (and no backing image lineage), upstreams without snapshots are skipped.
 //
 // Returns:
 // - ancestor: selected lvol for lineage/creation-time comparison.
-// - foundBackingImage: true if this replica contributes backing-image lineage.
-// - foundSnapshot: true if this replica contributes snapshot lineage.
-// - ok: false when the replica should be skipped (inconsistent lineage, missing ancestor, or lookup failure).
-func (e *Engine) resolveReplicaAncestor(replicaServiceCli *client.SPDKClient, replicaName string,
-	replica *api.Replica, replicaStatus Upstream, hasBackingImage bool, hasSnapshot bool) (ancestor *api.Lvol, foundBackingImage bool, foundSnapshot bool, ok bool) {
-	if replica.BackingImageName != "" {
-		backingImage, err := replicaServiceCli.BackingImageGet(replica.BackingImageName, replica.LvsUUID)
+// - foundBackingImage: true if this upstream contributes backing-image lineage.
+// - foundSnapshot: true if this upstream contributes snapshot lineage.
+// - ok: false when the upstream should be skipped (inconsistent lineage, missing ancestor, or lookup failure).
+func (e *Engine) resolveReplicaAncestor(replicaName string, view *UpstreamView,
+	replicaStatus Upstream, hasBackingImage bool, hasSnapshot bool) (ancestor *api.Lvol, foundBackingImage bool, foundSnapshot bool, ok bool) {
+	if view.BackingImageName != "" {
+		backingImage, err := replicaStatus.BackingImageGet(view.BackingImageName, view.LvsUUID)
 		if err != nil {
-			e.log.WithError(err).Warnf("Failed to get backing image %s with disk UUID %s from replica %s head parent %s, will mark the mode from %v to ERR and continue info update for other replicas", replica.BackingImageName, replica.LvsUUID, replicaName, replica.Head.Parent, replicaStatus.Mode())
+			e.log.WithError(err).Warnf("Failed to get backing image %s with disk UUID %s from replica %s head parent %s, will mark the mode from %v to ERR and continue info update for other replicas", view.BackingImageName, view.LvsUUID, replicaName, view.Head.Parent, replicaStatus.Mode())
 			replicaStatus.SetMode(types.ModeERR)
 			return nil, false, false, false
 		}
-		return backingImage.Snapshot, true, len(replica.Snapshots) > 0, true
+		return backingImage.Snapshot, true, len(view.Snapshots) > 0, true
 	}
 
-	if len(replica.Snapshots) > 0 {
+	if len(view.Snapshots) > 0 {
 		if hasBackingImage {
 			e.log.Warnf("Engine found replica %s does not have a backing image while other replicas have during info update for other replicas", replicaName)
 			return nil, false, false, false
 		}
-		for _, snapApiLvol := range replica.Snapshots {
+		for _, snapApiLvol := range view.Snapshots {
 			if snapApiLvol.Parent == "" {
 				return snapApiLvol, false, true, true
 			}
@@ -3407,7 +3413,11 @@ func (e *Engine) resolveReplicaAncestor(replicaServiceCli *client.SPDKClient, re
 		e.log.Warnf("Engine found replica %s does not have a snapshot while other replicas have during info update for other replicas", replicaName)
 		return nil, false, false, false
 	}
-	return replica.Head, false, false, true
+	if view.Head == nil {
+		e.log.Warnf("Engine found upstream %s does not have a head lvol during info update", replicaName)
+		return nil, false, false, false
+	}
+	return view.Head, false, false, true
 }
 
 // selectAndApplyEarliestReplicaInfo chooses one replica as the engine info source
@@ -3429,7 +3439,7 @@ func (e *Engine) resolveReplicaAncestor(replicaServiceCli *client.SPDKClient, re
 // Notes:
 // - Replicas with invalid/unparsable ancestor CreationTime are skipped.
 // - If no valid candidate remains, engine state is left unchanged.
-func (e *Engine) selectAndApplyEarliestReplicaInfo(replicaMap map[string]*api.Replica, replicaAncestorMap map[string]*api.Lvol, hasBackingImage bool, hasSnapshot bool) {
+func (e *Engine) selectAndApplyEarliestReplicaInfo(replicaViewMap map[string]*UpstreamView, replicaAncestorMap map[string]*api.Lvol, hasBackingImage bool, hasSnapshot bool) {
 	candidateReplicaName := ""
 	earliestCreationTime := time.Now()
 
@@ -3448,9 +3458,9 @@ func (e *Engine) selectAndApplyEarliestReplicaInfo(replicaMap map[string]*api.Re
 		}
 
 		earliestCreationTime = creationTime
-		e.SnapshotMap = replicaMap[replicaName].Snapshots
-		e.Head = replicaMap[replicaName].Head
-		e.ActualSize = replicaMap[replicaName].ActualSize
+		e.SnapshotMap = replicaViewMap[replicaName].Snapshots
+		e.Head = replicaViewMap[replicaName].Head
+		e.ActualSize = replicaViewMap[replicaName].ActualSize
 
 		if candidateReplicaName != "" && candidateReplicaName != replicaName {
 			e.logReplicaAncestorSwitch(candidateReplicaName, replicaName, replicaAncestorMap)
@@ -3460,6 +3470,10 @@ func (e *Engine) selectAndApplyEarliestReplicaInfo(replicaMap map[string]*api.Re
 }
 
 func shouldConsiderAncestor(ancestor *api.Lvol, replicaName string, hasBackingImage bool, hasSnapshot bool) bool {
+	if ancestor == nil {
+		return false
+	}
+
 	if hasBackingImage {
 		return ancestor.Name != types.VolumeHead && !IsReplicaSnapshotLvol(replicaName, ancestor.Name)
 	}
