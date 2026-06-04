@@ -138,10 +138,8 @@ github.com/longhorn/go-spdk-helper/pkg/spdk/setup
 github.com/longhorn/go-spdk-helper/pkg/spdk/types
 github.com/longhorn/go-spdk-helper/pkg/types
 github.com/longhorn/go-spdk-helper/pkg/util
-# github.com/longhorn/types v0.0.0-20260608145242-38c27234df4b
+# github.com/longhorn/types v0.0.0-20260709032252-3d0a3cd8f06f
 ## explicit; go 1.25.0
-github.com/longhorn/types/pkg/generated/enginerpc
-github.com/longhorn/types/pkg/generated/imrpc
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/mitchellh/go-ps v1.0.0
 ## explicit; go 1.13
