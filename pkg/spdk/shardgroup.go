@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
@@ -1178,6 +1179,194 @@ func (sg *ShardGroup) SnapshotPurge(spdkClient *spdkclient.Client) error {
 	}
 
 	sg.log.Infof("Snapshot purge complete: deleted %d orphan snapshot(s)", purged)
+	return nil
+}
+
+// ShardReplace hot-swaps the bdev for a FAILED slot. It looks up the slot by
+// shard name (the Shard CR external name <volumeName>-<slotIndex>),
+// NVMe-connects to the new address, and calls bdev_ec_replace_base_bdev. The
+// slot transitions FAILED -> REPLACING and the new bdev immediately starts
+// receiving foreground writes. ShardRebuildStart must follow to populate the
+// pre-failure data.
+func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, shardAddress string) (slotState string, err error) {
+	sg.Lock()
+	defer sg.Unlock()
+
+	if sg.State != types.InstanceStateRunning {
+		return "", grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s shard replace", sg.State, sg.Name)
+	}
+
+	endpoint, ok := sg.Shards[shardName]
+	if !ok {
+		return "", grpcstatus.Errorf(grpccodes.NotFound, "shard %s not found in shardgroup %s", shardName, sg.Name)
+	}
+
+	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
+	// Best-effort detach of any prior controller before re-attaching to the new address.
+	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		sg.log.WithError(err).Warnf("Pre-replace detach of controller %s failed; continuing", controllerName)
+	}
+
+	bdevName, err := connectNVMfBdev(spdkClient, controllerName, shardAddress,
+		ecShardCtrlrLossTimeoutSec, ecShardFastIOFailTimeoutSec, maxRetries, retryInterval)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to connect replacement shard %s at %s", controllerName, shardAddress)
+	}
+
+	resp, err := spdkClient.BdevEcReplaceBaseBdev(sg.EcBdevName, endpoint.SlotIndex, bdevName)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to replace base bdev at slot %d for shardgroup %s", endpoint.SlotIndex, sg.Name)
+	}
+
+	// endpoint is the *ShardEndpoint already in sg.Shards; mutating its Address
+	// updates the map entry in place.
+	endpoint.Address = shardAddress
+
+	sg.log.Infof("Replaced shard %s at slot %d with %s; slot state=%s", shardName, endpoint.SlotIndex, shardAddress, resp.State)
+	return string(resp.State), nil
+}
+
+// Bounds for the post-detach poll in ForceFailShard. The slot transition is
+// driven by SPDK_BDEV_EVENT_REMOVE on the local bdev, which fires synchronously
+// from BdevNvmeDetachController, so the wait is short in practice.
+const (
+	ecShardForceFailPollInterval = 100 * time.Millisecond
+	ecShardForceFailPollTimeout  = 5 * time.Second
+)
+
+// ForceFailShard drives a slot to FAILED immediately by detaching the upstream
+// NVMe controller, bypassing bdev_nvme's ctrlr_loss_timeout_sec wait. Used by
+// the manager when it knows the shard is gone for good (intentional Shard CR
+// delete, eviction) so that ShardGroupShardReplace can be issued in seconds
+// instead of minutes.
+//
+// Idempotency rules - these defend against reconcile retries and stale
+// requests racing past a successful replace:
+//   - slot already FAILED: no-op, return current state.
+//   - slot REPLACING: refuse with FailedPrecondition; a rebuild is in flight
+//     and force-failing now would invalidate in-progress reconstruction.
+//   - shardName unknown: NotFound.
+//
+// Failure accounting (failed_count, dirty-region bookkeeping, degraded-mode
+// gating) is NOT touched here; it flows through the standard BDEV_EVENT_REMOVE
+// path that bdev_ec already handles for unintentional failures. The only new
+// behavior is the trigger.
+func (sg *ShardGroup) ForceFailShard(spdkClient *spdkclient.Client, shardName string) (slotState string, err error) {
+	sg.Lock()
+	defer sg.Unlock()
+
+	if sg.State != types.InstanceStateRunning {
+		return "", grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s shard force-fail", sg.State, sg.Name)
+	}
+
+	endpoint, ok := sg.Shards[shardName]
+	if !ok {
+		return "", grpcstatus.Errorf(grpccodes.NotFound, "shard %s not found in shardgroup %s", shardName, sg.Name)
+	}
+
+	currentState, err := sg.readSlotStateNoLock(spdkClient, endpoint.SlotIndex)
+	if err != nil {
+		return "", err
+	}
+	switch currentState {
+	case spdktypes.BdevEcSlotStateFailed:
+		return string(currentState), nil
+	case spdktypes.BdevEcSlotStateReplacing:
+		return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"shard %s in shardgroup %s is REPLACING; refuse to force-fail", shardName, sg.Name)
+	}
+
+	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
+	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return "", errors.Wrapf(err, "failed to detach controller %s for shard %s", controllerName, shardName)
+	}
+
+	deadline := time.Now().Add(ecShardForceFailPollTimeout)
+	for {
+		observed, err := sg.readSlotStateNoLock(spdkClient, endpoint.SlotIndex)
+		if err != nil {
+			return "", err
+		}
+		if observed == spdktypes.BdevEcSlotStateFailed {
+			sg.log.Infof("Force-failed shard %s at slot %d", shardName, endpoint.SlotIndex)
+			return string(observed), nil
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("slot %d for shard %s did not transition to FAILED within %s (last state=%s)",
+				endpoint.SlotIndex, shardName, ecShardForceFailPollTimeout, observed)
+		}
+		time.Sleep(ecShardForceFailPollInterval)
+	}
+}
+
+// readSlotStateNoLock returns the current EC slot state for the given slot
+// index. Caller must hold sg's lock (or an outer caller's equivalent).
+func (sg *ShardGroup) readSlotStateNoLock(spdkClient *spdkclient.Client, slotIndex uint32) (spdktypes.BdevEcSlotState, error) {
+	ecInfo, err := sg.getEcBdevInfoNoLock(spdkClient)
+	if err != nil {
+		return "", err
+	}
+	for _, base := range ecInfo.BaseBdevs {
+		if base.Slot == slotIndex {
+			return base.State, nil
+		}
+	}
+	return "", fmt.Errorf("slot %d not found in EC bdev %s for shardgroup %s", slotIndex, sg.EcBdevName, sg.Name)
+}
+
+// ShardRebuildStart starts the background rebuild poller for all REPLACING
+// slots. Returns the total stripe count and the first slot being rebuilt for
+// observability.
+func (sg *ShardGroup) ShardRebuildStart(spdkClient *spdkclient.Client) (numStripes uint64, firstSlot uint32, err error) {
+	sg.Lock()
+	defer sg.Unlock()
+
+	if sg.State != types.InstanceStateRunning {
+		return 0, 0, grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s rebuild start", sg.State, sg.Name)
+	}
+
+	resp, err := spdkClient.BdevEcStartRebuild(sg.EcBdevName)
+	if err != nil {
+		return 0, 0, errors.Wrapf(err, "failed to start rebuild on shardgroup %s", sg.Name)
+	}
+	sg.log.Infof("Started rebuild for shardgroup %s: numStripes=%d firstSlot=%d", sg.Name, resp.NumStripes, resp.FirstSlot)
+	return resp.NumStripes, resp.FirstSlot, nil
+}
+
+func (sg *ShardGroup) ShardRebuildProgress(spdkClient *spdkclient.Client) (*spdktypes.BdevEcRebuildProgress, error) {
+	sg.RLock()
+	defer sg.RUnlock()
+
+	progress, err := spdkClient.BdevEcGetRebuildProgress(sg.EcBdevName)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get rebuild progress for shardgroup %s", sg.Name)
+	}
+	return &progress, nil
+}
+
+// ShardRebuildStop returns an error if no rebuild is in progress (-ENOENT from SPDK).
+func (sg *ShardGroup) ShardRebuildStop(spdkClient *spdkclient.Client) error {
+	sg.Lock()
+	defer sg.Unlock()
+
+	if _, err := spdkClient.BdevEcStopRebuild(sg.EcBdevName); err != nil {
+		return errors.Wrapf(err, "failed to stop rebuild on shardgroup %s", sg.Name)
+	}
+	sg.log.Info("Stopped rebuild")
+	return nil
+}
+
+// ShardRebuildQosSet sets the rebuild rate limit. maxStripesPerSec=0 means
+// unlimited. paused=true suspends the rebuild poller without cancelling.
+// Applied immediately to any in-progress rebuild.
+func (sg *ShardGroup) ShardRebuildQosSet(spdkClient *spdkclient.Client, maxStripesPerSec uint32, paused bool) error {
+	sg.Lock()
+	defer sg.Unlock()
+
+	if _, err := spdkClient.BdevEcSetRebuildQos(sg.EcBdevName, maxStripesPerSec, paused); err != nil {
+		return errors.Wrapf(err, "failed to set rebuild QoS on shardgroup %s", sg.Name)
+	}
+	sg.log.Infof("Set rebuild QoS: maxStripesPerSec=%d paused=%v", maxStripesPerSec, paused)
 	return nil
 }
 
