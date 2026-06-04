@@ -45,6 +45,9 @@ type Server struct {
 	replicaMapGen int64
 	// shardMapGen does the same for shardMap (ShardCreate/ShardDelete).
 	shardMapGen int64
+	// shardGroupMapGen does the same for shardGroupMap
+	// (ShardGroupCreate/ShardGroupDelete).
+	shardGroupMapGen int64
 
 	ctx context.Context
 
@@ -56,7 +59,8 @@ type Server struct {
 	engineMap         map[string]*Engine
 	engineFrontendMap map[string]*EngineFrontend
 
-	shardMap map[string]*Shard
+	shardMap      map[string]*Shard
+	shardGroupMap map[string]*ShardGroup
 
 	backupMap map[string]*Backup
 
@@ -117,7 +121,7 @@ func NewServer(ctx context.Context, portStart, portEnd int32, newServiceClient S
 	broadcasters := map[types.InstanceType]*broadcaster.Broadcaster{}
 	broadcastChs := map[types.InstanceType]chan interface{}{}
 	updateChs := map[types.InstanceType]chan interface{}{}
-	for _, t := range []types.InstanceType{types.InstanceTypeReplica, types.InstanceTypeEngine, types.InstanceTypeEngineFrontend, types.InstanceTypeBackingImage, types.InstanceTypeShard} {
+	for _, t := range []types.InstanceType{types.InstanceTypeReplica, types.InstanceTypeEngine, types.InstanceTypeEngineFrontend, types.InstanceTypeBackingImage, types.InstanceTypeShard, types.InstanceTypeShardGroup} {
 		broadcasters[t] = &broadcaster.Broadcaster{}
 		broadcastChs[t] = make(chan interface{})
 		updateChs[t] = make(chan interface{})
@@ -137,7 +141,8 @@ func NewServer(ctx context.Context, portStart, portEnd int32, newServiceClient S
 		engineMap:         map[string]*Engine{},
 		engineFrontendMap: map[string]*EngineFrontend{},
 
-		shardMap: map[string]*Shard{},
+		shardMap:      map[string]*Shard{},
+		shardGroupMap: map[string]*ShardGroup{},
 
 		backupMap: map[string]*Backup{},
 
@@ -167,6 +172,9 @@ func NewServer(ctx context.Context, portStart, portEnd int32, newServiceClient S
 		return nil, err
 	}
 	if _, err := s.broadcasters[types.InstanceTypeShard].Subscribe(ctx, s.shardBroadcastConnector); err != nil {
+		return nil, err
+	}
+	if _, err := s.broadcasters[types.InstanceTypeShardGroup].Subscribe(ctx, s.shardGroupBroadcastConnector); err != nil {
 		return nil, err
 	}
 
@@ -263,6 +271,9 @@ type verifyState struct {
 	shardMap              map[string]*Shard
 	shardMapGen           int64
 	shardMapForSync       map[string]*Shard
+	shardGroupMap         map[string]*ShardGroup
+	shardGroupMapGen      int64
+	shardGroupMapForSync  map[string]*ShardGroup
 	spdkClient            *spdkclient.Client
 }
 
@@ -310,6 +321,13 @@ func (s *Server) applyVerifiedState(state *verifyState) bool {
 		return false
 	}
 
+	if s.shardGroupMapGen != state.shardGroupMapGen {
+		logrus.Infof("spdk gRPC server: skipped map update due to concurrent shardgroup mutation during verify")
+		s.backingImageMap = state.backingImageMap
+		s.UpdateEngineMetrics()
+		return false
+	}
+
 	if len(s.replicaMap) != len(state.replicaMap) {
 		logrus.Infof("spdk gRPC server: replica map updated, map count is changed from %d to %d", len(s.replicaMap), len(state.replicaMap))
 	}
@@ -317,6 +335,7 @@ func (s *Server) applyVerifiedState(state *verifyState) bool {
 	s.replicaMap = state.replicaMap
 	s.backingImageMap = state.backingImageMap
 	s.shardMap = state.shardMap
+	s.shardGroupMap = state.shardGroupMap
 	s.UpdateEngineMetrics()
 	return true
 }
@@ -333,6 +352,9 @@ func (s *Server) newVerifyState() *verifyState {
 		shardMap:              map[string]*Shard{},
 		shardMapGen:           s.shardMapGen,
 		shardMapForSync:       map[string]*Shard{},
+		shardGroupMap:         map[string]*ShardGroup{},
+		shardGroupMapGen:      s.shardGroupMapGen,
+		shardGroupMapForSync:  map[string]*ShardGroup{},
 		spdkClient:            s.spdkClient,
 	}
 
@@ -354,6 +376,10 @@ func (s *Server) newVerifyState() *verifyState {
 		state.shardMap[k] = v
 		state.shardMapForSync[k] = v
 	}
+	for k, v := range s.shardGroupMap {
+		state.shardGroupMap[k] = v
+		state.shardGroupMapForSync[k] = v
+	}
 	return state
 }
 
@@ -362,7 +388,7 @@ func (s *Server) handleVerifyError(err error, state *verifyState) {
 		return
 	}
 	if jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
-		logrus.WithError(err).Warn("spdk gRPC server: marking all non-stopped and non-error replicas, engines, and shards as error")
+		logrus.WithError(err).Warn("spdk gRPC server: marking all non-stopped and non-error replicas, engines, shards, and shardgroups as error")
 		for _, r := range state.replicaMapForSync {
 			r.SetErrorState()
 		}
@@ -374,6 +400,9 @@ func (s *Server) handleVerifyError(err error, state *verifyState) {
 		}
 		for _, sh := range state.shardMapForSync {
 			sh.SetErrorState()
+		}
+		for _, sg := range state.shardGroupMapForSync {
+			sg.SetErrorState()
 		}
 	}
 }
@@ -582,6 +611,12 @@ func (s *Server) syncVerifiedObjects(state *verifyState) error {
 		}
 	}
 
+	for _, shardGroup := range state.shardGroupMapForSync {
+		if err := shardGroup.Sync(state.spdkClient); err != nil && jsonrpc.IsJSONRPCRespErrorBrokenPipe(err) {
+			return err
+		}
+	}
+
 	// TODO: send update signals if there is a Replica/Replica change
 	return nil
 }
@@ -601,6 +636,7 @@ func (s *Server) broadcasting() {
 				case <-s.updateChs[types.InstanceTypeEngineFrontend]:
 				case <-s.updateChs[types.InstanceTypeBackingImage]:
 				case <-s.updateChs[types.InstanceTypeShard]:
+				case <-s.updateChs[types.InstanceTypeShardGroup]:
 				}
 			}
 		case <-s.updateChs[types.InstanceTypeReplica]:
@@ -613,6 +649,8 @@ func (s *Server) broadcasting() {
 			s.broadcastChs[types.InstanceTypeBackingImage] <- nil
 		case <-s.updateChs[types.InstanceTypeShard]:
 			s.broadcastChs[types.InstanceTypeShard] <- nil
+		case <-s.updateChs[types.InstanceTypeShardGroup]:
+			s.broadcastChs[types.InstanceTypeShardGroup] <- nil
 		}
 	}
 }
@@ -629,6 +667,8 @@ func (s *Server) Subscribe(ctx context.Context, instanceType types.InstanceType)
 		return s.broadcasters[types.InstanceTypeBackingImage].Subscribe(ctx, s.backingImageBroadcastConnector)
 	case types.InstanceTypeShard:
 		return s.broadcasters[types.InstanceTypeShard].Subscribe(ctx, s.shardBroadcastConnector)
+	case types.InstanceTypeShardGroup:
+		return s.broadcasters[types.InstanceTypeShardGroup].Subscribe(ctx, s.shardGroupBroadcastConnector)
 	}
 	return nil, fmt.Errorf("invalid instance type %v for subscription", instanceType)
 }
@@ -651,6 +691,10 @@ func (s *Server) backingImageBroadcastConnector() (chan interface{}, error) {
 
 func (s *Server) shardBroadcastConnector() (chan interface{}, error) {
 	return s.broadcastChs[types.InstanceTypeShard], nil
+}
+
+func (s *Server) shardGroupBroadcastConnector() (chan interface{}, error) {
+	return s.broadcastChs[types.InstanceTypeShardGroup], nil
 }
 
 func (s *Server) isLvsExist(lvsUUID, lvsName string) (bool, error) {
