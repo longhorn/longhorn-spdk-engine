@@ -258,7 +258,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		return nil, fmt.Errorf("invalid state %s for engine %s creation", e.State, e.Name)
 	}
 
-	if err := e.validateReplicaSize(replicaAddressMap); err != nil {
+	if err := e.validateReplicaSize(replicaAddressMap, upstreamFactory); err != nil {
 		return nil, errors.Wrapf(err, "failed to validate replica size during engine target creation")
 	}
 
@@ -476,7 +476,12 @@ func (e *Engine) SetTargetListenerANAState(spdkClient *spdkclient.Client, anaSta
 	return nil
 }
 
-func (e *Engine) validateReplicaSize(replicaAddressMap map[string]string) error {
+// validateReplicaSize is invoked before connectReplicas, so e.upstreams is
+// still empty. It uses the upstreamFactory to build ephemeral upstreams so
+// the size check dispatches through the layout-correct Get() RPC
+// (ReplicaGet for RAID1, ShardGroupGet for EC) instead of hardcoding
+// ReplicaGet.
+func (e *Engine) validateReplicaSize(replicaAddressMap map[string]string, upstreamFactory UpstreamFactory) error {
 	if len(replicaAddressMap) == 0 {
 		return fmt.Errorf("no replicas provided for engine %s", e.Name)
 	}
@@ -484,12 +489,13 @@ func (e *Engine) validateReplicaSize(replicaAddressMap map[string]string) error 
 	// Validate the engine & replica sizes before creating the engine
 	replicaSizeMap := make(map[string]uint64, len(replicaAddressMap))
 	for replicaName, replicaAddr := range replicaAddressMap {
-		replicaSize, err := e.getReplicaSpecSize(replicaName, replicaAddr)
+		u := upstreamFactory(replicaName, replicaAddr)
+		view, err := u.Get()
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "failed to get upstream %v from %v", replicaName, replicaAddr)
 		}
 
-		replicaSizeMap[replicaName] = replicaSize
+		replicaSizeMap[replicaName] = view.SpecSize
 	}
 
 	// check if all replica sizes are the same
@@ -510,26 +516,6 @@ func (e *Engine) validateReplicaSize(replicaAddressMap map[string]string) error 
 	}
 
 	return nil
-}
-
-func (e *Engine) getReplicaSpecSize(replicaName, replicaAddr string) (uint64, error) {
-	replicaClient, err := e.newServiceClient(replicaAddr)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		errClose := replicaClient.Close()
-		if errClose != nil {
-			e.log.WithError(errClose).Errorf("Failed to close replica %s client with address %s when getting replica spec size", replicaName, replicaAddr)
-		}
-	}()
-
-	replica, err := replicaClient.ReplicaGet(replicaName)
-	if err != nil {
-		return 0, errors.Wrapf(err, "failed to get replica %v from %v", replicaName, replicaAddr)
-	}
-
-	return replica.SpecSize, nil
 }
 
 // filterSalvageCandidates updates the replicaAddressMap by retaining only replicas
@@ -1708,11 +1694,11 @@ func (e *Engine) snapshotOperationPreCheckWithoutLock(replicaClients map[string]
 			if replicaStatus.Mode() == types.ModeWO {
 				return "", fmt.Errorf("engine %s contains WO replica %s during snapshot %s revert", e.Name, replicaName, snapshotName)
 			}
-			r, err := replicaClients[replicaName].ReplicaGet(replicaName)
+			view, err := replicaStatus.Get()
 			if err != nil {
 				return "", err
 			}
-			if r.Snapshots[snapshotName] == nil {
+			if view.Snapshots[snapshotName] == nil {
 				return "", fmt.Errorf("replica %s does not contain the reverting snapshot %s", replicaName, snapshotName)
 			}
 		case SnapshotOperationPurge:
@@ -3053,12 +3039,6 @@ func (e *Engine) ExpandPrecheck(spdkClient *spdkclient.Client, size uint64) (req
 		}
 	}()
 
-	replicaClients, err := e.getReplicaClients()
-	if err != nil {
-		return false, errors.Wrapf(err, "failed to get replica clients")
-	}
-	defer e.closeReplicaClients(replicaClients)
-
 	// Ensure all replicas are in RW mode and have the same size
 	if len(e.upstreams) == 0 {
 		return false, fmt.Errorf("cannot expand engine with no replica")
@@ -3071,23 +3051,19 @@ func (e *Engine) ExpandPrecheck(spdkClient *spdkclient.Client, size uint64) (req
 			return false, fmt.Errorf("cannot expand engine with replica %s in mode %v", replicaName, replicaStatus.Mode())
 		}
 
-		replicaClient, ok := replicaClients[replicaName]
-		if !ok {
-			return false, fmt.Errorf("cannot find client for replica %s", replicaName)
-		}
-		replica, err := replicaClient.ReplicaGet(replicaName)
+		view, err := replicaStatus.Get()
 		if err != nil {
-			return false, errors.Wrapf(err, "cannot get replica %s before expansion", replicaName)
+			return false, errors.Wrapf(err, "cannot get upstream %s before expansion", replicaName)
 		}
 
 		if currentReplicaSize == 0 {
-			currentReplicaSize = replica.SpecSize
+			currentReplicaSize = view.SpecSize
 			continue
 		}
 
-		if currentReplicaSize != replica.SpecSize {
+		if currentReplicaSize != view.SpecSize {
 			return false, fmt.Errorf("cannot expand engine with replicas in different sizes: replica %s has size %v while other replicas have size %v",
-				replicaName, replica.SpecSize, currentReplicaSize)
+				replicaName, view.SpecSize, currentReplicaSize)
 		}
 	}
 
