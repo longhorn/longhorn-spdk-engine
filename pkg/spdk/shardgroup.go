@@ -819,6 +819,188 @@ func (sg *ShardGroup) Sync(spdkClient *spdkclient.Client) (err error) {
 	return nil
 }
 
+// Expand grows the EC stack in place after each upstream shard has been
+// resized: bdev_ec_resize -> bdev_lvol_grow_lvstore -> bdev_lvol_resize on the
+// head lvol. The engine's raid1 layer auto-grows via NVMe AER when the
+// exposed namespace size changes; no engine-side SPDK call is needed.
+//
+// All k+m shards must be resized via ShardExpand on their nodes before
+// calling this.
+//
+// Unlike Shard.Expand, a failure here does not set Error on the
+// ShardGroup directly. Sync sees IsExposed=true with no live subsystem
+// and moves the ShardGroup to Error. The two layers recover differently,
+// so do not copy the Shard.Expand error-marking defer here.
+func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize uint64) (err error) {
+	sg.Lock()
+	prevSpecSize := sg.SpecSize
+	defer func() {
+		specSizeChanged := sg.SpecSize != prevSpecSize
+		sg.Unlock()
+		if specSizeChanged {
+			sg.UpdateCh <- nil
+		}
+	}()
+
+	if sg.State != types.InstanceStateRunning {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "cannot expand shardgroup %s in state %s", sg.Name, sg.State)
+	}
+
+	roundedSize := util.RoundUp(newSize, helpertypes.MiB)
+	if roundedSize != newSize {
+		return fmt.Errorf("shardgroup %s: new size %d is not a multiple of MiB", sg.Name, newSize)
+	}
+	if sg.SpecSize > newSize {
+		return fmt.Errorf("cannot shrink shardgroup %s from %d to %d", sg.Name, sg.SpecSize, newSize)
+	}
+	// False-success window: SpecSize is committed right after the head-lvol
+	// resize, before the re-expose. If the re-expose failed, a retry lands
+	// here and returns success while the NVMe-oF target is still down; Sync
+	// is what flags the torn-down subsystem and moves the ShardGroup to
+	// Error. So SpecSize == newSize does not guarantee the expose completed.
+	// Follow-up: once bdev_ec_resize distinguishes "base bdevs not grown"
+	// (-EALREADY, idempotent) from a genuine size error, tolerate that error
+	// at the BdevEcResize call, move the SpecSize commit back to the end of
+	// the function, and this fast path becomes honest again.
+	if sg.SpecSize == newSize {
+		sg.log.Infof("Shardgroup %s already at size %d", sg.Name, newSize)
+		return nil
+	}
+
+	sg.log.Infof("Expanding shardgroup to size %d", newSize)
+
+	// 1. Refresh each base bdev's cached blockcnt by resetting its NVMe controller.
+	//
+	// Per-shard ShardExpand on each shard node already grew the shard lvol on
+	// disk, but it had to tear down and re-expose the shard's NVMe-oF subsystem
+	// to do so safely - the subsystem teardown is load-bearing to prevent
+	// bdev_lvol_resize hanging on the loopback-attached exposed lvol. The
+	// teardown breaks the AER_NS_ATTR_CHANGED chain that would otherwise
+	// propagate the new size to this process's bdev_nvme initiator. The
+	// local nvmf-shardXn1 bdev therefore still reports its pre-resize
+	// blockcnt cached at initial attach time.
+	//
+	// bdev_nvme_reset_controller, combined with the SPDK reset-refresh patch
+	// in module/bdev/nvme/bdev_nvme.c (function bdev_nvme_reconnect_ctrlr_poll),
+	// is the compensation: the reset destroys and recreates qpairs, reconnects
+	// to the re-exposed subsystem, and the patched reconnect-poll path compares
+	// cached blockcnt against the post-reconnect num_sectors and calls
+	// spdk_bdev_notify_blockcnt_change on the local bdev when they differ.
+	// The local bdev stays registered throughout - bdev_ec sees a
+	// BDEV_EVENT_RESIZE (no-op) instead of BDEV_EVENT_REMOVE (failure cascade),
+	// so the slot stays NORMAL with no spurious rebuild triggered.
+	//
+	// Without the SPDK patch this reset is a no-op for size refresh and the
+	// BdevEcResize below would fail with -114 "Base bdevs have not grown".
+	for slotIndex := uint32(0); slotIndex < sg.DataChunks+sg.ParityChunks; slotIndex++ {
+		controllerName := GetShardLvolName(sg.VolumeName, slotIndex)
+		if _, err := spdkClient.BdevNvmeResetController(controllerName); err != nil {
+			return errors.Wrapf(err, "failed to reset nvme controller %s before EC resize", controllerName)
+		}
+	}
+
+	// 2. Resize bdev_ec to pick up the larger base bdevs.
+	if _, err := spdkClient.BdevEcResize(sg.EcBdevName); err != nil {
+		return errors.Wrapf(err, "failed to resize EC bdev %s", sg.EcBdevName)
+	}
+
+	// 3. Grow the lvstore to fill the resized bdev_ec.
+	if _, err := spdkClient.BdevLvolGrowLvstore(sg.LvsName, ""); err != nil {
+		return errors.Wrapf(err, "failed to grow lvstore %s", sg.LvsName)
+	}
+
+	// 4. Resize the head lvol.
+	//
+	// Why the teardown is mandatory: without it, bdev_lvol_resize HANGS on
+	// this topology. The engine and ShardGroup share one SPDK reactor (one
+	// IM pod per node, forced by reconcileShardGroup's NodeID co-location
+	// rule), and the engine's bdev_nvme initiator is loopback-attached to
+	// this head-lvol's NVMe-oF target. When bdev_lvol_resize fires the
+	// freeze barrier inside spdk_blob_resize, the barrier needs every
+	// blobstore channel to acknowledge - but those channels are busy
+	// serving I/O from the loopback initiator on the same reactor. After
+	// ~60s keep-alive timers fire, the controller enters reset mid-flight,
+	// AER processing aborts, and the cleanup paths heap-corrupt the SPDK
+	// process (observed empirically at the shard layer when the same
+	// teardown was removed there).
+	//
+	// Cost paid (compensated in Engine.ExpandViaUpstreamReset): tearing down
+	// the subsystem destroys the AER source, so the engine's bdev_nvme cache
+	// of the local nvmf-shardgroupn1 bdev's blockcnt is stale after
+	// StartExposeBdev re-establishes the connection.
+	// Engine.ExpandViaUpstreamReset compensates with an explicit
+	// bdev_nvme_reset_controller that triggers the SPDK reset-refresh
+	// patch's blockcnt comparison.
+	if err := spdkClient.StopExposeBdev(sg.Nqn); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return errors.Wrapf(err, "failed to stop exposing shardgroup %s before head-lvol resize", sg.Name)
+	}
+
+	resized, err := spdkClient.BdevLvolResize(sg.HeadAlias, util.BytesToMiB(newSize))
+	if err != nil {
+		return errors.Wrapf(err, "failed to resize head lvol %s", sg.HeadAlias)
+	}
+	if !resized {
+		return fmt.Errorf("head lvol %s was not resized", sg.HeadAlias)
+	}
+
+	// Record the new size as soon as the head resize lands. If the re-expose
+	// or the cache refresh below fails, a retried Expand must not re-run
+	// BdevEcResize - it fails when the base bdevs have not grown again. The
+	// retry hits the size-equality fast path instead, and Sync flags the
+	// torn-down subsystem if the re-expose was the step that failed.
+	sg.SpecSize = newSize
+
+	if err := spdkClient.StartExposeBdev(sg.Nqn, sg.HeadLvolUUID, generateNGUID(sg.HeadLvolName),
+		sg.IP, strconv.Itoa(int(sg.Port))); err != nil {
+		return errors.Wrapf(err, "failed to re-expose shardgroup %s after head-lvol resize", sg.Name)
+	}
+
+	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
+		return errors.Wrapf(err, "failed to refresh shardgroup snapshot/head cache after expansion for %s", sg.Name)
+	}
+
+	sg.log.Info("Expanded shardgroup")
+	return nil
+}
+
+// ExpandPrecheck validates that the ShardGroup's EC stack is in a state where
+// expansion can proceed: no rebuild in progress, no scrub in progress, all
+// slots NORMAL. Returns expansionRequired=true if the new size is larger than
+// the current size and preconditions are met.
+func (sg *ShardGroup) ExpandPrecheck(spdkClient *spdkclient.Client, newSize uint64) (expansionRequired bool, err error) {
+	sg.RLock()
+	defer sg.RUnlock()
+
+	if sg.SpecSize >= newSize {
+		return false, nil
+	}
+
+	ecInfo, err := sg.getEcBdevInfoNoLock(spdkClient)
+	if err != nil {
+		return false, err
+	}
+
+	if ecInfo.RebuildInProgress {
+		return false, fmt.Errorf("shardgroup %s has a rebuild in progress", sg.Name)
+	}
+	if ecInfo.ReplaceInProgress {
+		return false, fmt.Errorf("shardgroup %s has a slot replacement in progress", sg.Name)
+	}
+	if ecInfo.FailedCount > 0 {
+		return false, fmt.Errorf("shardgroup %s has %d failed slot(s); cannot expand while degraded", sg.Name, ecInfo.FailedCount)
+	}
+
+	scrubProgress, err := spdkClient.BdevEcGetScrubProgress(sg.EcBdevName)
+	if err != nil {
+		return false, errors.Wrapf(err, "failed to query scrub progress for shardgroup %s", sg.Name)
+	}
+	if scrubProgress != nil {
+		return false, fmt.Errorf("shardgroup %s has a scrub in progress", sg.Name)
+	}
+
+	return true, nil
+}
+
 // tryDiscoverExistingLvstore queries SPDK for an already-imported per-volume
 // lvstore/head pair after bdev_ec_create.
 //
