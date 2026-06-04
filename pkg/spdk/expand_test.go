@@ -204,9 +204,9 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	c.Assert(strings.Contains(err.Error(), "all replicas failed to expand"), Equals, true)
 
 	ePartial := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	ePartial.ReplicaStatusMap = map[string]*EngineReplicaStatus{
-		"r1": &EngineReplicaStatus{Mode: lhtypes.ModeRW},
-		"r2": &EngineReplicaStatus{Mode: lhtypes.ModeRW},
+	ePartial.upstreams = map[string]Upstream{
+		"r1": newTestReplicaUpstream("r1", "", lhtypes.ModeRW),
+		"r2": newTestReplicaUpstream("r2", "", lhtypes.ModeRW),
 	}
 	replicaClientsPartial := map[string]*clientpkg.SPDKClient{
 		"r1": nil,
@@ -217,8 +217,8 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	}
 	err = ePartial.handleReplicaExpandResult(replicaClientsPartial, failedPartial)
 	c.Assert(err, IsNil)
-	c.Assert(ePartial.ReplicaStatusMap["r1"].Mode, Equals, lhtypes.Mode(lhtypes.ModeERR))
-	c.Assert(ePartial.ReplicaStatusMap["r2"].Mode, Equals, lhtypes.Mode(lhtypes.ModeRW))
+	c.Assert(ePartial.upstreams["r1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
+	c.Assert(ePartial.upstreams["r2"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeRW))
 	c.Assert(ePartial.lastExpansionError, Not(Equals), "")
 }
 
