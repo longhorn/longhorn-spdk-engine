@@ -89,3 +89,23 @@ func (s *TestSuite) TestCopyEcCountersFromBdevInfoZeroValues(c *C) {
 	c.Assert(status.RmwTotal, Equals, uint64(0))
 	c.Assert(status.FullStripeWrites, Equals, uint64(0))
 }
+
+// TestEcUsableFitsSpecBoundary pins the exact equality boundary of the
+// create-time capacity guard: usable == spec must pass (zero slack is the
+// correctly-provisioned case), and any shortfall must fail.
+func (s *TestSuite) TestEcUsableFitsSpecBoundary(c *C) {
+	fmt.Println("Testing ecUsableFitsSpec equality boundary and shortfall")
+
+	const blockSize = uint32(4096)
+	const blocks = uint64(1000)
+	usable := blocks * uint64(blockSize)
+
+	// Exact fit passes (minimum slack for a correct volume is 0).
+	c.Assert(ecUsableFitsSpec(blocks, blockSize, usable), Equals, true)
+	// One byte short fails.
+	c.Assert(ecUsableFitsSpec(blocks, blockSize, usable+1), Equals, false)
+	// Comfortably oversized passes.
+	c.Assert(ecUsableFitsSpec(blocks, blockSize, usable-uint64(blockSize)), Equals, true)
+	// Large capacity (no uint overflow at realistic EC sizes).
+	c.Assert(ecUsableFitsSpec(1<<40, blockSize, (1<<40)*uint64(blockSize)), Equals, true)
+}
