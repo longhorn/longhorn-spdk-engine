@@ -1,9 +1,12 @@
 package spdk
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
 	. "gopkg.in/check.v1"
@@ -179,4 +182,88 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C)
 	c.Assert(e.restore.LastRestored, Equals, "backup-old")
 	c.Assert(e.restore.CurrentRestoringBackup, Equals, "backup-new")
 	c.Assert(string(e.restore.State), Equals, "error")
+}
+
+func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesUpstreamView(c *C) {
+	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock applies SnapshotMap/Head/ActualSize from Upstream.Get()")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	u := newFakeUpstream("r1", "10.0.0.1:1234")
+	u.SetMode(lhtypes.ModeRW)
+	headLvol := &api.Lvol{Name: "vol-head", Parent: "snap-1"}
+	snap := &api.Lvol{Name: "snap-1", CreationTime: time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)}
+	u.View = &UpstreamView{
+		SpecSize:   100,
+		ActualSize: 50,
+		Head:       headLvol,
+		Snapshots:  map[string]*api.Lvol{"snap-1": snap},
+	}
+	e.upstreams = map[string]Upstream{"r1": u}
+
+	e.checkAndUpdateInfoFromReplicasNoLock()
+
+	c.Assert(e.SnapshotMap, NotNil)
+	c.Assert(e.SnapshotMap["snap-1"], Not(IsNil))
+	c.Assert(e.Head, Not(IsNil))
+	c.Assert(e.Head.Name, Equals, "vol-head")
+	c.Assert(e.ActualSize, Equals, uint64(50))
+}
+
+func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockMarksERROnGetError(c *C) {
+	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock marks upstream ERR when Upstream.Get() returns an error")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	u := newFakeUpstream("r1", "10.0.0.1:1234")
+	u.SetMode(lhtypes.ModeRW)
+	u.ViewErr = errors.New("upstream unavailable")
+	e.upstreams = map[string]Upstream{"r1": u}
+
+	e.checkAndUpdateInfoFromReplicasNoLock()
+
+	c.Assert(e.upstreams["r1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
+}
+
+func (s *TestSuite) TestResolveReplicaAncestorRoutesBackingImageThroughUpstream(c *C) {
+	fmt.Println("Testing resolveReplicaAncestor calls BackingImageGet via the Upstream interface")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	u := newFakeUpstream("r1", "10.0.0.1:1234")
+	u.SetMode(lhtypes.ModeRW)
+	biSnap := &api.Lvol{Name: "bi-snap"}
+	u.BackingImageView = &api.BackingImage{Snapshot: biSnap}
+	view := &UpstreamView{
+		BackingImageName: "ubuntu-22.04",
+		LvsUUID:          "lvs-uuid-1",
+		Head:             &api.Lvol{Name: "vol-head", Parent: "bi-snap"},
+		Snapshots:        map[string]*api.Lvol{},
+	}
+
+	ancestor, foundBI, foundSnap, ok := e.resolveReplicaAncestor("r1", view, u, false, false)
+	c.Assert(ok, Equals, true)
+	c.Assert(foundBI, Equals, true)
+	c.Assert(foundSnap, Equals, false) // no snapshots on this upstream
+	c.Assert(ancestor, Equals, biSnap)
+	// BackingImageGet was forwarded via the Upstream interface, not directly to a replica client.
+	c.Assert(len(u.BackingImageCalls), Equals, 1)
+	c.Assert(u.BackingImageCalls[0].Name, Equals, "ubuntu-22.04")
+	c.Assert(u.BackingImageCalls[0].LvsUUID, Equals, "lvs-uuid-1")
+}
+
+func (s *TestSuite) TestResolveReplicaAncestorMarksERROnBackingImageError(c *C) {
+	fmt.Println("Testing resolveReplicaAncestor marks upstream ERR when BackingImageGet fails")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	u := newFakeUpstream("r1", "10.0.0.1:1234")
+	u.SetMode(lhtypes.ModeRW)
+	u.BackingImageGetErr = errors.New("backing image not found")
+	view := &UpstreamView{
+		BackingImageName: "ubuntu-22.04",
+		LvsUUID:          "lvs-uuid-1",
+		Head:             &api.Lvol{Name: "vol-head", Parent: "bi-snap"},
+		Snapshots:        map[string]*api.Lvol{},
+	}
+
+	_, _, _, ok := e.resolveReplicaAncestor("r1", view, u, false, false)
+	c.Assert(ok, Equals, false)
+	c.Assert(u.Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
 }
