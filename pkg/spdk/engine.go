@@ -967,7 +967,8 @@ func (e *Engine) ReplicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 //   - startUpdateRequired: true if engine state changed and UpdateCh should be notified
 //   - engineErr: non-nil if the engine should transition to Error state
 //   - err: non-nil for replica-related operation errors
-func (e *Engine) replicaAddStart(spdkClient *spdkclient.Client, srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient,
+func (e *Engine) replicaAddStart(spdkClient *spdkclient.Client,
+	srcReplicaServiceCli, dstReplicaServiceCli *client.SPDKClient,
 	srcReplicaName, srcReplicaAddress, dstReplicaName, dstReplicaAddress string,
 ) (rebuildingSnapshotList []*api.Lvol, startUpdateRequired bool, engineErr, err error) {
 	snapshotName := GenerateRebuildingSnapshotName()
@@ -1285,10 +1286,9 @@ func (e *Engine) replicaAddFinish(srcReplicaServiceCli, dstReplicaServiceCli *cl
 	}
 	e.Unlock()
 
-	// Phase 2: Execute RPC calls without holding the Engine lock.
-	// These calls may be slow (e.g. bdev_nvme_detach_controller returning ETIMEDOUT).
-	// By releasing the lock, other Engine operations (status queries, other replica
-	// operations) are not blocked during these potentially slow RPCs.
+	// Phase 2: Execute RPC calls without holding the Engine lock - these may be
+	// slow (e.g. bdev_nvme_detach_controller returning ETIMEDOUT) and would
+	// otherwise block other Engine operations.
 	e.RLock()
 	phase2Hook := e.replicaAddFinishUnlockedHook
 	e.RUnlock()
