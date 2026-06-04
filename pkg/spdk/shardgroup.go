@@ -820,6 +820,26 @@ func (sg *ShardGroup) Sync(spdkClient *spdkclient.Client) (err error) {
 	return nil
 }
 
+// SetErrorState marks a non-stopped, non-error shardgroup as Error, mirroring
+// Replica.SetErrorState.
+func (sg *ShardGroup) SetErrorState() {
+	needUpdate := false
+
+	sg.Lock()
+	defer func() {
+		sg.Unlock()
+
+		if needUpdate {
+			sg.UpdateCh <- nil
+		}
+	}()
+
+	if sg.State != types.InstanceStateStopped && sg.State != types.InstanceStateError {
+		sg.State = types.InstanceStateError
+		needUpdate = true
+	}
+}
+
 // Expand grows the EC stack in place after each upstream shard has been
 // resized: bdev_ec_resize -> bdev_lvol_grow_lvstore -> bdev_lvol_resize on the
 // head lvol. The engine's raid1 layer auto-grows via NVMe AER when the
