@@ -229,8 +229,13 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 	return e
 }
 
+// Create builds the engine's bdev_raid1 over the upstreams in
+// replicaAddressMap. upstreamFactory selects the upstream implementation
+// (replicaUpstream for RAID1, shardGroupUpstream for EC); it is the only
+// channel through which storage topology enters the engine. The engine
+// itself never reads DataLayoutType.
 func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[string]string, portCount int32, superiorPortAllocator *commonbitmap.Bitmap,
-	salvageRequested bool) (ret *spdkrpc.Engine, err error) {
+	salvageRequested bool, upstreamFactory UpstreamFactory) (ret *spdkrpc.Engine, err error) {
 	e.log.WithFields(logrus.Fields{
 		"portCount":         portCount,
 		"replicaAddressMap": replicaAddressMap,
@@ -286,7 +291,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		}
 	}
 
-	replicaBdevList := e.connectReplicas(spdkClient, replicaAddressMap)
+	replicaBdevList := e.connectReplicas(spdkClient, replicaAddressMap, upstreamFactory)
 
 	e.log.UpdateLoggerWithWarnOnFailure(logrus.Fields{
 		"replicaStatusMap": e.upstreams,
@@ -370,12 +375,15 @@ func (e *Engine) createNVMeTCPTarget(spdkClient *spdkclient.Client, superiorPort
 	return nil
 }
 
-// connectReplicas connects to each replica's NVMf bdev and populates
-// upstreams. It returns the list of successfully connected bdev names.
-func (e *Engine) connectReplicas(spdkClient *spdkclient.Client, replicaAddressMap map[string]string) []string {
+// connectReplicas connects to each upstream's NVMf bdev and populates
+// upstreams. The upstreamFactory builds the layout-specific Upstream
+// implementation (replicaUpstream or shardGroupUpstream) - connectReplicas
+// itself stays layout-blind. It returns the list of successfully connected
+// bdev names.
+func (e *Engine) connectReplicas(spdkClient *spdkclient.Client, replicaAddressMap map[string]string, upstreamFactory UpstreamFactory) []string {
 	replicaBdevList := []string{}
 	for replicaName, replicaAddr := range replicaAddressMap {
-		e.upstreams[replicaName] = newReplicaUpstream(replicaName, replicaAddr, e.newServiceClient)
+		e.upstreams[replicaName] = upstreamFactory(replicaName, replicaAddr)
 
 		bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaAddr, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
 		if err != nil {
