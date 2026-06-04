@@ -45,7 +45,31 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	spdkClient := s.spdkClient
 	s.Unlock()
 
-	return e.Create(spdkClient, req.ReplicaAddressMap, req.PortCount, s.portAllocator, req.SalvageRequested)
+	upstreamFactory, err := selectUpstreamFactory(req.DataLayoutType, s.newServiceClient)
+	if err != nil {
+		return nil, err
+	}
+
+	return e.Create(spdkClient, req.ReplicaAddressMap, req.PortCount, s.portAllocator, req.SalvageRequested, upstreamFactory)
+}
+
+// selectUpstreamFactory is the only place the server-layer translates the
+// EngineCreateRequest.DataLayoutType discriminator into an Upstream
+// implementation. Once Engine.upstreams is populated, the engine never
+// re-reads the layout.
+func selectUpstreamFactory(layout spdkrpc.DataLayoutType, newServiceClient ServiceClientFactory) (UpstreamFactory, error) {
+	switch layout {
+	case spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED:
+		return func(name, address string) Upstream {
+			return newReplicaUpstream(name, address, newServiceClient)
+		}, nil
+	case spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_SHARDED:
+		return func(name, address string) Upstream {
+			return newShardGroupUpstream(name, address, newServiceClient)
+		}, nil
+	default:
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "unsupported data_layout_type %v", layout)
+	}
 }
 
 func (s *Server) EngineSnapshotMaxCountSet(ctx context.Context, req *spdkrpc.EngineSnapshotMaxCountSetRequest) (ret *emptypb.Empty, err error) {
