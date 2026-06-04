@@ -1001,6 +1001,186 @@ func (sg *ShardGroup) ExpandPrecheck(spdkClient *spdkclient.Client, newSize uint
 	return true, nil
 }
 
+// SnapshotCreate snapshots the head lvol under the given user-visible name.
+// Returns the new snapshot's UUID.
+func (sg *ShardGroup) SnapshotCreate(spdkClient *spdkclient.Client, snapshotName string) (snapshotUUID string, err error) {
+	sg.Lock()
+	updateRequired := false
+	defer func() {
+		sg.Unlock()
+		if updateRequired {
+			sg.UpdateCh <- nil
+		}
+	}()
+
+	if sg.State != types.InstanceStateRunning {
+		return "", grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s snapshot create", sg.State, sg.Name)
+	}
+
+	uuid, err := spdkClient.BdevLvolSnapshot(sg.HeadAlias, snapshotName, nil)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to create snapshot %s on shardgroup %s", snapshotName, sg.Name)
+	}
+	updateRequired = true
+
+	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
+		return "", errors.Wrapf(err, "failed to refresh shardgroup snapshot/head cache after snapshot create for %s", sg.Name)
+	}
+
+	sg.log.Infof("Created snapshot %s (uuid=%s)", snapshotName, uuid)
+	return uuid, nil
+}
+
+// SnapshotDelete deletes the named snapshot from the lvstore. Idempotent for
+// missing snapshots.
+func (sg *ShardGroup) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) error {
+	sg.Lock()
+	updateRequired := false
+	defer func() {
+		sg.Unlock()
+		if updateRequired {
+			sg.UpdateCh <- nil
+		}
+	}()
+
+	if sg.State != types.InstanceStateRunning {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s snapshot delete", sg.State, sg.Name)
+	}
+
+	snapAlias := spdktypes.GetLvolAlias(sg.LvsName, snapshotName)
+	deleted, err := spdkClient.BdevLvolDelete(snapAlias)
+	if err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return errors.Wrapf(err, "failed to delete snapshot %s from shardgroup %s", snapshotName, sg.Name)
+	}
+	updateRequired = deleted
+
+	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
+		return errors.Wrapf(err, "failed to refresh shardgroup snapshot/head cache after snapshot delete for %s", sg.Name)
+	}
+
+	sg.log.Infof("Deleted snapshot %s", snapshotName)
+	return nil
+}
+
+// SnapshotRevert replaces the head lvol with a fresh clone of the named
+// snapshot. The caller (Volume controller) must ensure the engine has
+// disconnected from this ShardGroup's NVMe-oF endpoint before invoking
+// (FrontendEmpty guard at the engine layer).
+//
+// Sequence: unexpose head -> delete head lvol -> clone from snapshot ->
+// re-expose with the new head lvol UUID.
+func (sg *ShardGroup) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName string) error {
+	sg.Lock()
+	prevHeadLvolUUID, prevIsExposed := sg.HeadLvolUUID, sg.IsExposed
+	defer func() {
+		updateRequired := sg.HeadLvolUUID != prevHeadLvolUUID || sg.IsExposed != prevIsExposed
+		sg.Unlock()
+		if updateRequired {
+			sg.UpdateCh <- nil
+		}
+	}()
+
+	if sg.State != types.InstanceStateRunning {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s snapshot revert", sg.State, sg.Name)
+	}
+
+	// Validate the snapshot against live SPDK state before tearing anything
+	// down: the head lvol is deleted mid-sequence, so a bad snapshot name
+	// must not destroy it with nothing left to clone from.
+	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
+		return errors.Wrapf(err, "failed to refresh shardgroup snapshot/head cache before snapshot revert for %s", sg.Name)
+	}
+	if sg.SnapshotMap[snapshotName] == nil {
+		return grpcstatus.Errorf(grpccodes.NotFound, "cannot revert shardgroup %s to non-existing snapshot %s", sg.Name, snapshotName)
+	}
+
+	sg.log.Infof("Reverting shardgroup to snapshot %s", snapshotName)
+
+	if sg.IsExposed {
+		if err := spdkClient.StopExposeBdev(sg.Nqn); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return errors.Wrapf(err, "failed to stop exposing shardgroup %s before revert", sg.Name)
+		}
+		sg.IsExposed = false
+	}
+
+	if _, err := spdkClient.BdevLvolDelete(sg.HeadAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return errors.Wrapf(err, "failed to delete head lvol %s during revert", sg.HeadAlias)
+	}
+	sg.HeadLvolUUID = ""
+
+	snapAlias := spdktypes.GetLvolAlias(sg.LvsName, snapshotName)
+	newHeadUUID, err := spdkClient.BdevLvolClone(snapAlias, sg.HeadLvolName)
+	if err != nil {
+		return errors.Wrapf(err, "failed to clone snapshot %s as new head", snapshotName)
+	}
+	sg.HeadLvolUUID = newHeadUUID
+
+	if err := spdkClient.StartExposeBdev(sg.Nqn, sg.HeadLvolUUID, generateNGUID(sg.HeadLvolName),
+		sg.IP, strconv.Itoa(int(sg.Port))); err != nil {
+		return errors.Wrapf(err, "failed to re-expose head lvol after revert")
+	}
+	sg.IsExposed = true
+
+	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
+		return errors.Wrapf(err, "failed to refresh shardgroup snapshot/head cache after snapshot revert for %s", sg.Name)
+	}
+
+	sg.log.Infof("Reverted to snapshot %s (new head uuid=%s)", snapshotName, sg.HeadLvolUUID)
+	return nil
+}
+
+// SnapshotPurge deletes orphan snapshots (snapshots with no clones) from this
+// ShardGroup's lvstore. Snapshots that still have child clones are preserved.
+// User-vs-system distinction is left to a future refinement.
+func (sg *ShardGroup) SnapshotPurge(spdkClient *spdkclient.Client) error {
+	sg.Lock()
+	updateRequired := false
+	defer func() {
+		sg.Unlock()
+		if updateRequired {
+			sg.UpdateCh <- nil
+		}
+	}()
+
+	if sg.State != types.InstanceStateRunning {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s snapshot purge", sg.State, sg.Name)
+	}
+
+	filter := func(b *spdktypes.BdevInfo) bool {
+		if b.DriverSpecific == nil || b.DriverSpecific.Lvol == nil {
+			return false
+		}
+		return b.DriverSpecific.Lvol.LvolStoreUUID == sg.LvsUUID
+	}
+	bdevLvolMap, err := GetBdevLvolMapWithFilter(spdkClient, filter)
+	if err != nil {
+		return errors.Wrapf(err, "failed to list lvols for shardgroup %s", sg.Name)
+	}
+
+	var purged int
+	for lvolName, bdev := range bdevLvolMap {
+		lvol := bdev.DriverSpecific.Lvol
+		if !lvol.Snapshot || len(lvol.Clones) > 0 {
+			continue
+		}
+		snapAlias := spdktypes.GetLvolAlias(sg.LvsName, lvolName)
+		if _, err := spdkClient.BdevLvolDelete(snapAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			sg.log.WithError(err).Warnf("Failed to purge snapshot %s; continuing", lvolName)
+			continue
+		}
+		sg.log.Infof("Purged orphan snapshot %s", lvolName)
+		purged++
+	}
+	updateRequired = purged > 0
+
+	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
+		return errors.Wrapf(err, "failed to refresh shardgroup snapshot/head cache after snapshot purge for %s", sg.Name)
+	}
+
+	sg.log.Infof("Snapshot purge complete: deleted %d orphan snapshot(s)", purged)
+	return nil
+}
+
 // tryDiscoverExistingLvstore queries SPDK for an already-imported per-volume
 // lvstore/head pair after bdev_ec_create.
 //
