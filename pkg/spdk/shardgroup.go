@@ -9,6 +9,12 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+
+	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
+	commonnet "github.com/longhorn/go-common-libs/net"
+	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
@@ -28,6 +34,14 @@ const (
 	ecShardCtrlrLossTimeoutSec  = 120
 	ecShardFastIOFailTimeoutSec = 15
 )
+
+// salvageConnectMaxRetries shortens the per-shard connect retry budget
+// during salvage. Salvage already accepts a missing slot as "", so retrying
+// a dead endpoint for 30 seconds buys nothing - and during engine-node
+// failover where shard pods may also be rescheduling, six dead slots can
+// burn the entire 3-minute GRPC timeout before bdev_ec_create even runs.
+// 3 attempts still absorbs a transient reconnect.
+const salvageConnectMaxRetries = 3
 
 // ShardGroup is the SPDK-side process state for an EC volume's lvstore + head
 // lvol layer. Each ShardGroup process owns:
@@ -299,6 +313,33 @@ func (sg *ShardGroup) getEcBdevInfoNoLock(spdkClient *spdkclient.Client) (*spdkt
 	return &bdevList[0], nil
 }
 
+// ecUsableFitsSpec reports whether the EC bdev can hold specSize bytes. SPDK
+// already subtracts the front reservation from blockcnt, so numBlocks*blockSize
+// is the usable size.
+func ecUsableFitsSpec(numBlocks uint64, blockSize uint32, specSize uint64) bool {
+	return numBlocks*uint64(blockSize) >= specSize
+}
+
+// assertEcUsableFitsSpecNoLock fails if the EC bdev is smaller than SpecSize.
+// The size comes from BdevGetBdevs because BdevEcInfo has no size field. The
+// caller must hold sg's lock.
+func (sg *ShardGroup) assertEcUsableFitsSpecNoLock(spdkClient *spdkclient.Client) error {
+	bdevList, err := spdkClient.BdevGetBdevs(sg.EcBdevName, 0)
+	if err != nil {
+		return errors.Wrapf(err, "failed to query EC bdev %s for capacity check", sg.EcBdevName)
+	}
+	if len(bdevList) != 1 {
+		return fmt.Errorf("expected exactly one EC bdev %s for capacity check, got %d", sg.EcBdevName, len(bdevList))
+	}
+	bdev := bdevList[0]
+	if !ecUsableFitsSpec(bdev.NumBlocks, bdev.BlockSize, sg.SpecSize) {
+		return fmt.Errorf("EC bdev %s usable capacity %d bytes < required %d bytes "+
+			"(shards under-sized: per-shard size must budget for the EC front reservation)",
+			sg.EcBdevName, bdev.NumBlocks*uint64(bdev.BlockSize), sg.SpecSize)
+	}
+	return nil
+}
+
 // Get returns the proto ShardGroup enriched with live EC state queried from
 // SPDK. Base fields come from the in-memory cache via
 // ServiceShardGroupToProtoShardGroup; EcStatus is populated only when the
@@ -435,5 +476,332 @@ func (sg *ShardGroup) refreshECSnapshotMapNoLock(spdkClient *spdkclient.Client) 
 		sg.ActualSize += snapLvol.ActualSize
 	}
 
+	return nil
+}
+
+// Create materializes the EC stack on disk: NVMe-attach to all k+m shards,
+// create bdev_ec, create lvstore on bdev_ec, create the head lvol, expose via
+// NVMe-oF. The lvstore + head lvol persist across volume detach/re-attach;
+// they are removed only by Delete with cleanupRequired=true.
+func (sg *ShardGroup) Create(spdkClient *spdkclient.Client, superiorPortAllocator *commonbitmap.Bitmap) (ret *spdkrpc.ShardGroup, err error) {
+	updateRequired := true
+
+	sg.Lock()
+	defer func() {
+		sg.Unlock()
+		if updateRequired {
+			sg.UpdateCh <- nil
+		}
+	}()
+
+	if sg.State == types.InstanceStateRunning {
+		updateRequired = false
+		return nil, grpcstatus.Errorf(grpccodes.AlreadyExists, "shardgroup %s already exists and running", sg.Name)
+	}
+	// Stopped is the post-detach (cleanupRequired=false) state. Re-Create
+	// from Stopped is the same-node re-attach path: bdev_ec is rebuilt, the
+	// preserved lvstore on encoded blocks is re-discovered via examine, and
+	// the head lvol is re-exposed. Mirrors Replica.Create which accepts
+	// Pending and Stopped for the same reason.
+	if sg.State != types.InstanceStatePending && sg.State != types.InstanceStateStopped {
+		updateRequired = false
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s creation", sg.State, sg.Name)
+	}
+
+	defer func() {
+		if err != nil {
+			sg.log.WithError(err).Errorf("Failed to create shardgroup %s", sg.Name)
+			sg.State = types.InstanceStateError
+			sg.ErrorMsg = err.Error()
+			ret = ServiceShardGroupToProtoShardGroup(sg)
+			err = nil
+		} else {
+			sg.ErrorMsg = ""
+			sg.log.Info("Created shardgroup")
+		}
+	}()
+
+	total := sg.DataChunks + sg.ParityChunks
+	if uint32(len(sg.Shards)) != total {
+		return nil, fmt.Errorf("shardgroup %s requires %d shards (dataChunks=%d + parityChunks=%d), got %d",
+			sg.Name, total, sg.DataChunks, sg.ParityChunks, len(sg.Shards))
+	}
+
+	// Connect to all k+m shards and build base bdev list ordered by slot index.
+	// In salvage mode, tolerate per-shard connection failures by passing "" at
+	// the slot's position - the EC module marks that slot FAILED but continues
+	// in degraded mode.
+	baseBdevs := make([]string, total)
+	for shardName, endpoint := range sg.Shards {
+		if endpoint.SlotIndex >= total {
+			return nil, fmt.Errorf("shard %s slot index %d exceeds dataChunks+parityChunks=%d", shardName, endpoint.SlotIndex, total)
+		}
+		if baseBdevs[endpoint.SlotIndex] != "" {
+			return nil, fmt.Errorf("duplicate slot index %d: shard %s conflicts with an earlier shard", endpoint.SlotIndex, shardName)
+		}
+		controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
+		connectAttempts := maxRetries
+		if sg.SalvageRequested {
+			connectAttempts = salvageConnectMaxRetries
+		}
+		bdevName, connErr := connectNVMfBdev(spdkClient, controllerName, endpoint.Address,
+			ecShardCtrlrLossTimeoutSec, ecShardFastIOFailTimeoutSec, connectAttempts, retryInterval)
+		if connErr != nil {
+			if sg.SalvageRequested {
+				sg.log.WithError(connErr).Warnf("Salvage: failed to connect shard %s at %s; marking slot %d as missing", controllerName, endpoint.Address, endpoint.SlotIndex)
+				baseBdevs[endpoint.SlotIndex] = ""
+				continue
+			}
+			return nil, errors.Wrapf(connErr, "failed to connect shard %s at %s", controllerName, endpoint.Address)
+		}
+		baseBdevs[endpoint.SlotIndex] = bdevName
+	}
+
+	// Pre-check for a stale bdev_ec from a prior OFFLINE failure: SPDK's
+	// bdev_ec OFFLINE cleanup closes descriptors to dead base bdevs but
+	// leaves the EC bdev itself registered, so a recovery Create on the
+	// same name otherwise fails with EEXIST. Delete the stale instance
+	// first; the surviving shard lvols are untouched, and bdev_examine
+	// on the new bdev_ec will rediscover the lvstore via
+	// tryDiscoverExistingLvstore below.
+	existing, err := spdkClient.BdevEcGetBdevs(sg.EcBdevName)
+	if err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return nil, errors.Wrapf(err, "failed to check for existing EC bdev %s", sg.EcBdevName)
+	}
+	if len(existing) > 0 {
+		sg.log.Warnf("Existing EC bdev %s found before create; deleting stale instance before recreating", sg.EcBdevName)
+		if _, err := spdkClient.BdevEcDelete(sg.EcBdevName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return nil, errors.Wrapf(err, "failed to delete stale EC bdev %s", sg.EcBdevName)
+		}
+	}
+
+	// Create bdev_ec on the k+m base bdevs.
+	sg.log.Infof("Creating EC bdev with dataChunks=%d parityChunks=%d stripSizeKb=%d baseBdevs=%v",
+		sg.DataChunks, sg.ParityChunks, sg.StripSizeKb, baseBdevs)
+	if _, err := spdkClient.BdevEcCreate(sg.EcBdevName, sg.DataChunks, sg.ParityChunks, sg.StripSizeKb, baseBdevs,
+		sg.SalvageRequested); err != nil {
+		return nil, errors.Wrapf(err, "failed to create EC bdev %s", sg.EcBdevName)
+	}
+
+	// Always try to discover an existing lvstore/head first. This makes
+	// clean detach -> recreate idempotent even when salvage_requested=false.
+	// If nothing exists yet, fall back to fresh create.
+	foundExistingLvstore, err := sg.tryDiscoverExistingLvstore(spdkClient)
+	if err != nil {
+		return nil, err
+	}
+
+	if !foundExistingLvstore {
+		if sg.SalvageRequested {
+			return nil, fmt.Errorf("salvage requested but existing lvstore/head not found for shardgroup %s", sg.Name)
+		}
+
+		// Fail fast if the EC bdev is too small to hold the head. The head is
+		// thin, so SPDK would otherwise accept an undersized volume and only
+		// fail later on write. Only the fresh-create path is guarded, so
+		// re-attach and salvage are left untouched.
+		if err := sg.assertEcUsableFitsSpecNoLock(spdkClient); err != nil {
+			return nil, err
+		}
+
+		// Fresh-create path: create lvstore + head lvol on bdev_ec. We pass
+		// cluster_sz=0 so SPDK applies its compiled-in default; the actual size
+		// is then queried back so the NumAllocatedClusters -> bytes math in
+		// refreshECSnapshotMapNoLock multiplies by the right value.
+		lvsUUID, err := spdkClient.BdevLvolCreateLvstore(sg.EcBdevName, sg.LvsName, 0)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to create lvstore %s on EC bdev %s", sg.LvsName, sg.EcBdevName)
+		}
+		sg.LvsUUID = lvsUUID
+
+		lvstoreList, err := spdkClient.BdevLvolGetLvstore("", lvsUUID)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to query freshly-created lvstore %s for shardgroup %s", sg.LvsName, sg.Name)
+		}
+		if len(lvstoreList) != 1 {
+			return nil, fmt.Errorf("expected exactly one lvstore for uuid %s, found %d", lvsUUID, len(lvstoreList))
+		}
+		sg.ClusterSize = lvstoreList[0].ClusterSize
+
+		headLvolUUID, err := spdkClient.BdevLvolCreate("", lvsUUID, sg.HeadLvolName, util.BytesToMiB(sg.SpecSize), "", true)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to create head lvol %s in lvstore %s", sg.HeadLvolName, sg.LvsName)
+		}
+		sg.HeadLvolUUID = headLvolUUID
+	}
+
+	// Expose the head lvol via NVMe-oF.
+	if err := sg.prepareIPAndPort(superiorPortAllocator); err != nil {
+		return nil, err
+	}
+	if err := spdkClient.StartExposeBdev(sg.Nqn, sg.HeadLvolUUID, generateNGUID(sg.HeadLvolName),
+		sg.IP, strconv.Itoa(int(sg.Port))); err != nil {
+		return nil, errors.Wrapf(err, "failed to expose head lvol for shardgroup %s", sg.Name)
+	}
+	sg.IsExposed = true
+
+	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
+		return nil, errors.Wrapf(err, "failed to refresh shardgroup snapshot/head cache for %s", sg.Name)
+	}
+
+	sg.State = types.InstanceStateRunning
+	return ServiceShardGroupToProtoShardGroup(sg), nil
+}
+
+// Delete tears down the EC stack with cleanupRequired discipline.
+//
+// cleanupRequired=true (volume deletion path): full teardown - delete head
+// lvol, delete lvstore, delete bdev_ec, disconnect NVMe-oF controllers.
+//
+// cleanupRequired=false (detach path): unexpose NVMe-oF + delete bdev_ec +
+// disconnect NVMe-oF controllers, but **leave the lvstore and head lvol
+// intact on the encoded shard blocks**. This is the central mechanism that
+// prevents the EC-volume detach data-loss bug - re-attach reconstructs
+// bdev_ec via SPDK's bdev_examine, which auto-imports the existing lvstore.
+func (sg *ShardGroup) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, superiorPortAllocator *commonbitmap.Bitmap) (err error) {
+	updateRequired := false
+
+	sg.Lock()
+	defer func() {
+		if err != nil {
+			sg.log.WithError(err).Errorf("Failed to delete shardgroup with cleanupRequired=%v", cleanupRequired)
+			if sg.State != types.InstanceStateError {
+				sg.State = types.InstanceStateError
+				sg.ErrorMsg = err.Error()
+			}
+		} else {
+			// cleanupRequired=true: in-memory record is about to be removed
+			// from shardGroupMap by the caller, so Terminating is the
+			// correct transient state.
+			// cleanupRequired=false (detach): the record stays in the map
+			// for future re-attach. Use Stopped so Create's precondition
+			// admits the re-Create path (mirrors Replica.Delete semantics).
+			if cleanupRequired {
+				sg.State = types.InstanceStateTerminating
+			} else {
+				sg.State = types.InstanceStateStopped
+			}
+			sg.ErrorMsg = ""
+		}
+
+		updateRequired = true
+
+		sg.Unlock()
+
+		if updateRequired {
+			sg.UpdateCh <- nil
+		}
+	}()
+
+	sg.log.Infof("Deleting shardgroup with cleanupRequired=%v", cleanupRequired)
+
+	// 1. Stop NVMe-oF expose of the head lvol.
+	if sg.IsExposed {
+		if err := spdkClient.StopExposeBdev(sg.Nqn); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return errors.Wrapf(err, "failed to stop exposing shardgroup %s", sg.Name)
+		}
+		sg.IsExposed = false
+	}
+
+	// 2. Release allocated port.
+	if sg.Port != 0 {
+		if err := superiorPortAllocator.ReleaseRange(sg.Port, sg.Port); err != nil {
+			return errors.Wrapf(err, "failed to release port %d during shardgroup %s deletion", sg.Port, sg.Name)
+		}
+		sg.Port = 0
+	}
+
+	// 3. Conditionally delete head lvol + lvstore (THE BUG FIX).
+	//    cleanupRequired=false leaves the lvstore + head lvol on the encoded
+	//    shard blocks so that re-attach can re-discover them via bdev_examine.
+	if cleanupRequired {
+		if sg.HeadLvolUUID != "" {
+			if _, err := spdkClient.BdevLvolDelete(sg.HeadAlias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+				return errors.Wrapf(err, "failed to delete head lvol %s for shardgroup %s", sg.HeadAlias, sg.Name)
+			}
+			sg.HeadLvolUUID = ""
+		}
+		if sg.LvsUUID != "" {
+			if _, err := spdkClient.BdevLvolDeleteLvstore(sg.LvsName, ""); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+				return errors.Wrapf(err, "failed to delete lvstore %s for shardgroup %s", sg.LvsName, sg.Name)
+			}
+			sg.LvsUUID = ""
+			sg.ClusterSize = 0
+		}
+	} else {
+		sg.log.Info("Preserving lvstore + head lvol on bdev_ec for re-attach (cleanupRequired=false)")
+	}
+
+	// 4. Delete bdev_ec.
+	if _, err := spdkClient.BdevEcDelete(sg.EcBdevName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return errors.Wrapf(err, "failed to delete EC bdev %s for shardgroup %s", sg.EcBdevName, sg.Name)
+	}
+
+	// 5. Disconnect NVMe-oF controllers from all shards (best-effort).
+	for shardName, endpoint := range sg.Shards {
+		controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
+		if _, detachErr := spdkClient.BdevNvmeDetachController(controllerName); detachErr != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(detachErr) {
+			sg.log.WithError(detachErr).Warnf("Failed to detach NVMe controller %s for shard %s; continuing", controllerName, shardName)
+		}
+	}
+
+	sg.log.Info("Deleted shardgroup")
+	return nil
+}
+
+// tryDiscoverExistingLvstore queries SPDK for an already-imported per-volume
+// lvstore/head pair after bdev_ec_create.
+//
+// Returns (true, nil) when both lvstore and head are found and cached on sg.
+// Returns (false, nil) when no lvstore exists yet (fresh volume path).
+// Returns error for malformed/mismatched existing state or RPC failures.
+func (sg *ShardGroup) tryDiscoverExistingLvstore(spdkClient *spdkclient.Client) (bool, error) {
+	lvstoreList, err := spdkClient.BdevLvolGetLvstore(sg.LvsName, "")
+	if err != nil {
+		if jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return false, nil
+		}
+		return false, errors.Wrapf(err, "failed to discover lvstore %s on EC bdev %s", sg.LvsName, sg.EcBdevName)
+	}
+	if len(lvstoreList) == 0 {
+		return false, nil
+	}
+	if len(lvstoreList) != 1 {
+		return false, fmt.Errorf("expected exactly one lvstore named %s, found %d", sg.LvsName, len(lvstoreList))
+	}
+	sg.LvsUUID = lvstoreList[0].UUID
+	sg.ClusterSize = lvstoreList[0].ClusterSize
+
+	headBdev, err := spdkClient.BdevLvolGetByName(sg.HeadAlias, 0)
+	if err != nil {
+		if jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return false, fmt.Errorf("found lvstore %s but missing head lvol %s", sg.LvsName, sg.HeadAlias)
+		}
+		return false, errors.Wrapf(err, "failed to discover head lvol %s after auto-import", sg.HeadAlias)
+	}
+	sg.HeadLvolUUID = headBdev.UUID
+
+	sg.log.Infof("Discovered existing lvstore %s (uuid=%s) and head lvol %s (uuid=%s)",
+		sg.LvsName, sg.LvsUUID, sg.HeadLvolName, sg.HeadLvolUUID)
+	return true, nil
+}
+
+// prepareIPAndPort sets the ShardGroup's IP and allocates its single NVMe-oF port
+// (for the head lvol). A ShardGroup serves one target, so it always uses one port
+// and does not use the request's port_count.
+func (sg *ShardGroup) prepareIPAndPort(superiorPortAllocator *commonbitmap.Bitmap) error {
+	podIP, err := commonnet.GetIPForPod()
+	if err != nil {
+		return err
+	}
+	sg.IP = podIP
+
+	port, _, err := superiorPortAllocator.AllocateRange(1)
+	if err != nil {
+		return err
+	}
+	sg.Port = port
+
+	sg.log.Infof("Prepared IP %s and port %d for shardgroup", sg.IP, sg.Port)
 	return nil
 }
