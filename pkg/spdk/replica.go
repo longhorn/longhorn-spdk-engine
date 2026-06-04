@@ -3964,6 +3964,11 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 		return errors.Wrapf(err, "failed to link the root snapshot to the entry point %s of the clone src replica %s during dst clone replica %s rebuilding finish", r.cloneEntrypointLvolName, r.cloneSourceReplicaName, r.Name)
 	}
 
+	// Populate the cache so SnapshotCloneDstStatusCheck reports "complete" after an IM restart.
+	r.snapshotCloningDstCache.snapshotName = epParentSnapName
+	r.snapshotCloningDstCache.srcReplicaName = r.cloneSourceReplicaName
+	r.snapshotCloningDstCache.cloningState = types.ProgressStateComplete
+
 	r.log.Infof("Rebuilding dst clone replica %s finished linking: chain root connected to entrypoint %s (src replica %s, engine %s, addr %s, snapshot %s)", r.Name, r.cloneEntrypointLvolName, r.cloneSourceReplicaName, r.rebuildingDstCache.linkedCloneSrcEngineName, r.rebuildingDstCache.linkedCloneSrcEngineAddress, epParentSnapName)
 
 	return nil
