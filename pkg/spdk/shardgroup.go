@@ -749,6 +749,76 @@ func (sg *ShardGroup) Delete(spdkClient *spdkclient.Client, cleanupRequired bool
 	return nil
 }
 
+// Sync is a passive validator that mirrors Shard.Sync and Replica.Sync. It
+// never re-allocates a port and never re-exposes the bdev. Behavior depends
+// on the current state:
+//
+//   - Pending: walks to Stopped (newly discovered after process restart;
+//     the ShardGroup controller's recovery path replaces or re-provisions).
+//   - Running: validates that the live exposed port matches sg.Port; any
+//     drift transitions to Error.
+//   - other: no-op.
+//
+// In-place re-expose is deliberately avoided. Recovery of a ShardGroup
+// process on a different node uses the salvage path (ShardGroupCreate with
+// salvage_requested=true), not Sync.
+func (sg *ShardGroup) Sync(spdkClient *spdkclient.Client) (err error) {
+	sg.Lock()
+	prevState, prevErrorMsg := sg.State, sg.ErrorMsg
+	defer func() {
+		updateRequired := sg.State != prevState || sg.ErrorMsg != prevErrorMsg
+		sg.Unlock()
+		if updateRequired {
+			sg.UpdateCh <- nil
+		}
+	}()
+	// Only a real state mismatch moves the shardgroup to Error. Transient
+	// query failures return the error without touching state, like
+	// Replica.Sync.
+	failSync := func(e error) error {
+		sg.log.WithError(e).Errorf("Failed to sync shardgroup %s", sg.Name)
+		sg.State = types.InstanceStateError
+		sg.ErrorMsg = e.Error()
+		return e
+	}
+
+	if sg.State == types.InstanceStatePending {
+		sg.State = types.InstanceStateStopped
+		sg.ErrorMsg = ""
+		sg.log.Debug("Synced shardgroup")
+		return nil
+	}
+
+	if sg.State != types.InstanceStateRunning {
+		return nil
+	}
+
+	subsystemMap, err := GetNvmfSubsystemMap(spdkClient)
+	if err != nil {
+		return err
+	}
+
+	exposedPort, exposedPortErr := getExposedPort(subsystemMap[sg.Nqn])
+	if sg.IsExposed {
+		if exposedPortErr != nil {
+			return failSync(errors.Wrapf(exposedPortErr, "failed to find the actual port in subsystem NQN %s for shardgroup %s, which should be exposed at %d", sg.Nqn, sg.Name, sg.Port))
+		}
+		if exposedPort != sg.Port {
+			return failSync(fmt.Errorf("found mismatching between the actual exposed port %d and the recorded port %d for exposed shardgroup %s", exposedPort, sg.Port, sg.Name))
+		}
+	} else if exposedPortErr == nil {
+		return failSync(fmt.Errorf("found the actual port %d in subsystem NQN %s for shardgroup %s, which should not be exposed", exposedPort, sg.Nqn, sg.Name))
+	}
+
+	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
+		return errors.Wrapf(err, "failed to refresh lvol cache for shardgroup %s", sg.Name)
+	}
+
+	sg.ErrorMsg = ""
+	sg.log.Debug("Synced shardgroup")
+	return nil
+}
+
 // tryDiscoverExistingLvstore queries SPDK for an already-imported per-volume
 // lvstore/head pair after bdev_ec_create.
 //
