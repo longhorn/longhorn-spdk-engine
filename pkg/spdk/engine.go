@@ -1962,23 +1962,30 @@ func (e *Engine) SnapshotClone(snapshotName, srcEngineName, srcEngineAddress str
 	srcReplicaCandidates := map[string]replicaCandidate{}
 	for rName, mode := range srcEngine.ReplicaModeMap {
 		if mode != types.ModeRW {
+			e.log.Debugf("Src replica %s excluded from candidates: mode=%v (not RW)", rName, mode)
 			continue
 		}
 		rAddr, ok := srcEngine.ReplicaAddressMap[rName]
 		if !ok {
+			e.log.Debugf("Src replica %s excluded from candidates: not in ReplicaAddressMap", rName)
 			continue
 		}
 		r, ok := srcReplicas[rName]
 		if !ok {
+			e.log.Debugf("Src replica %s excluded from candidates: not in EngineReplicaList result", rName)
 			continue
 		}
 		srcReplicaCandidates[rName] = replicaCandidate{ip: r.IP, lvsUUID: r.LvsUUID, address: rAddr}
 	}
+	e.log.Infof("Built srcReplicaCandidates with %d entries from src engine %s (mode map has %d, replica list has %d)",
+		len(srcReplicaCandidates), srcEngineName, len(srcEngine.ReplicaModeMap), len(srcReplicas))
 
 	if cloneMode == spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE {
 		if len(dstReplicaSrcReplicaPairMap) == 0 {
 			return fmt.Errorf("linked-clone snapshot clone requires a non-empty dst→src replica name map from the manager")
 		}
+		e.log.Infof("Linked-clone: dstReplicaSrcReplicaPairMap has %d entries, engine backends has %d entries",
+			len(dstReplicaSrcReplicaPairMap), len(e.backends))
 		// New path: manager provided an explicit dst→src replica name map (proxy API >= 7).
 		return e.snapshotCloneLinkedN(snapshotName, dstReplicaSrcReplicaPairMap, srcReplicaCandidates)
 	}
