@@ -380,6 +380,14 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s add", req.EngineName, req.ReplicaName)
 	}
 
+	// EC engines have no replicas at the engine layer - shard replacement
+	// is driven inside the ShardGroup process via ShardGroupShardReplace.
+	// Reject ReplicaAdd at the boundary so a misconfigured caller cannot
+	// inject a *replicaUpstream into a shardGroupUpstream-keyed map.
+	if isShardedEngine(e) {
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "replica add is not supported on EC engine %v", req.EngineName)
+	}
+
 	var frontendSuspendResumeWrapper replicaAddFrontendSuspendResumeWrapper
 	if efName != "" {
 		log := logrus.WithFields(logrus.Fields{
@@ -396,7 +404,11 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 	return &emptypb.Empty{}, nil
 }
 
-// EngineReplicaList returns all replicas for an engine
+// EngineReplicaList returns all replicas for an engine. EC engines have no
+// replicas at the engine layer - their single upstream is a ShardGroup and
+// shards are queried via ShardList - so the response is an empty map. The
+// guard lives at the server layer (not in Engine.ReplicaList) so engine.go
+// stays layout-blind.
 func (s *Server) EngineReplicaList(ctx context.Context, req *spdkrpc.EngineReplicaListRequest) (ret *spdkrpc.EngineReplicaListResponse, err error) {
 	s.RLock()
 	e := s.engineMap[req.EngineName]
@@ -405,6 +417,10 @@ func (s *Server) EngineReplicaList(ctx context.Context, req *spdkrpc.EngineRepli
 
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica list", req.EngineName)
+	}
+
+	if isShardedEngine(e) {
+		return &spdkrpc.EngineReplicaListResponse{Replicas: map[string]*spdkrpc.Replica{}}, nil
 	}
 
 	replicas, err := e.ReplicaList(spdkClient)
@@ -431,6 +447,13 @@ func (s *Server) EngineReplicaDelete(ctx context.Context, req *spdkrpc.EngineRep
 
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for replica %s with address %s delete", req.EngineName, req.ReplicaName, req.ReplicaAddress)
+	}
+
+	// Symmetric to EngineReplicaAdd: replica add/delete are RAID1-only.
+	// EC volumes manage shards via the ShardGroup controller, not at the
+	// engine layer.
+	if isShardedEngine(e) {
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "replica delete is not supported on EC engine %v", req.EngineName)
 	}
 
 	if err := e.ReplicaDelete(spdkClient, req.ReplicaName, req.ReplicaAddress); err != nil {
@@ -553,6 +576,14 @@ func (s *Server) EngineSnapshotHashStatus(ctx context.Context, req *spdkrpc.Snap
 
 	if e == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot hash status", req.Name)
+	}
+
+	// Snapshot hashing is not supported on EC volumes in the initial release;
+	// shardGroupUpstream.SnapshotHash returns Unimplemented for the same
+	// reason. Reject the status query at the server boundary so it never
+	// reaches Engine.SnapshotHashStatus's RAID1-only iteration path.
+	if isShardedEngine(e) {
+		return nil, grpcstatus.Errorf(grpccodes.Unimplemented, "snapshot hash status is not supported on EC engine %v", req.Name)
 	}
 
 	return e.SnapshotHashStatus(req.SnapshotName)
