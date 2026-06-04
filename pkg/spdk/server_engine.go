@@ -132,12 +132,43 @@ func (s *Server) EngineExpand(ctx context.Context, req *spdkrpc.EngineExpandRequ
 		return nil, grpcstatus.Errorf(grpccodes.Unimplemented, "cannot expand ublk frontend engine %v", req.Name)
 	}
 
-	err = e.Expand(spdkClient, req.Size)
+	// EC volumes take the upstream-reset path because ShardGroupExpand has
+	// already driven the upstream resize against the ShardGroup process;
+	// RAID1 keeps its tear-down/expand-replicas/reconstruct cycle. The
+	// engine itself remains layout-blind - the dispatch is decided here
+	// by inspecting which Upstream implementation EngineCreate's factory
+	// populated. EngineExpandRequest does not currently carry
+	// DataLayoutType, so this inference is the substitute for
+	// req.data_layout_type until both topologies converge on
+	// ExpandViaUpstreamReset and the dispatch is removed.
+	if isShardedEngine(e) {
+		err = e.ExpandViaUpstreamReset(spdkClient, req.Size)
+	} else {
+		err = e.Expand(spdkClient, req.Size)
+	}
 	if err != nil {
 		return nil, toExpansionGRPCError(err, "failed to expand engine %v", req.Name)
 	}
 
 	return &emptypb.Empty{}, nil
+}
+
+// isShardedEngine reports whether the engine's upstreams are
+// shardGroupUpstream (EC layout). This is the only place server_engine.go
+// peers into Upstream concrete types, and it does so to preserve the
+// "engine.go knows no layout" invariant: the layout is read from what
+// EngineCreate's factory already populated, not from a layout field on
+// Engine. This dispatch site is expected to be removed once
+// Engine.ExpandViaUpstreamReset covers both layouts.
+func isShardedEngine(e *Engine) bool {
+	e.RLock()
+	defer e.RUnlock()
+	for _, u := range e.upstreams {
+		if _, ok := u.(*shardGroupUpstream); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // EngineExpandPrecheck checks if expansion is required for an engine. The engine spec size should be updated before precheck.
