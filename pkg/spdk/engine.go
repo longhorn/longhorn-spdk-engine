@@ -2714,6 +2714,110 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (err error) 
 	return expandErr
 }
 
+// ExpandViaUpstreamReset expands the engine by resetting each upstream
+// bdev_nvme controller so the SPDK reset-refresh patch propagates the new
+// namespace size to the local nvme bdev, then polling the engine's
+// bdev_raid1 until it grows in response. raid1 resizes automatically on the
+// resulting BDEV_EVENT_RESIZE (see module/bdev/raid/raid1.c:504); the engine
+// issues no other SPDK call.
+//
+// The reset is load-bearing, not the AER chain. ShardGroup.Expand resizes
+// the head lvol via a Stop/Resize/Start dance (required to avoid a loopback
+// resize hang on the engine's own bdev_nvme initiator), which severs the
+// AER that would otherwise carry the size change to this initiator. The
+// explicit controller reset is the compensation.
+//
+// This is the path used for EC volumes: ShardGroupController already drove
+// ShardExpand + ShardGroupExpand against the ShardGroup process, so by the
+// time EngineExpand arrives the upstream lvol has been resized. RAID1 still
+// uses the tear-down/expand-replicas/reconstruct cycle in Engine.Expand;
+// both layouts are expected to converge on this method once the
+// reset-refresh path is verified reliable on the SPDK build the branch
+// ships against.
+func (e *Engine) ExpandViaUpstreamReset(spdkClient *spdkclient.Client, size uint64) (err error) {
+	const (
+		pollInterval = 500 * time.Millisecond
+		pollTimeout  = 60 * time.Second
+	)
+
+	// The write lock is held for the whole expand, including the controller reset
+	// and the size poll below, to serialize it against teardown and reconcile.
+	// Engine reads block until it returns; the poll is normally brief
+	// (the 60s is only the failure-path bound).
+	e.Lock()
+	originalSize := e.SpecSize
+
+	if e.IsRestoring {
+		e.Unlock()
+		return fmt.Errorf("%w", ErrRestoringInProgress)
+	}
+	if e.isExpanding {
+		e.Unlock()
+		return fmt.Errorf("%w", ErrExpansionInProgress)
+	}
+
+	if e.SpecSize > size {
+		e.Unlock()
+		return fmt.Errorf("%w: cannot expand engine %s to a smaller size %v, current spec size %v",
+			ErrExpansionInvalidSize, e.Name, size, e.SpecSize)
+	}
+	if e.SpecSize == size {
+		// No-op: already at requested size, e.g. a retried EngineExpand
+		// after the upstream reset grew the raid bdev on a prior call.
+		e.lastExpansionError = ""
+		e.lastExpansionFailedAt = ""
+		e.Unlock()
+		return nil
+	}
+
+	e.isExpanding = true
+	e.lastExpansionFailedAt = ""
+	e.lastExpansionError = ""
+	defer e.Unlock()
+
+	e.log.Infof("Expanding engine via upstream-reset raid1 resize from size %v to %v", originalSize, size)
+
+	defer func() {
+		e.isExpanding = false
+		e.finishExpansion(originalSize, size, err)
+	}()
+
+	// Refresh each upstream bdev's cached blockcnt by resetting its controller;
+	// the reset, not the AER chain, is what propagates the new size. The upstream
+	// map key equals the bdev_nvme controller name, so iterating the map keys
+	// gives the correct controller names directly.
+	for upstreamName, u := range e.upstreams {
+		// Skip non-dispatchable upstreams: resetting a dead or address-less
+		// controller would fail the whole expand.
+		if !isUpstreamDispatchable(u) {
+			continue
+		}
+		if _, err := spdkClient.BdevNvmeResetController(upstreamName); err != nil {
+			return errors.Wrapf(err, "failed to reset upstream nvme controller %s during upstream-reset expand", upstreamName)
+		}
+	}
+
+	deadline := time.Now().Add(pollTimeout)
+	for {
+		bdevRaid, getErr := spdkClient.BdevRaidGet(e.Name, 0)
+		if getErr != nil {
+			return errors.Wrapf(getErr, "failed to get raid bdev %s during upstream-reset expand", e.Name)
+		}
+		if len(bdevRaid) == 0 {
+			return fmt.Errorf("raid bdev %s not found during upstream-reset expand", e.Name)
+		}
+		currentSize := bdevRaid[0].NumBlocks * uint64(bdevRaid[0].BlockSize)
+		if currentSize >= size {
+			e.log.Infof("Engine raid bdev %s reached size %v >= requested %v after upstream-reset resize", e.Name, currentSize, size)
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for raid bdev %s to reach size %v via upstream reset (current %v)", e.Name, size, currentSize)
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
 func (e *Engine) finishExpansion(fromSize, toSize uint64, err error) {
 	if err != nil {
 		e.SpecSize = fromSize
