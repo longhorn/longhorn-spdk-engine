@@ -98,7 +98,6 @@ func NewShard(volumeName string, slotIndex uint32, lvsName, lvsUUID string, size
 	log = log.WithField("sizeBytes", roundedSize)
 
 	return &Shard{
-
 		Name:       name,
 		LvolName:   lvolName,
 		VolumeName: volumeName,
@@ -179,11 +178,13 @@ func (s *Shard) Create(spdkClient *spdkclient.Client, superiorPortAllocator *com
 		return nil, err
 	}
 
-	uuid, err := spdkClient.BdevLvolCreate("", s.LvsUUID, s.Name, util.BytesToMiB(s.SizeBytes), "", true)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to create lvol for shard %s", s.Name)
+	if s.UUID == "" {
+		uuid, err := spdkClient.BdevLvolCreate("", s.LvsUUID, s.LvolName, util.BytesToMiB(s.SizeBytes), "", true)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to create lvol for shard %s", s.Name)
+		}
+		s.UUID = uuid
 	}
-	s.UUID = uuid
 
 	if err := s.prepareIPAndPort(superiorPortAllocator); err != nil {
 		return nil, err
@@ -271,11 +272,83 @@ func (s *Shard) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, supe
 	return nil
 }
 
+func (s *Shard) Sync(spdkClient *spdkclient.Client) (err error) {
+	s.Lock()
+	prevState, prevErrorMsg := s.State, s.ErrorMsg
+	defer func() {
+		updateRequired := s.State != prevState || s.ErrorMsg != prevErrorMsg
+		s.Unlock()
+		if updateRequired {
+			s.UpdateCh <- nil
+		}
+	}()
+	// Only a real state mismatch moves the shard to Error. Transient query
+	// failures return the error without touching state, like Replica.Sync.
+	failSync := func(e error) error {
+		s.log.WithError(e).Errorf("Failed to sync shard %s", s.Name)
+		s.State = types.InstanceStateError
+		s.ErrorMsg = e.Error()
+		return e
+	}
+
+	if s.State == types.InstanceStatePending {
+		s.State = types.InstanceStateStopped
+		s.ErrorMsg = ""
+		s.log.Debug("Synced shard")
+		return nil
+	}
+
+	if s.State != types.InstanceStateRunning {
+		return nil
+	}
+
+	subsystemMap, err := GetNvmfSubsystemMap(spdkClient)
+	if err != nil {
+		return err
+	}
+
+	exposedPort, exposedPortErr := getExposedPort(subsystemMap[s.Nqn])
+	if s.IsExposed {
+		if exposedPortErr != nil {
+			return failSync(errors.Wrapf(exposedPortErr, "failed to find the actual port in subsystem NQN %s for shard %s, which should be exposed at %d", s.Nqn, s.Name, s.Port))
+		}
+		if exposedPort != s.Port {
+			return failSync(fmt.Errorf("found mismatching between the actual exposed port %d and the recorded port %d for exposed shard %s", exposedPort, s.Port, s.Name))
+		}
+	} else if exposedPortErr == nil {
+		return failSync(fmt.Errorf("found the actual port %d in subsystem NQN %s for shard %s, which should not be exposed", exposedPort, s.Nqn, s.Name))
+	}
+
+	s.ErrorMsg = ""
+	s.log.Debug("Synced shard")
+	return nil
+}
+
 func (s *Shard) Get() *spdkrpc.Shard {
 	s.RLock()
 	defer s.RUnlock()
 
 	return ServiceShardToProtoShard(s)
+}
+
+// SetErrorState marks a non-stopped, non-error shard as Error, mirroring
+// Replica.SetErrorState.
+func (s *Shard) SetErrorState() {
+	needUpdate := false
+
+	s.Lock()
+	defer func() {
+		s.Unlock()
+
+		if needUpdate {
+			s.UpdateCh <- nil
+		}
+	}()
+
+	if s.State != types.InstanceStateStopped && s.State != types.InstanceStateError {
+		s.State = types.InstanceStateError
+		needUpdate = true
+	}
 }
 
 // Expand resizes the shard's lvol. It tears down the NVMe-oF subsystem
