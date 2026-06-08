@@ -1,4 +1,6 @@
 # syntax=docker/dockerfile:1.24.0@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
+FROM golangci/golangci-lint:v2.12.2 AS golangci-lint
+
 FROM registry.suse.com/bci/bci-base:16.1@sha256:b6f9a5d0a5a2e2bc44c7a14300ebcbac87b51591a00b6e0df898f7dc71989bb5 AS base
 
 ARG TARGETARCH
@@ -9,7 +11,6 @@ ARG SRC_TAG
 ARG CACHEBUST
 
 ARG GOLANG_VERSION=1.26.3
-ENV GOLANGCI_LINT_VERSION=v2.11.4
 
 ENV ARCH=${TARGETARCH}
 ENV GOFLAGS=-mod=vendor
@@ -35,10 +36,8 @@ RUN curl -sSL "https://golang.org/dl/go${GOLANG_VERSION}.linux-${ARCH}.tar.gz" -
     && tar -C /usr/local -xzf /tmp/go.tar.gz \
     && rm /tmp/go.tar.gz
 
-# Install golangci-lint
-RUN curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh -o /tmp/install.sh \
-    && chmod +x /tmp/install.sh \
-    && /tmp/install.sh -b /usr/local/bin ${GOLANGCI_LINT_VERSION}
+# Copy golangci-lint binary from official image
+COPY --from=golangci-lint /usr/bin/golangci-lint /usr/local/bin/golangci-lint
 
 RUN echo "Cloning longhorn/dep-versions SRC_BRANCH=${SRC_BRANCH} SRC_TAG=${SRC_TAG}" && \
     git clone https://github.com/longhorn/dep-versions.git -b ${SRC_BRANCH} /usr/src/dep-versions && \
