@@ -8,8 +8,6 @@ github.com/RoaringBitmap/roaring/internal
 # github.com/avast/retry-go/v4 v4.7.0
 ## explicit; go 1.20
 github.com/avast/retry-go/v4
-# github.com/avast/retry-go/v5 v5.0.0
-## explicit; go 1.20
 # github.com/beorn7/perks v1.0.1
 ## explicit; go 1.11
 github.com/beorn7/perks/quantile
@@ -112,7 +110,7 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20260502085909-21ee466f5a8a
+# github.com/longhorn/backupstore v0.0.0-20260525102750-1ed7dde50b68
 ## explicit; go 1.25.0
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
