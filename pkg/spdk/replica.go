@@ -165,6 +165,14 @@ type RebuildingDstCache struct {
 	processingState             string
 	processingSize              uint64
 	snapshotTotalRebuildingSize uint64
+
+	// detachedCloneEPsBySnap maps a snapshot name to the clone entrypoint lvol names
+	// that were detached from it during rebuild pre-processing. It is used by
+	// RebuildingDstSnapshotCreate to re-parent those entrypoints to the rebuilt snapshot.
+	// This is best-effort: if the instance manager restarts between the detach and
+	// the re-parenting, syncCloneReplicaInfo detects and repairs orphaned entrypoints
+	// at clone replica startup.
+	detachedCloneEPsBySnap map[string][]string
 }
 
 type RebuildingSrcCache struct {
@@ -635,8 +643,26 @@ func (r *Replica) syncCloneReplicaInfo(spdkClient *spdkclient.Client, bdevLvolMa
 
 	actualParent := rootBdev.DriverSpecific.Lvol.BaseSnapshot
 
-	// Case 1: Parent matches the expected entrypoint — everything is fine
+	// Case 1: The chain root's parent is the expected entrypoint — also verify that
+	// the entrypoint itself is correctly parented to the src snapshot.
+	// The entrypoint may have become an orphaned root (empty base_snapshot) if the
+	// src replica was rebuilt: rebuildingDstShallowCopyPrepare detaches all children
+	// of a corrupted or outdated snapshot, including any clone entrypoints, before
+	// deleting or reusing the snapshot. If the instance manager restarted before
+	// RebuildingDstSnapshotCreate could re-parent the entrypoint, the orphaned
+	// entrypoint persists. The chain-root → entrypoint link uses lvol names (not
+	// UUIDs), so it survives the rebuild even though the entrypoint is broken.
 	if actualParent == r.cloneEntrypointLvolName {
+		srcSnapshotName := GetSnapshotNameFromCloneEntrypointLvolName(r.cloneSourceReplicaName, r.cloneEntrypointLvolName)
+		expectedSrcSnapshotLvolName := GetReplicaSnapshotLvolName(r.cloneSourceReplicaName, srcSnapshotName)
+		if epBdev, epExists := bdevLvolMap[r.cloneEntrypointLvolName]; epExists && epBdev.DriverSpecific.Lvol != nil {
+			if epBdev.DriverSpecific.Lvol.BaseSnapshot != expectedSrcSnapshotLvolName {
+				r.log.Warnf("Clone replica chain root correctly parented to entrypoint %s, but entrypoint has wrong or missing parent (got %q, expected %q); repairing", r.cloneEntrypointLvolName, epBdev.DriverSpecific.Lvol.BaseSnapshot, expectedSrcSnapshotLvolName)
+				if err := r.repairCloneEntrypoint(spdkClient, srcSnapshotName); err != nil {
+					return errors.Wrapf(err, "failed to repair orphaned entrypoint %s", r.cloneEntrypointLvolName)
+				}
+			}
+		}
 		return nil
 	}
 
@@ -4083,6 +4109,7 @@ func (r *Replica) doCleanupForRebuildingDst(spdkClient *spdkclient.Client) error
 	r.rebuildingDstCache.linkedCloneSrcReplicaName = ""
 	r.rebuildingDstCache.linkedCloneSrcEngineName = ""
 	r.rebuildingDstCache.linkedCloneSrcEngineAddress = ""
+	r.rebuildingDstCache.detachedCloneEPsBySnap = make(map[string][]string)
 	r.rebuildingDstCache.processedSnapshotList = make([]string, 0)
 	r.rebuildingDstCache.processedSnapshotsSize = 0
 	r.rebuildingDstCache.processingSnapshotName = ""
@@ -4158,6 +4185,18 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 			// 1. If it contains the range checksums, SPDK server will reuse it later.
 			// 2. If not, SPDK server should delete it then do full rebuilding to a brand new rebuilding lvol.
 			for childLvolName := range dstSnapSvcLvol.Children {
+				// Record clone entrypoints before detaching so RebuildingDstSnapshotCreate
+				// can re-parent them to the rebuilt snapshot. If the instance manager
+				// restarts before that happens, syncCloneReplicaInfo repairs the orphaned
+				// entrypoint at clone replica startup.
+				if IsCloneEntrypointOfReplica(r.Name, childLvolName) {
+					if r.rebuildingDstCache.detachedCloneEPsBySnap == nil {
+						r.rebuildingDstCache.detachedCloneEPsBySnap = map[string][]string{}
+					}
+					r.rebuildingDstCache.detachedCloneEPsBySnap[snapshotName] = append(
+						r.rebuildingDstCache.detachedCloneEPsBySnap[snapshotName], childLvolName)
+					r.log.Infof("Rebuilding dst replica recorded clone entrypoint %s for re-parenting after snapshot %s rebuild", childLvolName, snapshotName)
+				}
 				if _, err := spdkClient.BdevLvolDetachParent(spdktypes.GetLvolAlias(r.LvsName, childLvolName)); err != nil {
 					return "", false, errors.Wrapf(err, "failed to decouple the child lvol %s from the corrupted or outdated snapshot lvol %s for dst replica %v rebuilding snapshot %s shallow copy prepare", childLvolName, dstSnapshotLvolName, r.Name, snapshotName)
 				}
@@ -4337,6 +4376,7 @@ func (r *Replica) RebuildingDstShallowCopyStart(spdkClient *spdkclient.Client, s
 			r.rebuildingDstCache.rebuildingError = err.Error()
 			r.rebuildingDstCache.rebuildingState = types.ProgressStateError
 			r.rebuildingDstCache.processingState = types.ProgressStateError
+			delete(r.rebuildingDstCache.detachedCloneEPsBySnap, snapshotName)
 		}
 	}()
 
@@ -4532,6 +4572,7 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 				updateRequired = true
 			}
 			r.ErrorMsg = err.Error()
+			delete(r.rebuildingDstCache.detachedCloneEPsBySnap, snapshotName)
 		} else {
 			if r.State != types.InstanceStateError {
 				r.ErrorMsg = ""
@@ -4602,6 +4643,23 @@ func (r *Replica) RebuildingDstSnapshotCreate(spdkClient *spdkclient.Client, sna
 		}
 		snapSvcLvol.Parent = dstSnapParentLvolName
 		r.log.Infof("Rebuilding dst replica corrected the parent of the snapshot %s(%s) to %s for rebuilding dst replica snapshot creation", snapSvcLvol.Alias, snapSvcLvol.UUID, dstSnapParentLvolName)
+	}
+
+	// Re-parent any clone entrypoints that were detached from the old version of this
+	// snapshot during pre-processing. This restores the parent chain for nested-clone
+	// replicas without waiting for them to restart. Failures are non-fatal: a warning
+	// is logged and syncCloneReplicaInfo will repair the orphaned entrypoint at the
+	// next clone replica startup.
+	if epLvolNames, ok := r.rebuildingDstCache.detachedCloneEPsBySnap[snapshotName]; ok {
+		for _, epLvolName := range epLvolNames {
+			epAlias := spdktypes.GetLvolAlias(r.LvsName, epLvolName)
+			if _, err := spdkClient.BdevLvolSetParent(epAlias, snapSvcLvol.Alias); err != nil {
+				r.log.WithError(err).Warnf("Rebuilding dst replica failed to re-parent clone entrypoint %s to rebuilt snapshot %s; syncCloneReplicaInfo will repair on next startup", epLvolName, snapSvcLvol.Name)
+			} else {
+				r.log.Infof("Rebuilding dst replica re-parented clone entrypoint %s to rebuilt snapshot %s", epLvolName, snapSvcLvol.Name)
+			}
+		}
+		delete(r.rebuildingDstCache.detachedCloneEPsBySnap, snapshotName)
 	}
 
 	// Blindly clean up the existing rebuilding lvol after each rebuilding dst replica snapshot creation
