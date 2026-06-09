@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
@@ -695,3 +696,190 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 	})
 }
 
+// TestLinkedCloneRebuildAfterExpansion (Test 9) validates that a second
+// linked-clone replica can be added to a clone volume that has already been
+// expanded beyond the size of the source snapshot & entrypoint.
+//
+// Steps:
+//  1. Create a src engine with 2 replicas (FrontendSPDKTCPBlockdev).
+//  2. Write some data to the src device, then create a snapshot.
+//  3. Create a clone engine with 1 replica from the src snapshot.
+//  4. Expand the clone engine to 2× the initial size.
+//  5. Write some data to the expanded part of the clone device, then snapshot.
+//  6. Create the 2nd replica with the expanded size for the clone engine.
+//  7. Add the 2nd replica to the clone engine via EngineFrontendReplicaAdd
+//     with linked-clone src fields.
+//  8. Wait for rebuild completion and assert both replicas have correct entrypoints.
+//  9. Delete the 1st replica of the clone engine.
+//     Verify the data from both writes is still correct through the 2nd replica.
+func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
+	withRuntimeMonitoringTestEnv(c, "aio", func(env *runtimeMonitoringTestEnv) {
+		lce := newLinkedCloneTestEnv(env)
+		ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+		c.Assert(err, IsNil)
+
+		const dataCountInMB = int64(1)
+
+		// ── Steps 1-2: src engine with 2 replicas, write data, snapshot ──────────
+
+		srcReplica2Name := fmt.Sprintf("%s-src-r2", lce.volumeName)
+
+		_, err = lce.spdkCli.ReplicaCreate(lce.srcReplicaName, defaultTestDiskName,
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		c.Assert(err, IsNil)
+		defer func() { _ = lce.spdkCli.ReplicaDelete(lce.srcReplicaName, true) }()
+
+		_, err = lce.spdkCli.ReplicaCreate(srcReplica2Name, defaultTestDiskName,
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		c.Assert(err, IsNil)
+		defer func() { _ = lce.spdkCli.ReplicaDelete(srcReplica2Name, true) }()
+
+		srcR1, err := lce.spdkCli.ReplicaGet(lce.srcReplicaName)
+		c.Assert(err, IsNil)
+		srcR2, err := lce.spdkCli.ReplicaGet(srcReplica2Name)
+		c.Assert(err, IsNil)
+
+		srcVolumeName := fmt.Sprintf("%s-src", lce.volumeName)
+		_, err = lce.spdkCli.EngineCreate(lce.srcEngineName, srcVolumeName,
+			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+			map[string]string{
+				lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcR1.PortStart))),
+				srcReplica2Name:    net.JoinHostPort(lce.ip, strconv.Itoa(int(srcR2.PortStart))),
+			}, 2, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		c.Assert(err, IsNil)
+		defer func() { _ = lce.spdkCli.EngineDelete(lce.srcEngineName) }()
+
+		srcEngine, err := lce.spdkCli.EngineGet(lce.srcEngineName)
+		c.Assert(err, IsNil)
+
+		srcEfName := fmt.Sprintf("%s-src-ef", lce.volumeName)
+		_, err = lce.spdkCli.EngineFrontendCreate(srcEfName, srcVolumeName, lce.srcEngineName,
+			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+			net.JoinHostPort(srcEngine.IP, strconv.Itoa(int(srcEngine.Port))), 0, 0)
+		c.Assert(err, IsNil)
+		defer func() { _ = lce.spdkCli.EngineFrontendDelete(srcEfName) }()
+
+		srcEndpoint := helperutil.GetLonghornDevicePath(srcVolumeName)
+
+		err = writeDataToBlockDevice(ne, srcEndpoint, 0, dataCountInMB)
+		c.Assert(err, IsNil)
+		srcChecksum, err := util.GetFileChunkChecksum(srcEndpoint, 0, dataCountInMB*int64(helpertypes.MiB))
+		c.Assert(err, IsNil)
+
+		_, err = lce.spdkCli.EngineSnapshotCreate(lce.srcEngineName, lce.snapshotName)
+		c.Assert(err, IsNil)
+
+		// Drop the src frontend (no more I/O needed on src); keep the src engine
+		// running so RebuildingDstFinish can verify the src replica is still RW.
+		_ = lce.spdkCli.EngineFrontendDelete(srcEfName)
+
+		// ── Step 3: clone engine with 1 replica ───────────────────────────────────
+
+		lce.createDstReplica(c)
+		defer func() { _ = lce.spdkCli.ReplicaDelete(lce.dstReplicaName, true) }()
+		lce.startLinkedClone(c)
+
+		dstReplica1, err := lce.spdkCli.ReplicaGet(lce.dstReplicaName)
+		c.Assert(err, IsNil)
+		c.Assert(dstReplica1.State, Equals, types.InstanceStateRunning)
+
+		cloneEngine0, err := lce.spdkCli.EngineCreate(lce.engineName, lce.volumeName,
+			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+			map[string]string{
+				lce.dstReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(dstReplica1.PortStart))),
+			}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		c.Assert(err, IsNil)
+		defer func() { _ = lce.spdkCli.EngineDelete(lce.engineName) }()
+
+		efName := fmt.Sprintf("%s-ef", lce.volumeName)
+		_, err = lce.spdkCli.EngineFrontendCreate(efName, lce.volumeName, lce.engineName,
+			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+			net.JoinHostPort(cloneEngine0.IP, strconv.Itoa(int(cloneEngine0.Port))), 0, 0)
+		c.Assert(err, IsNil)
+		defer func() { _ = lce.spdkCli.EngineFrontendDelete(efName) }()
+
+		cloneEndpoint := helperutil.GetLonghornDevicePath(lce.volumeName)
+
+		// Sanity: clone inherits the written data from the src snapshot.
+		cloneChecksum, err := util.GetFileChunkChecksum(cloneEndpoint, 0, dataCountInMB*int64(helpertypes.MiB))
+		c.Assert(err, IsNil)
+		c.Assert(cloneChecksum, Equals, srcChecksum)
+
+		// ── Step 4: expand clone engine to 2× ────────────────────────────────────
+
+		expandedSize := defaultTestLvolSize * 2
+		err = lce.spdkCli.EngineFrontendExpand(context.Background(), efName, expandedSize)
+		c.Assert(err, IsNil)
+
+		err = retry.Do(func() error {
+			size := GetBlockDeviceSize(ne, cloneEndpoint)
+			if size < int64(expandedSize) {
+				return fmt.Errorf("device size %d < expected %d", size, expandedSize)
+			}
+			return nil
+		}, retry.Attempts(30), retry.Delay(1*time.Second),
+			retry.DelayType(retry.FixedDelay), retry.LastErrorOnly(true))
+		c.Assert(err, IsNil)
+
+		// ── Step 5: write to expanded region + snapshot ───────────────────────────
+
+		offsetInMB := int64(defaultTestLvolSizeInMiB)
+		err = writeDataToBlockDevice(ne, cloneEndpoint, offsetInMB, dataCountInMB)
+		c.Assert(err, IsNil)
+		expandedChecksum, err := util.GetFileChunkChecksum(
+			cloneEndpoint, offsetInMB*int64(helpertypes.MiB), dataCountInMB*int64(helpertypes.MiB))
+		c.Assert(err, IsNil)
+
+		_, err = lce.spdkCli.EngineSnapshotCreate(lce.engineName, "snap-post-expand")
+		c.Assert(err, IsNil)
+
+		// ── Step 6: create 2nd replica at expanded size ───────────────────────────
+
+		dst2Name := fmt.Sprintf("%s-expand-dst2", lce.volumeName)
+		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
+			lce.disk.Uuid, expandedSize, defaultTestReplicaPortCount, "")
+		c.Assert(err, IsNil)
+		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
+
+		dst2, err := lce.spdkCli.ReplicaGet(dst2Name)
+		c.Assert(err, IsNil)
+		dst2Address := net.JoinHostPort(lce.ip, strconv.Itoa(int(dst2.PortStart)))
+
+		// ── Step 7: add dst2 to the clone engine ──────────────────────────────────
+		// dst1 (still RW) drives the shallow-copy sync; RebuildingDstStart creates
+		// a linked-clone EP for dst2.  At the end of the rebuild,
+		// repairCloneEntrypoint calls:
+		//   bdev_lvol_set_parent(dst2_root_snap[4Gi], EP[2Gi])
+		// Before the SPDK fix this returned -EINVAL (strict cluster-count
+		// equality); with the fix (child >= parent) it succeeds.
+		err = lce.spdkCli.EngineFrontendReplicaAdd(efName, dst2Name, dst2Address, defaultTestFastSync,
+			lce.srcReplicaName, lce.srcEngineName, lce.serviceAddress)
+		c.Assert(err, IsNil)
+
+		// ── Step 8: wait for rebuild + assert entrypoints ─────────────────────────
+
+		lce.waitForReplicaRW(c, lce.engineName, dst2Name)
+		lce.assertCloneReplicaEntrypoint(c, lce.dstReplicaName)
+		lce.assertCloneReplicaEntrypoint(c, dst2Name)
+
+		// ── Step 9: delete dst1, verify both data regions via dst2 ───────────────
+
+		dstReplica1Updated, err := lce.spdkCli.ReplicaGet(lce.dstReplicaName)
+		c.Assert(err, IsNil)
+		dstAddr := net.JoinHostPort(lce.ip, strconv.Itoa(int(dstReplica1Updated.PortStart)))
+		err = lce.spdkCli.EngineReplicaDelete(lce.engineName, lce.dstReplicaName, dstAddr)
+		c.Assert(err, IsNil)
+
+		// Src data at offset 0 must be intact (inherited via linked-clone EP).
+		finalSrcChecksum, err := util.GetFileChunkChecksum(
+			cloneEndpoint, 0, dataCountInMB*int64(helpertypes.MiB))
+		c.Assert(err, IsNil)
+		c.Assert(finalSrcChecksum, Equals, srcChecksum)
+
+		// Expanded data at offset=original-size must be intact (synced from dst1).
+		finalExpandedChecksum, err := util.GetFileChunkChecksum(
+			cloneEndpoint, offsetInMB*int64(helpertypes.MiB), dataCountInMB*int64(helpertypes.MiB))
+		c.Assert(err, IsNil)
+		c.Assert(finalExpandedChecksum, Equals, expandedChecksum)
+	})
+}
