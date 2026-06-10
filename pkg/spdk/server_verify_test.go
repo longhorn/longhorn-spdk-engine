@@ -242,6 +242,89 @@ func (s *TestSuite) TestHandleVerifyErrorBrokenPipeKeepsStoppedAndError(c *C) {
 	c.Assert(engineFrontendRunning.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
 }
 
+func (s *TestSuite) TestShardSetErrorState(c *C) {
+	fmt.Println("Testing Shard.SetErrorState transitions and update broadcast")
+
+	sh := NewShard("vol-a", 0, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+	sh.State = lhtypes.InstanceStateRunning
+	sh.SetErrorState()
+	c.Assert(sh.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
+	c.Assert(len(sh.UpdateCh), Equals, 1)
+
+	// Stopped and Error states are left untouched, with no broadcast.
+	for _, state := range []lhtypes.InstanceState{lhtypes.InstanceStateStopped, lhtypes.InstanceStateError} {
+		sh := NewShard("vol-a", 0, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+		sh.State = state
+		sh.SetErrorState()
+		c.Assert(sh.State, Equals, state)
+		c.Assert(len(sh.UpdateCh), Equals, 0)
+	}
+}
+
+func (s *TestSuite) TestShardGroupSetErrorState(c *C) {
+	fmt.Println("Testing ShardGroup.SetErrorState transitions and update broadcast")
+
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg.State = lhtypes.InstanceStateRunning
+	sg.SetErrorState()
+	c.Assert(sg.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
+	c.Assert(len(sg.UpdateCh), Equals, 1)
+
+	// Stopped and Error states are left untouched, with no broadcast.
+	for _, state := range []lhtypes.InstanceState{lhtypes.InstanceStateStopped, lhtypes.InstanceStateError} {
+		sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
+			map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+		sg.State = state
+		sg.SetErrorState()
+		c.Assert(sg.State, Equals, state)
+		c.Assert(len(sg.UpdateCh), Equals, 0)
+	}
+}
+
+func (s *TestSuite) TestHandleVerifyErrorBrokenPipeMarksShardsAndShardGroups(c *C) {
+	fmt.Println("Testing handleVerifyError with broken pipe error marks shards and shardgroups as error")
+
+	shardRunning := NewShard("vol-1", 0, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+	shardRunning.State = lhtypes.InstanceStateRunning
+	shardStopped := NewShard("vol-1", 1, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+	shardStopped.State = lhtypes.InstanceStateStopped
+
+	sgRunning := NewShardGroup(context.Background(), "sg-run", "vol-1", 4<<20, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sgRunning.State = lhtypes.InstanceStateRunning
+	sgErrored := NewShardGroup(context.Background(), "sg-err", "vol-1", 4<<20, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sgErrored.State = lhtypes.InstanceStateError
+
+	state := &verifyState{
+		replicaMapForSync:     map[string]*Replica{},
+		engineMapForSync:      map[string]*Engine{},
+		engineFrontendForSync: map[string]*EngineFrontend{},
+		shardMapForSync: map[string]*Shard{
+			shardRunning.Name: shardRunning,
+			shardStopped.Name: shardStopped,
+		},
+		shardGroupMapForSync: map[string]*ShardGroup{
+			sgRunning.Name: sgRunning,
+			sgErrored.Name: sgErrored,
+		},
+	}
+
+	brokenPipeErr := spdkjsonrpc.JSONClientError{
+		ID:          1,
+		Method:      "mock",
+		ErrorDetail: errors.New("write: broken pipe"),
+	}
+	server := &Server{}
+	server.handleVerifyError(brokenPipeErr, state)
+
+	c.Assert(shardRunning.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
+	c.Assert(shardStopped.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateStopped))
+	c.Assert(sgRunning.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
+	c.Assert(sgErrored.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
+}
+
 func (s *TestSuite) TestNewVerifyStateLockedCopiesMaps(c *C) {
 	fmt.Println("Testing newVerifyState creates copies of maps while locked")
 
