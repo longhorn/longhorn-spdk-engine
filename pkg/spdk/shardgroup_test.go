@@ -157,3 +157,35 @@ func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 		c.Assert(sg.SpecSize, Equals, initialSize, Commentf("case=%s", tc.name))
 	}
 }
+
+func (s *TestSuite) TestShardGroupExpandDoesNotBroadcastWithoutSizeChange(c *C) {
+	fmt.Println("Testing ShardGroup.Expand does not broadcast an update when SpecSize is unchanged")
+
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg.State = types.InstanceStateRunning
+
+	// No-op at target size and rejected shrink both leave SpecSize untouched.
+	c.Assert(sg.Expand(nil, 4<<20), IsNil)
+	c.Assert(sg.Expand(nil, 2<<20), NotNil)
+	c.Assert(len(sg.UpdateCh), Equals, 0)
+}
+
+func (s *TestSuite) TestShardGroupSnapshotDeleteRejectsNonRunningState(c *C) {
+	fmt.Println("Testing ShardGroup.SnapshotDelete rejects non-running states without broadcasting")
+
+	for _, state := range []types.InstanceState{
+		types.InstanceStatePending,
+		types.InstanceStateStopped,
+		types.InstanceStateError,
+	} {
+		sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
+			map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+		sg.State = state
+
+		err := sg.SnapshotDelete(nil, "snap-1")
+		c.Assert(err, NotNil)
+		c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+		c.Assert(len(sg.UpdateCh), Equals, 0)
+	}
+}
