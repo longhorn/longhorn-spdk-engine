@@ -1,12 +1,18 @@
 package spdk
 
 import (
+	"context"
 	"fmt"
 
 	. "gopkg.in/check.v1"
 
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
+
+	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
 // TestCopyEcCountersFromBdevInfoMapping verifies that each of the 18 EC
@@ -108,4 +114,46 @@ func (s *TestSuite) TestEcUsableFitsSpecBoundary(c *C) {
 	c.Assert(ecUsableFitsSpec(blocks, blockSize, usable-uint64(blockSize)), Equals, true)
 	// Large capacity (no uint overflow at realistic EC sizes).
 	c.Assert(ecUsableFitsSpec(1<<40, blockSize, (1<<40)*uint64(blockSize)), Equals, true)
+}
+
+func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
+	const initialSize = uint64(4 << 20)
+
+	cases := []struct {
+		name     string
+		state    types.InstanceState
+		target   uint64
+		wantErr  bool
+		wantCode grpccodes.Code // checked only when not codes.OK
+	}{
+		{"rejects pending", types.InstanceStatePending, 8 << 20, true, grpccodes.FailedPrecondition},
+		{"rejects stopped", types.InstanceStateStopped, 8 << 20, true, grpccodes.FailedPrecondition},
+		{"rejects error", types.InstanceStateError, 8 << 20, true, grpccodes.FailedPrecondition},
+		{"rejects unaligned size", types.InstanceStateRunning, 8<<20 + 1, true, grpccodes.OK},
+		{"rejects shrink", types.InstanceStateRunning, 2 << 20, true, grpccodes.OK},
+		// No-op at target size is also the retry path after a partial expansion
+		// failure: SpecSize is recorded right after the head resize, so a retried
+		// Expand hits this fast path instead of re-running BdevEcResize.
+		{"no-op at target size", types.InstanceStateRunning, initialSize, false, grpccodes.OK},
+	}
+
+	for _, tc := range cases {
+		fmt.Println("Testing ShardGroup.Expand:", tc.name)
+
+		sg := NewShardGroup(context.Background(), "sg-1", "vol-1", initialSize, 2, 1, 64,
+			map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+		sg.State = tc.state
+
+		err := sg.Expand(nil, tc.target)
+		if tc.wantErr {
+			c.Assert(err, NotNil, Commentf("case=%s", tc.name))
+			if tc.wantCode != grpccodes.OK {
+				c.Assert(grpcstatus.Code(err), Equals, tc.wantCode, Commentf("case=%s", tc.name))
+			}
+		} else {
+			c.Assert(err, IsNil, Commentf("case=%s", tc.name))
+		}
+		// SpecSize is never mutated on a rejected or no-op Expand.
+		c.Assert(sg.SpecSize, Equals, initialSize, Commentf("case=%s", tc.name))
+	}
 }
