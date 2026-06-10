@@ -97,6 +97,35 @@ func (s *TestSuite) TestSnapshotOperationPreCheckRevertPropagatesUpstreamError(c
 	c.Assert(strings.Contains(err.Error(), "upstream get failed"), Equals, true)
 }
 
+func (s *TestSuite) TestSnapshotOperationPreCheckSkipsNonDispatchableUpstreams(c *C) {
+	fmt.Println("Testing snapshotOperationPreCheckWithoutLock skips non-dispatchable upstreams")
+
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.Frontend = types.FrontendEmpty
+
+	dispatchable := newFakeUpstream("r1", "10.0.0.1:1234")
+	dispatchable.SetMode(types.ModeRW)
+	dispatchable.View = &UpstreamView{
+		SpecSize:  100,
+		Snapshots: map[string]*api.Lvol{"snap-1": {Name: "snap-1"}},
+	}
+
+	// Both would fail the revert pre-check if visited: errored.Get() returns
+	// an error, and addressless is WO which revert rejects.
+	errored := newFakeUpstream("r2", "10.0.0.2:1234")
+	errored.SetMode(types.ModeERR)
+	errored.ViewErr = errors.New("must not be called")
+
+	addressless := newFakeUpstream("r3", "")
+	addressless.SetMode(types.ModeWO)
+
+	e.upstreams = map[string]Upstream{"r1": dispatchable, "r2": errored, "r3": addressless}
+
+	name, err := e.snapshotOperationPreCheckWithoutLock("snap-1", SnapshotOperationRevert)
+	c.Assert(err, IsNil)
+	c.Assert(name, Equals, "snap-1")
+}
+
 func newEngineWithFakeUpstream() (*Engine, *fakeUpstream) {
 	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	u := newFakeUpstream("r1", "10.0.0.1:1234")
