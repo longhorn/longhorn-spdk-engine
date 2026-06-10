@@ -321,6 +321,84 @@ func (s *TestSuite) TestApplyVerifiedStateSkipsConcurrentReplicaMutation(c *C) {
 	c.Assert(server.replicaMap["r2"], Equals, replacement)
 }
 
+func (s *TestSuite) TestApplyVerifiedStateSkipsConcurrentShardMutation(c *C) {
+	fmt.Println("Testing applyVerifiedState skips stale shard map overwrite after concurrent mutation")
+
+	sh1 := NewShard("vol-1", 0, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+	sh2 := NewShard("vol-1", 1, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+	replacement := NewShard("vol-1", 1, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+
+	server := &Server{
+		replicaMap: map[string]*Replica{},
+		shardMap: map[string]*Shard{
+			sh1.Name: sh1,
+			sh2.Name: replacement,
+		},
+		shardMapGen:     2, // bumped by delete + create
+		backingImageMap: map[string]*BackingImage{},
+	}
+
+	state := &verifyState{
+		replicaMap: map[string]*Replica{},
+		shardMap: map[string]*Shard{
+			sh1.Name: sh1,
+			sh2.Name: sh2,
+		},
+		shardMapGen:           0, // captured before the mutations
+		replicaMapForSync:     map[string]*Replica{},
+		engineMapForSync:      map[string]*Engine{},
+		engineFrontendForSync: map[string]*EngineFrontend{},
+		backingImageMap:       map[string]*BackingImage{},
+		backingImageForSync:   map[string]*BackingImage{},
+	}
+
+	applied := server.applyVerifiedState(state)
+	c.Assert(applied, Equals, false)
+
+	server.RLock()
+	defer server.RUnlock()
+	c.Assert(server.shardMap[sh1.Name], Equals, sh1)
+	c.Assert(server.shardMap[sh2.Name], Equals, replacement)
+}
+
+func (s *TestSuite) TestApplyVerifiedStateSkipsConcurrentShardGroupMutation(c *C) {
+	fmt.Println("Testing applyVerifiedState skips stale shardgroup map overwrite after concurrent mutation")
+
+	sg1 := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	replacement := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+
+	server := &Server{
+		replicaMap: map[string]*Replica{},
+		shardGroupMap: map[string]*ShardGroup{
+			sg1.Name: replacement,
+		},
+		shardGroupMapGen: 2, // bumped by delete + create
+		backingImageMap:  map[string]*BackingImage{},
+	}
+
+	state := &verifyState{
+		replicaMap: map[string]*Replica{},
+		shardGroupMap: map[string]*ShardGroup{
+			sg1.Name: sg1,
+		},
+		shardGroupMapGen:      0, // captured before the mutations
+		replicaMapForSync:     map[string]*Replica{},
+		engineMapForSync:      map[string]*Engine{},
+		engineFrontendForSync: map[string]*EngineFrontend{},
+		backingImageMap:       map[string]*BackingImage{},
+		backingImageForSync:   map[string]*BackingImage{},
+	}
+
+	applied := server.applyVerifiedState(state)
+	c.Assert(applied, Equals, false)
+
+	server.RLock()
+	defer server.RUnlock()
+	c.Assert(server.shardGroupMap[sg1.Name], Equals, replacement)
+}
+
 func (s *TestSuite) TestSyncVerifiedObjectsWithEmptyState(c *C) {
 	fmt.Println("Testing syncVerifiedObjects with empty state")
 
