@@ -185,7 +185,7 @@ func (r *Restore) OpenVolumeDev(volDevName string) (fh *os.File, endpoint string
 	r.initiator = i
 
 	r.log.Infof("Opening NVMe device %v", r.initiator.Endpoint())
-	fh, err = openFile(r.initiator.Endpoint(), os.O_RDONLY, 0666)
+	fh, err = openNVMeDeviceWithRetry(r.log, r.initiator.Endpoint(), os.O_RDONLY, 0666)
 	if err != nil {
 		return nil, "", errors.Wrapf(err, "failed to open NVMe device %v for lvol bdev %v", r.initiator.Endpoint(), lvolName)
 	}

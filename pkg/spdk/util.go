@@ -3,9 +3,11 @@ package spdk
 import (
 	"fmt"
 	"net"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/avast/retry-go/v4"
@@ -22,6 +24,49 @@ import (
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
 )
+
+const (
+	openDeviceMaxRetries    = 10
+	openDeviceRetryInterval = 500 * time.Millisecond
+)
+
+// warnLogger is the minimal logger surface used by openNVMeDeviceWithRetry so
+// it accepts both logrus.FieldLogger and the package-local SafeLogger.
+type warnLogger interface {
+	Warnf(format string, args ...interface{})
+}
+
+// openNVMeDeviceWithRetry opens an NVMe device endpoint, retrying briefly on
+// ENXIO. After StartNvmeTCPInitiator returns, the kernel may not yet have
+// instantiated the namespace block device, so open() can transiently return
+// ENXIO; other errors are treated as unrecoverable.
+func openNVMeDeviceWithRetry(log warnLogger, endpoint string, flag int, perm os.FileMode) (*os.File, error) {
+	var fh *os.File
+	err := retry.Do(
+		func() error {
+			var openErr error
+			fh, openErr = openFile(endpoint, flag, perm)
+			if openErr != nil {
+				if !errors.Is(openErr, syscall.ENXIO) {
+					return retry.Unrecoverable(openErr)
+				}
+				return openErr
+			}
+			return nil
+		},
+		retry.Attempts(openDeviceMaxRetries),
+		retry.Delay(openDeviceRetryInterval),
+		retry.DelayType(retry.FixedDelay),
+		retry.LastErrorOnly(true),
+		retry.OnRetry(func(n uint, err error) {
+			log.Warnf("NVMe device %v not ready (ENXIO), retrying (%d/%d)", endpoint, n+1, openDeviceMaxRetries)
+		}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return fh, nil
+}
 
 func discoverAndConnectNVMeTarget(srcIP string, srcPort int32, maxRetries int, retryInterval time.Duration) (subsystemNQN, controllerName string, err error) {
 	executor, err := helperutil.NewExecutor(commontypes.ProcDirectory)
