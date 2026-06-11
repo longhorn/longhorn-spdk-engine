@@ -6,11 +6,14 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/0xPolygon/polygon-edge/consensus/polybft/bitmap"
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
+
+	retrygo "github.com/avast/retry-go/v4"
 
 	"github.com/longhorn/backupstore"
 	"github.com/longhorn/go-spdk-helper/pkg/initiator"
@@ -76,6 +79,11 @@ type Backup struct {
 }
 
 var _ backupstore.DeltaBlockBackupOperations = (*Backup)(nil)
+
+const (
+	openDeviceMaxRetries    = 10
+	openDeviceRetryInterval = 500 * time.Millisecond
+)
 
 // NewBackup creates a new backup instance
 func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotName string, replica *Replica, superiorPortAllocator *commonbitmap.Bitmap, onTerminal func()) (*Backup, error) {
@@ -232,7 +240,30 @@ func (b *Backup) OpenSnapshot(snapshotName, volumeName string) (err error) {
 	b.initiator = i
 
 	b.log.Infof("Opening NVMe device %v", b.initiator.Endpoint())
-	devFh, err := openFile(b.initiator.Endpoint(), os.O_RDONLY, 0666)
+	// After the NVMe-oF controller connects, the kernel may not yet have
+	// instantiated the namespace block device, causing open() to return ENXIO.
+	// Retry briefly to absorb this race; other errors are not transient.
+	var devFh *os.File
+	err = retrygo.Do(
+		func() error {
+			var openErr error
+			devFh, openErr = openFile(b.initiator.Endpoint(), os.O_RDONLY, 0666)
+			if openErr != nil {
+				if !errors.Is(openErr, syscall.ENXIO) {
+					return retrygo.Unrecoverable(openErr)
+				}
+				return openErr
+			}
+			return nil
+		},
+		retrygo.Attempts(openDeviceMaxRetries),
+		retrygo.Delay(openDeviceRetryInterval),
+		retrygo.DelayType(retrygo.FixedDelay),
+		retrygo.LastErrorOnly(true),
+		retrygo.OnRetry(func(n uint, err error) {
+			b.log.Warnf("NVMe device %v not ready (ENXIO), retrying (%d/%d)", b.initiator.Endpoint(), n+1, openDeviceMaxRetries)
+		}),
+	)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open NVMe device %v for snapshot lvol bdev %v", b.initiator.Endpoint(), lvolName)
 	}
