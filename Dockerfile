@@ -32,6 +32,12 @@ RUN zypper -n install cmake curl wget gcc13 unzip tar xsltproc docbook-xsl-style
               e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps jq git && \
     rm -rf /var/cache/zypp/*
 
+# Add repo for nasm package
+RUN for i in {1..10}; do \
+        zypper -n addrepo --refresh https://download.opensuse.org/repositories/devel:tools:compiler/openSUSE_Factory/devel:tools:compiler.repo && \
+        zypper --gpg-auto-import-keys ref && break || sleep 1; \
+    done
+
 RUN curl -sSL "https://golang.org/dl/go${GOLANG_VERSION}.linux-${ARCH}.tar.gz" -o /tmp/go.tar.gz \
     && tar -C /usr/local -xzf /tmp/go.tar.gz \
     && rm /tmp/go.tar.gz
