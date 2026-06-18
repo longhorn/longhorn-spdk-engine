@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
-	github.com/avast/retry-go/v4 v4.7.0
+	github.com/avast/retry-go/v5 v5.0.0
 	github.com/avast/retry-go/v5 v5.0.0
 	github.com/cockroachdb/errors v1.13.0
 	github.com/google/uuid v1.6.0
