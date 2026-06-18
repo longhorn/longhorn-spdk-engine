@@ -4,7 +4,6 @@ github.com/RoaringBitmap/roaring v1.9.4 h1:yhEIoH4YezLYT04s1nHehNO64EKFTop/wBhxv
 github.com/RoaringBitmap/roaring v1.9.4/go.mod h1:6AXUsoIEzDTFFQCe1RbGA6uFONMhvejWj5rqITANK90=
 github.com/avast/retry-go/v4 v4.7.0 h1:yjDs35SlGvKwRNSykujfjdMxMhMQQM0TnIjJaHB+Zio=
 github.com/avast/retry-go/v4 v4.7.0/go.mod h1:ZMPDa3sY2bKgpLtap9JRUgk2yTAba7cgiFhqxY2Sg6Q=
-github.com/avast/retry-go/v5 v5.0.0/go.mod h1://d+usmKWio1agtZfS1H/ltTqwtIfBnRq9zEwjc3eH8=
 github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973/go.mod h1:Dwedo/Wpr24TaqPxmxbtue+5NUziq4I4S80YR8gNf3Q=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
@@ -72,8 +71,8 @@ github.com/longhorn/backupstore v0.0.0-20260525102750-1ed7dde50b68 h1:p05ShG/5Gr
 github.com/longhorn/backupstore v0.0.0-20260525102750-1ed7dde50b68/go.mod h1:sJ3YQBK1exSY+Gep0cKaQhZ9f2rOem2hy6NTOk7iFg8=
 github.com/longhorn/go-common-libs v0.0.0-20260502161928-1e84fa75a8f1 h1:sjDswhcTrEqeXSjcHjaeccYT1v1WW9wNHB3fWFArM38=
 github.com/longhorn/go-common-libs v0.0.0-20260502161928-1e84fa75a8f1/go.mod h1:+aXFI8DmHTX4Az9pZF16/XKfrVKWIESJjw+hcxdMslw=
-github.com/longhorn/go-spdk-helper v0.6.3-0.20260617073059-6809190e0f78 h1:q/CdSTA519Jtxa/tI2BM06izcHz1Z4ci229UVJyg08c=
-github.com/longhorn/go-spdk-helper v0.6.3-0.20260617073059-6809190e0f78/go.mod h1:ZxbMkGsbC2TpzuGLjn9yXXExolt8/F3dl/C8O9/Qa7s=
+github.com/longhorn/go-spdk-helper v0.6.3-0.20260618001233-9facf639a5f8 h1:BxDe/UNMGqlK+K98cp3BM5QbpzNOMSZ2T32kWAVrPFQ=
+github.com/longhorn/go-spdk-helper v0.6.3-0.20260618001233-9facf639a5f8/go.mod h1:ZxbMkGsbC2TpzuGLjn9yXXExolt8/F3dl/C8O9/Qa7s=
 github.com/longhorn/types v0.0.0-20260514154143-1dfb06f48eeb h1:kj/ag7xC8l9QewJ6tpZAWCYRgipYwIOkqPoqY52utW4=
 github.com/longhorn/types v0.0.0-20260514154143-1dfb06f48eeb/go.mod h1:iY4stwsoG8OwvR0WSZr+YeSOr4YNnoX9+GoG3u+uDFw=
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
