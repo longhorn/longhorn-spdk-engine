@@ -100,7 +100,7 @@ func (r *EngineRestore) OpenVolumeDev(_ string) (*os.File, string, error) {
 	endpoint := r.endpoint
 
 	r.log.Infof("Opening NVMe device %v", endpoint)
-	fh, err := os.OpenFile(endpoint, os.O_RDWR|syscall.O_DIRECT, 0666)
+	fh, err := openNVMeDeviceWithRetry(r.log, endpoint, os.O_RDWR|syscall.O_DIRECT, 0666)
 	if err != nil {
 		return nil, "", errors.Wrapf(err, "failed to open NVMe device %v", endpoint)
 	}

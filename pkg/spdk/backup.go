@@ -232,7 +232,7 @@ func (b *Backup) OpenSnapshot(snapshotName, volumeName string) (err error) {
 	b.initiator = i
 
 	b.log.Infof("Opening NVMe device %v", b.initiator.Endpoint())
-	devFh, err := openFile(b.initiator.Endpoint(), os.O_RDONLY, 0666)
+	devFh, err := openNVMeDeviceWithRetry(b.log, b.initiator.Endpoint(), os.O_RDONLY, 0666)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open NVMe device %v for snapshot lvol bdev %v", b.initiator.Endpoint(), lvolName)
 	}

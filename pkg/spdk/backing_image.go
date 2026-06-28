@@ -570,7 +570,7 @@ func (bi *BackingImage) prepareBackingImageSnapshot(spdkClient *spdkclient.Clien
 		}
 	}()
 
-	headFh, err := openFile(headInitiator.Endpoint(), os.O_RDWR, 0666)
+	headFh, err := openNVMeDeviceWithRetry(bi.log, headInitiator.Endpoint(), os.O_RDWR, 0666)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open NVMe device %v for lvol bdev %v", headInitiator.Endpoint(), backingImageTempHeadName)
 	}
@@ -742,7 +742,7 @@ func (bi *BackingImage) prepareFromSync(targetFh *os.File, fromAddress, srcLvsUU
 	}()
 
 	bi.log.Infof("Opening NVMe device %v", i.Endpoint())
-	srcFh, err := openFile(i.Endpoint(), os.O_RDWR, 0666)
+	srcFh, err := openNVMeDeviceWithRetry(bi.log, i.Endpoint(), os.O_RDWR, 0666)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open NVMe device %v for source backing image %v in lvsUUID %v with address %v", i.Endpoint(), bi.Name, srcLvsUUID, exposedSnapshotLvolAddress)
 	}
