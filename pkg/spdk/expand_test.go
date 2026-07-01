@@ -187,6 +187,57 @@ func (s *TestSuite) TestEngineExpandPrecheckGuards(c *C) {
 	c.Assert(errors.Is(err, ErrRestoringInProgress), Equals, true)
 }
 
+func (s *TestSuite) TestEngineExpandPrecheck(c *C) {
+	type upstreamSpec struct {
+		mode lhtypes.Mode
+		size uint64 // reported SpecSize; only set as a View when mode is RW
+	}
+	cases := []struct {
+		name       string
+		upstreams  map[string]upstreamSpec
+		target     uint64
+		wantExpand bool   // checked only when no error is expected
+		wantErrIs  error  // errors.Is target; nil if none
+		wantErrSub string // substring; "" if none
+	}{
+		{"needs expansion", map[string]upstreamSpec{"r1": {lhtypes.ModeRW, 100}}, 200, true, nil, ""},
+		{"already at target size", map[string]upstreamSpec{"r1": {lhtypes.ModeRW, 100}}, 100, false, nil, ""},
+		{"rejects shrink", map[string]upstreamSpec{"r1": {lhtypes.ModeRW, 200}}, 100, false, ErrExpansionInvalidSize, ""},
+		{"rejects mixed sizes", map[string]upstreamSpec{"r1": {lhtypes.ModeRW, 100}, "r2": {lhtypes.ModeRW, 200}}, 300, false, nil, "different sizes"},
+		{"rejects non-RW upstream", map[string]upstreamSpec{"r1": {lhtypes.ModeERR, 0}}, 100, false, nil, "in mode ERR"},
+	}
+
+	for _, tc := range cases {
+		fmt.Println("Testing ExpandPrecheck:", tc.name)
+
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		ups := map[string]Upstream{}
+		i := 1
+		for name, spec := range tc.upstreams {
+			u := newFakeUpstream(name, fmt.Sprintf("10.0.0.%d:1234", i))
+			u.SetMode(spec.mode)
+			if spec.mode == lhtypes.ModeRW {
+				u.View = &UpstreamView{SpecSize: spec.size}
+			}
+			ups[name] = u
+			i++
+		}
+		e.upstreams = ups
+
+		requireExpansion, err := e.ExpandPrecheck(nil, tc.target)
+		switch {
+		case tc.wantErrIs != nil:
+			c.Assert(errors.Is(err, tc.wantErrIs), Equals, true, Commentf("case=%s err=%v", tc.name, err))
+		case tc.wantErrSub != "":
+			c.Assert(err, NotNil, Commentf("case=%s", tc.name))
+			c.Assert(strings.Contains(err.Error(), tc.wantErrSub), Equals, true, Commentf("case=%s err=%v", tc.name, err))
+		default:
+			c.Assert(err, IsNil, Commentf("case=%s", tc.name))
+			c.Assert(requireExpansion, Equals, tc.wantExpand, Commentf("case=%s", tc.name))
+		}
+	}
+}
+
 func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	fmt.Println("Testing Engine handle replica expand result")
 
@@ -204,9 +255,9 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	c.Assert(strings.Contains(err.Error(), "all replicas failed to expand"), Equals, true)
 
 	ePartial := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	ePartial.ReplicaStatusMap = map[string]*EngineReplicaStatus{
-		"r1": &EngineReplicaStatus{Mode: lhtypes.ModeRW},
-		"r2": &EngineReplicaStatus{Mode: lhtypes.ModeRW},
+	ePartial.upstreams = map[string]Upstream{
+		"r1": newTestReplicaUpstream("r1", "", lhtypes.ModeRW),
+		"r2": newTestReplicaUpstream("r2", "", lhtypes.ModeRW),
 	}
 	replicaClientsPartial := map[string]*clientpkg.SPDKClient{
 		"r1": nil,
@@ -217,9 +268,51 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	}
 	err = ePartial.handleReplicaExpandResult(replicaClientsPartial, failedPartial)
 	c.Assert(err, IsNil)
-	c.Assert(ePartial.ReplicaStatusMap["r1"].Mode, Equals, lhtypes.Mode(lhtypes.ModeERR))
-	c.Assert(ePartial.ReplicaStatusMap["r2"].Mode, Equals, lhtypes.Mode(lhtypes.ModeRW))
+	c.Assert(ePartial.upstreams["r1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
+	c.Assert(ePartial.upstreams["r2"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeRW))
 	c.Assert(ePartial.lastExpansionError, Not(Equals), "")
+}
+
+func (s *TestSuite) TestExpandViaUpstreamResetGuards(c *C) {
+	cases := []struct {
+		name            string
+		setup           func(*Engine) // pre-state; runs after construction (SpecSize starts at 10)
+		target          uint64
+		wantErrIs       error // nil => no-op success
+		wantIsExpanding bool
+	}{
+		{"rejects when restoring", func(e *Engine) { e.IsRestoring = true }, 20, ErrRestoringInProgress, false},
+		// The in-flight caller, not us, owns isExpanding, so it stays true.
+		{"rejects when already expanding", func(e *Engine) { e.isExpanding = true }, 20, ErrExpansionInProgress, true},
+		{"rejects shrink", func(e *Engine) { e.SpecSize = 100 }, 50, ErrExpansionInvalidSize, false},
+		{"no-op at target size", func(e *Engine) {
+			e.SpecSize = 100
+			e.lastExpansionError = "stale"
+			e.lastExpansionFailedAt = "stale"
+		}, 100, nil, false},
+	}
+
+	for _, tc := range cases {
+		fmt.Println("Testing ExpandViaUpstreamReset:", tc.name)
+
+		// nil spdkClient is safe: every guard path returns before any SPDK call.
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		tc.setup(e)
+		sizeBefore := e.SpecSize
+
+		err := e.ExpandViaUpstreamReset(nil, tc.target)
+
+		if tc.wantErrIs == nil {
+			c.Assert(err, IsNil, Commentf("case=%s", tc.name))
+			// No-op success clears stale expansion error fields.
+			c.Assert(e.lastExpansionError, Equals, "", Commentf("case=%s", tc.name))
+			c.Assert(e.lastExpansionFailedAt, Equals, "", Commentf("case=%s", tc.name))
+		} else {
+			c.Assert(errors.Is(err, tc.wantErrIs), Equals, true, Commentf("case=%s err=%v", tc.name, err))
+		}
+		c.Assert(e.SpecSize, Equals, sizeBefore, Commentf("case=%s", tc.name))
+		c.Assert(e.isExpanding, Equals, tc.wantIsExpanding, Commentf("case=%s", tc.name))
+	}
 }
 
 func (s *TestSuite) TestExpandDoesNotBlockConcurrentGet(c *C) {

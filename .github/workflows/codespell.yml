@@ -20,3 +20,4 @@ jobs:
       with:
         check_filenames: true
         skip: "./proto,*/**.yaml,*/**.yml,./scripts,./vendor,MAINTAINERS,LICENSE,go.mod,go.sum"
+        ignore_words_file: .codespellignore
