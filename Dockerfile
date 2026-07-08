@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.24.0@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 FROM golangci/golangci-lint:v2.12.2@sha256:5cceeef04e53efe1470638d4b4b4f5ceefd574955ab3941b2d9a68a8c9ad5240 AS golangci-lint
 
-FROM registry.suse.com/bci/bci-base:16.1@sha256:6ae795e896f4a7e1e77e3ea84335c9572e3c64253256f297945cf45d08b3ce20 AS base
+FROM registry.suse.com/bci/bci-base:15.7@sha256:29bf09c9e2b25cac3f27967590195bf448b1b5f6773dedc16f214d8e531466eb AS base
 
 ARG TARGETARCH
 ARG http_proxy
@@ -28,9 +28,16 @@ RUN for i in {1..10}; do \
 
 RUN zypper -n ref && \
     zypper update -y
-RUN zypper -n install cmake curl wget gcc13 unzip tar xsltproc docbook-xsl-stylesheets python3 python3-pip fuse3-devel \
-              e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps jq git && \
+RUN zypper -n install cmake gcc13 xsltproc docbook-xsl-stylesheets git python311 python311-pip fuse3-devel nasm patchelf e2fsprogs xfsprogs util-linux-systemd libcmocka-devel device-mapper procps jq git curl wget && \
     rm -rf /var/cache/zypp/*
+
+RUN ln -sf /usr/bin/gcc-13 /usr/bin/gcc && \
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python3 && \
+    ln -sf /usr/bin/pip3.11 /usr/local/bin/pip3 && \
+    ln -sf /usr/bin/pip3.11 /usr/local/bin/pip
+
+ENV CC=/usr/bin/gcc-13
 
 RUN curl -sSL "https://golang.org/dl/go${GOLANG_VERSION}.linux-${ARCH}.tar.gz" -o /tmp/go.tar.gz \
     && tar -C /usr/local -xzf /tmp/go.tar.gz \
