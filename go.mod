@@ -8,7 +8,7 @@ require (
 	github.com/cockroachdb/errors v1.13.0
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20260502085909-21ee466f5a8a
+	github.com/longhorn/backupstore v0.0.0-20260618071319-84c767bdab16
 	github.com/longhorn/go-common-libs v0.0.0-20260502161928-1e84fa75a8f1
 	github.com/longhorn/go-spdk-helper v0.6.3-0.20260618001233-9facf639a5f8
 	github.com/longhorn/types v0.0.0-20260514154143-1dfb06f48eeb
