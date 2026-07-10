@@ -135,8 +135,8 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.6.3-0.20260618001233-9facf639a5f8
-## explicit; go 1.25.3
+# github.com/longhorn/go-spdk-helper v0.6.3-0.20260710090730-095941e2d4f6
+## explicit; go 1.25.10
 github.com/longhorn/go-spdk-helper/pkg/initiator
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
 github.com/longhorn/go-spdk-helper/pkg/spdk/client
