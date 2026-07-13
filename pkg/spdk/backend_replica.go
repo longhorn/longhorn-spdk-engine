@@ -10,7 +10,7 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
-// replicaUpstream is the Upstream for RAID1-mode engines. Each one wraps a
+// replicaBackend is the Backend for RAID1-mode engines. Each one wraps a
 // single Replica process; the engine holds one per replica backing the volume.
 //
 // mu guards the mutable fields (Mode, BdevName): the engine's reconciliation
@@ -20,10 +20,10 @@ import (
 // No long-lived gRPC client is held: each RPC method opens a fresh SPDK client
 // for the call and closes it on return. This needs no reconnect logic - if the
 // replica restarts, the next call just dials its current address.
-type replicaUpstream struct {
+type replicaBackend struct {
 	mu sync.RWMutex
 
-	name    string // immutable; replica name (= upstream key in Engine.upstreams)
+	name    string // immutable; replica name (= backend key in Engine.backends)
 	address string // mutable: ip:port of the replica's NVMe-oF target; engine writes this on rebuild (replica gets a new port)
 
 	mode     types.Mode
@@ -32,10 +32,10 @@ type replicaUpstream struct {
 	newServiceClient ServiceClientFactory
 }
 
-// newReplicaUpstream constructs a replicaUpstream. Initial mode/bdevName are
+// newReplicaBackend constructs a replicaBackend. Initial mode/bdevName are
 // the engine's responsibility to populate after connectNVMfBdev succeeds.
-func newReplicaUpstream(name, address string, newServiceClient ServiceClientFactory) *replicaUpstream {
-	return &replicaUpstream{
+func newReplicaBackend(name, address string, newServiceClient ServiceClientFactory) *replicaBackend {
+	return &replicaBackend{
 		name:             name,
 		address:          address,
 		mode:             types.ModeWO, // default until validated; engine flips to RW after connectNVMfBdev
@@ -43,44 +43,44 @@ func newReplicaUpstream(name, address string, newServiceClient ServiceClientFact
 	}
 }
 
-func (u *replicaUpstream) Name() string { return u.name }
+func (u *replicaBackend) Name() string { return u.name }
 
-func (u *replicaUpstream) Address() string {
+func (u *replicaBackend) Address() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return u.address
 }
 
-// SetAddress is replicaUpstream-specific (not on the Upstream interface). The
+// SetAddress is replicaBackend-specific (not on the Backend interface). The
 // engine calls this when a replica is rebuilt/replaced and gets a new
-// transport address. shardGroupUpstream does not need this - the ShardGroup
+// transport address. shardGroupBackend does not need this - the ShardGroup
 // process address is set once at engine start and tracked via reconcile, not
 // updated per-call.
-func (u *replicaUpstream) SetAddress(address string) {
+func (u *replicaBackend) SetAddress(address string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.address = address
 }
 
-func (u *replicaUpstream) Mode() types.Mode {
+func (u *replicaBackend) Mode() types.Mode {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return u.mode
 }
 
-func (u *replicaUpstream) SetMode(m types.Mode) {
+func (u *replicaBackend) SetMode(m types.Mode) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.mode = m
 }
 
-func (u *replicaUpstream) BdevName() string {
+func (u *replicaBackend) BdevName() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return u.bdevName
 }
 
-func (u *replicaUpstream) SetBdevName(name string) {
+func (u *replicaBackend) SetBdevName(name string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.bdevName = name
@@ -88,15 +88,15 @@ func (u *replicaUpstream) SetBdevName(name string) {
 
 // String makes %+v print the useful fields. Without it, the default would
 // reflect through the unexported mutex and func pointer, which is noise.
-func (u *replicaUpstream) String() string {
+func (u *replicaBackend) String() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return fmt.Sprintf("{Name:%s Address:%s Mode:%s BdevName:%s}", u.name, u.address, u.mode, u.bdevName)
 }
 
 // Get issues ReplicaGet against the replica's SPDK service and adapts the
-// response into the topology-agnostic UpstreamView the engine consumes.
-func (u *replicaUpstream) Get() (*UpstreamView, error) {
+// response into the topology-agnostic BackendView the engine consumes.
+func (u *replicaBackend) Get() (*BackendView, error) {
 	serviceClient, err := u.newServiceClient(u.Address())
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get service client for replica %s", u.name)
@@ -107,7 +107,7 @@ func (u *replicaUpstream) Get() (*UpstreamView, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &UpstreamView{
+	return &BackendView{
 		SpecSize:         r.SpecSize,
 		ActualSize:       r.ActualSize,
 		Head:             r.Head,
@@ -117,7 +117,7 @@ func (u *replicaUpstream) Get() (*UpstreamView, error) {
 	}, nil
 }
 
-func (u *replicaUpstream) SnapshotCreate(snapshotName string, opts *api.SnapshotOptions) error {
+func (u *replicaBackend) SnapshotCreate(snapshotName string, opts *api.SnapshotOptions) error {
 	serviceClient, err := u.newServiceClient(u.Address())
 	if err != nil {
 		return errors.Wrapf(err, "failed to get service client for replica %s", u.name)
@@ -126,7 +126,7 @@ func (u *replicaUpstream) SnapshotCreate(snapshotName string, opts *api.Snapshot
 	return serviceClient.ReplicaSnapshotCreate(u.name, snapshotName, opts)
 }
 
-func (u *replicaUpstream) SnapshotDelete(snapshotName string) error {
+func (u *replicaBackend) SnapshotDelete(snapshotName string) error {
 	serviceClient, err := u.newServiceClient(u.Address())
 	if err != nil {
 		return errors.Wrapf(err, "failed to get service client for replica %s", u.name)
@@ -135,7 +135,7 @@ func (u *replicaUpstream) SnapshotDelete(snapshotName string) error {
 	return serviceClient.ReplicaSnapshotDelete(u.name, snapshotName)
 }
 
-func (u *replicaUpstream) SnapshotRevert(snapshotName string) error {
+func (u *replicaBackend) SnapshotRevert(snapshotName string) error {
 	serviceClient, err := u.newServiceClient(u.Address())
 	if err != nil {
 		return errors.Wrapf(err, "failed to get service client for replica %s", u.name)
@@ -144,7 +144,7 @@ func (u *replicaUpstream) SnapshotRevert(snapshotName string) error {
 	return serviceClient.ReplicaSnapshotRevert(u.name, snapshotName)
 }
 
-func (u *replicaUpstream) SnapshotPurge() error {
+func (u *replicaBackend) SnapshotPurge() error {
 	serviceClient, err := u.newServiceClient(u.Address())
 	if err != nil {
 		return errors.Wrapf(err, "failed to get service client for replica %s", u.name)
@@ -153,7 +153,7 @@ func (u *replicaUpstream) SnapshotPurge() error {
 	return serviceClient.ReplicaSnapshotPurge(u.name)
 }
 
-func (u *replicaUpstream) SnapshotHash(snapshotName string, rehash bool) error {
+func (u *replicaBackend) SnapshotHash(snapshotName string, rehash bool) error {
 	serviceClient, err := u.newServiceClient(u.Address())
 	if err != nil {
 		return errors.Wrapf(err, "failed to get service client for replica %s", u.name)
@@ -162,7 +162,7 @@ func (u *replicaUpstream) SnapshotHash(snapshotName string, rehash bool) error {
 	return serviceClient.ReplicaSnapshotHash(u.name, snapshotName, rehash)
 }
 
-func (u *replicaUpstream) BackingImageGet(name, lvsUUID string) (*api.BackingImage, error) {
+func (u *replicaBackend) BackingImageGet(name, lvsUUID string) (*api.BackingImage, error) {
 	serviceClient, err := u.newServiceClient(u.Address())
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get service client for replica %s", u.name)
@@ -171,5 +171,5 @@ func (u *replicaUpstream) BackingImageGet(name, lvsUUID string) (*api.BackingIma
 	return serviceClient.BackingImageGet(name, lvsUUID)
 }
 
-// Compile-time check that replicaUpstream satisfies the Upstream interface.
-var _ Upstream = (*replicaUpstream)(nil)
+// Compile-time check that replicaBackend satisfies the Backend interface.
+var _ Backend = (*replicaBackend)(nil)

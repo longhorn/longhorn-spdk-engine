@@ -188,41 +188,41 @@ func (s *TestSuite) TestEngineExpandPrecheckGuards(c *C) {
 }
 
 func (s *TestSuite) TestEngineExpandPrecheck(c *C) {
-	type upstreamSpec struct {
+	type backendSpec struct {
 		mode lhtypes.Mode
 		size uint64 // reported SpecSize; only set as a View when mode is RW
 	}
 	cases := []struct {
 		name       string
-		upstreams  map[string]upstreamSpec
+		backends   map[string]backendSpec
 		target     uint64
 		wantExpand bool   // checked only when no error is expected
 		wantErrIs  error  // errors.Is target; nil if none
 		wantErrSub string // substring; "" if none
 	}{
-		{"needs expansion", map[string]upstreamSpec{"r1": {lhtypes.ModeRW, 100}}, 200, true, nil, ""},
-		{"already at target size", map[string]upstreamSpec{"r1": {lhtypes.ModeRW, 100}}, 100, false, nil, ""},
-		{"rejects shrink", map[string]upstreamSpec{"r1": {lhtypes.ModeRW, 200}}, 100, false, ErrExpansionInvalidSize, ""},
-		{"rejects mixed sizes", map[string]upstreamSpec{"r1": {lhtypes.ModeRW, 100}, "r2": {lhtypes.ModeRW, 200}}, 300, false, nil, "different sizes"},
-		{"rejects non-RW upstream", map[string]upstreamSpec{"r1": {lhtypes.ModeERR, 0}}, 100, false, nil, "in mode ERR"},
+		{"needs expansion", map[string]backendSpec{"r1": {lhtypes.ModeRW, 100}}, 200, true, nil, ""},
+		{"already at target size", map[string]backendSpec{"r1": {lhtypes.ModeRW, 100}}, 100, false, nil, ""},
+		{"rejects shrink", map[string]backendSpec{"r1": {lhtypes.ModeRW, 200}}, 100, false, ErrExpansionInvalidSize, ""},
+		{"rejects mixed sizes", map[string]backendSpec{"r1": {lhtypes.ModeRW, 100}, "r2": {lhtypes.ModeRW, 200}}, 300, false, nil, "different sizes"},
+		{"rejects non-RW backend", map[string]backendSpec{"r1": {lhtypes.ModeERR, 0}}, 100, false, nil, "in mode ERR"},
 	}
 
 	for _, tc := range cases {
 		fmt.Println("Testing ExpandPrecheck:", tc.name)
 
 		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-		ups := map[string]Upstream{}
+		ups := map[string]Backend{}
 		i := 1
-		for name, spec := range tc.upstreams {
-			u := newFakeUpstream(name, fmt.Sprintf("10.0.0.%d:1234", i))
+		for name, spec := range tc.backends {
+			u := newFakeBackend(name, fmt.Sprintf("10.0.0.%d:1234", i))
 			u.SetMode(spec.mode)
 			if spec.mode == lhtypes.ModeRW {
-				u.View = &UpstreamView{SpecSize: spec.size}
+				u.View = &BackendView{SpecSize: spec.size}
 			}
 			ups[name] = u
 			i++
 		}
-		e.upstreams = ups
+		e.backends = ups
 
 		requireExpansion, err := e.ExpandPrecheck(nil, tc.target)
 		switch {
@@ -255,9 +255,9 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	c.Assert(strings.Contains(err.Error(), "all replicas failed to expand"), Equals, true)
 
 	ePartial := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	ePartial.upstreams = map[string]Upstream{
-		"r1": newTestReplicaUpstream("r1", "", lhtypes.ModeRW),
-		"r2": newTestReplicaUpstream("r2", "", lhtypes.ModeRW),
+	ePartial.backends = map[string]Backend{
+		"r1": newTestReplicaBackend("r1", "", lhtypes.ModeRW),
+		"r2": newTestReplicaBackend("r2", "", lhtypes.ModeRW),
 	}
 	replicaClientsPartial := map[string]*clientpkg.SPDKClient{
 		"r1": nil,
@@ -268,12 +268,12 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	}
 	err = ePartial.handleReplicaExpandResult(replicaClientsPartial, failedPartial)
 	c.Assert(err, IsNil)
-	c.Assert(ePartial.upstreams["r1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
-	c.Assert(ePartial.upstreams["r2"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeRW))
+	c.Assert(ePartial.backends["r1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
+	c.Assert(ePartial.backends["r2"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeRW))
 	c.Assert(ePartial.lastExpansionError, Not(Equals), "")
 }
 
-func (s *TestSuite) TestExpandViaUpstreamResetGuards(c *C) {
+func (s *TestSuite) TestExpandViaBackendResetGuards(c *C) {
 	cases := []struct {
 		name            string
 		setup           func(*Engine) // pre-state; runs after construction (SpecSize starts at 10)
@@ -293,14 +293,14 @@ func (s *TestSuite) TestExpandViaUpstreamResetGuards(c *C) {
 	}
 
 	for _, tc := range cases {
-		fmt.Println("Testing ExpandViaUpstreamReset:", tc.name)
+		fmt.Println("Testing ExpandViaBackendReset:", tc.name)
 
 		// nil spdkClient is safe: every guard path returns before any SPDK call.
 		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 		tc.setup(e)
 		sizeBefore := e.SpecSize
 
-		err := e.ExpandViaUpstreamReset(nil, tc.target)
+		err := e.ExpandViaBackendReset(nil, tc.target)
 
 		if tc.wantErrIs == nil {
 			c.Assert(err, IsNil, Commentf("case=%s", tc.name))

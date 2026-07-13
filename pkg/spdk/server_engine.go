@@ -45,27 +45,27 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	spdkClient := s.spdkClient
 	s.Unlock()
 
-	upstreamFactory, err := selectUpstreamFactory(req.DataLayoutType, s.newServiceClient)
+	backendFactory, err := selectBackendFactory(req.DataLayoutType, s.newServiceClient)
 	if err != nil {
 		return nil, err
 	}
 
-	return e.Create(spdkClient, req.ReplicaAddressMap, req.PortCount, s.portAllocator, req.SalvageRequested, upstreamFactory)
+	return e.Create(spdkClient, req.ReplicaAddressMap, req.PortCount, s.portAllocator, req.SalvageRequested, backendFactory)
 }
 
-// selectUpstreamFactory is the only place the server-layer translates the
-// EngineCreateRequest.DataLayoutType discriminator into an Upstream
-// implementation. Once Engine.upstreams is populated, the engine never
+// selectBackendFactory is the only place the server-layer translates the
+// EngineCreateRequest.DataLayoutType discriminator into an Backend
+// implementation. Once Engine.backends is populated, the engine never
 // re-reads the layout.
-func selectUpstreamFactory(layout spdkrpc.DataLayoutType, newServiceClient ServiceClientFactory) (UpstreamFactory, error) {
+func selectBackendFactory(layout spdkrpc.DataLayoutType, newServiceClient ServiceClientFactory) (BackendFactory, error) {
 	switch layout {
 	case spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED:
-		return func(name, address string) Upstream {
-			return newReplicaUpstream(name, address, newServiceClient)
+		return func(name, address string) Backend {
+			return newReplicaBackend(name, address, newServiceClient)
 		}, nil
 	case spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_SHARDED:
-		return func(name, address string) Upstream {
-			return newShardGroupUpstream(name, address, newServiceClient)
+		return func(name, address string) Backend {
+			return newShardGroupBackend(name, address, newServiceClient)
 		}, nil
 	default:
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "unsupported data_layout_type %v", layout)
@@ -132,17 +132,17 @@ func (s *Server) EngineExpand(ctx context.Context, req *spdkrpc.EngineExpandRequ
 		return nil, grpcstatus.Errorf(grpccodes.Unimplemented, "cannot expand ublk frontend engine %v", req.Name)
 	}
 
-	// EC volumes take the upstream-reset path because ShardGroupExpand has
-	// already driven the upstream resize against the ShardGroup process;
+	// EC volumes take the backend-reset path because ShardGroupExpand has
+	// already driven the backend resize against the ShardGroup process;
 	// RAID1 keeps its tear-down/expand-replicas/reconstruct cycle. The
 	// engine itself remains layout-blind - the dispatch is decided here
-	// by inspecting which Upstream implementation EngineCreate's factory
+	// by inspecting which Backend implementation EngineCreate's factory
 	// populated. EngineExpandRequest does not currently carry
 	// DataLayoutType, so this inference is the substitute for
 	// req.data_layout_type until both topologies converge on
-	// ExpandViaUpstreamReset and the dispatch is removed.
+	// ExpandViaBackendReset and the dispatch is removed.
 	if isShardedEngine(e) {
-		err = e.ExpandViaUpstreamReset(spdkClient, req.Size)
+		err = e.ExpandViaBackendReset(spdkClient, req.Size)
 	} else {
 		err = e.Expand(spdkClient, req.Size)
 	}
@@ -153,18 +153,18 @@ func (s *Server) EngineExpand(ctx context.Context, req *spdkrpc.EngineExpandRequ
 	return &emptypb.Empty{}, nil
 }
 
-// isShardedEngine reports whether the engine's upstreams are
-// shardGroupUpstream (EC layout). This is the only place server_engine.go
-// peers into Upstream concrete types, and it does so to preserve the
+// isShardedEngine reports whether the engine's backends are
+// shardGroupBackend (EC layout). This is the only place server_engine.go
+// peers into Backend concrete types, and it does so to preserve the
 // "engine.go knows no layout" invariant: the layout is read from what
 // EngineCreate's factory already populated, not from a layout field on
 // Engine. This dispatch site is expected to be removed once
-// Engine.ExpandViaUpstreamReset covers both layouts.
+// Engine.ExpandViaBackendReset covers both layouts.
 func isShardedEngine(e *Engine) bool {
 	e.RLock()
 	defer e.RUnlock()
-	for _, u := range e.upstreams {
-		if _, ok := u.(*shardGroupUpstream); ok {
+	for _, u := range e.backends {
+		if _, ok := u.(*shardGroupBackend); ok {
 			return true
 		}
 	}
@@ -383,7 +383,7 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 	// EC engines have no replicas at the engine layer - shard replacement
 	// is driven inside the ShardGroup process via ShardGroupShardReplace.
 	// Reject ReplicaAdd at the boundary so a misconfigured caller cannot
-	// inject a *replicaUpstream into a shardGroupUpstream-keyed map.
+	// inject a *replicaBackend into a shardGroupBackend-keyed map.
 	if isShardedEngine(e) {
 		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "replica add is not supported on EC engine %v", req.EngineName)
 	}
@@ -405,7 +405,7 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 }
 
 // EngineReplicaList returns all replicas for an engine. EC engines have no
-// replicas at the engine layer - their single upstream is a ShardGroup and
+// replicas at the engine layer - their single backend is a ShardGroup and
 // shards are queried via ShardList - so the response is an empty map. The
 // guard lives at the server layer (not in Engine.ReplicaList) so engine.go
 // stays layout-blind.
@@ -579,7 +579,7 @@ func (s *Server) EngineSnapshotHashStatus(ctx context.Context, req *spdkrpc.Snap
 	}
 
 	// Snapshot hashing is not supported on EC volumes in the initial release;
-	// shardGroupUpstream.SnapshotHash returns Unimplemented for the same
+	// shardGroupBackend.SnapshotHash returns Unimplemented for the same
 	// reason. Reject the status query at the server boundary so it never
 	// reaches Engine.SnapshotHashStatus's RAID1-only iteration path.
 	if isShardedEngine(e) {
@@ -712,7 +712,7 @@ func (s *Server) EngineBackupRestore(ctx context.Context, req *spdkrpc.EngineBac
 		"engine":         tempEF.EngineName,
 		"volume":         tempEF.VolumeName,
 		"frontend":       tempEF.Frontend,
-		"replicas":       len(e.upstreams),
+		"replicas":       len(e.backends),
 		"specSize":       e.SpecSize,
 	}).Info("Creating temporary engine frontend for backup restore request")
 

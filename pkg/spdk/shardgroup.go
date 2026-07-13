@@ -79,7 +79,7 @@ type ShardGroup struct {
 	// new node (engine-node failover) or after process crash.
 	SalvageRequested bool
 
-	// Upstream shard endpoints keyed by Shard CR external name
+	// Shard endpoints keyed by Shard CR external name
 	// (<volumeName>-<slotIndex>). Populated at Create time from
 	// ShardGroupSpec.shards.
 	Shards map[string]*ShardEndpoint
@@ -117,7 +117,7 @@ type ShardGroup struct {
 	log *safelog.SafeLogger
 }
 
-// ShardEndpoint is the upstream shard address and slot index that the
+// ShardEndpoint is the shard address and slot index that the
 // ShardGroup process consumes as a base bdev for bdev_ec.
 type ShardEndpoint struct {
 	Address   string // ip:port
@@ -200,7 +200,7 @@ func NewShardGroup(ctx context.Context, name, volumeName string, specSize uint64
 //
 // Head and snapshot lvols route through serviceShardGroupLvolToProtoLvol, which
 // renames the head to types.VolumeHead; without it the engine's ancestor
-// selection rejects the EC upstream and leaves e.Head, e.SnapshotMap, and
+// selection rejects the EC backend and leaves e.Head, e.SnapshotMap, and
 // e.ActualSize unwritten.
 func ServiceShardGroupToProtoShardGroup(sg *ShardGroup) *spdkrpc.ShardGroup {
 	snapshots := make(map[string]*spdkrpc.Lvol, len(sg.SnapshotMap))
@@ -840,7 +840,7 @@ func (sg *ShardGroup) SetErrorState() {
 	}
 }
 
-// Expand grows the EC stack in place after each upstream shard has been
+// Expand grows the EC stack in place after each shard has been
 // resized: bdev_ec_resize -> bdev_lvol_grow_lvstore -> bdev_lvol_resize on the
 // head lvol. The engine's raid1 layer auto-grows via NVMe AER when the
 // exposed namespace size changes; no engine-side SPDK call is needed.
@@ -945,11 +945,11 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize uint64) (err
 	// process (observed empirically at the shard layer when the same
 	// teardown was removed there).
 	//
-	// Cost paid (compensated in Engine.ExpandViaUpstreamReset): tearing down
+	// Cost paid (compensated in Engine.ExpandViaBackendReset): tearing down
 	// the subsystem destroys the AER source, so the engine's bdev_nvme cache
 	// of the local nvmf-shardgroupn1 bdev's blockcnt is stale after
 	// StartExposeBdev re-establishes the connection.
-	// Engine.ExpandViaUpstreamReset compensates with an explicit
+	// Engine.ExpandViaBackendReset compensates with an explicit
 	// bdev_nvme_reset_controller that triggers the SPDK reset-refresh
 	// patch's blockcnt comparison.
 	if err := spdkClient.StopExposeBdev(sg.Nqn); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
@@ -1254,7 +1254,7 @@ const (
 	ecShardForceFailPollTimeout  = 5 * time.Second
 )
 
-// ForceFailShard drives a slot to FAILED immediately by detaching the upstream
+// ForceFailShard drives a slot to FAILED immediately by detaching the shard's
 // NVMe controller, bypassing bdev_nvme's ctrlr_loss_timeout_sec wait. Used by
 // the manager when it knows the shard is gone for good (intentional Shard CR
 // delete, eviction) so that ShardGroupShardReplace can be issued in seconds

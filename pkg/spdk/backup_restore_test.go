@@ -12,11 +12,11 @@ import (
 	. "gopkg.in/check.v1"
 )
 
-// newTestReplicaUpstream is a test-only helper that builds a replicaUpstream
+// newTestReplicaBackend is a test-only helper that builds a replicaBackend
 // with explicit mode/address so the tests can exercise mode-state branches in
 // engine helpers without going through connectNVMfBdev.
-func newTestReplicaUpstream(name, address string, mode lhtypes.Mode) *replicaUpstream {
-	u := newReplicaUpstream(name, address, nil)
+func newTestReplicaBackend(name, address string, mode lhtypes.Mode) *replicaBackend {
+	u := newReplicaBackend(name, address, nil)
 	u.SetMode(mode)
 	return u
 }
@@ -28,7 +28,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateRWQualifies(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: RW mode qualifies for info update")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	rs := newTestReplicaUpstream("replica-1", "10.0.0.1:1234", lhtypes.ModeRW)
+	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW)
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
 
@@ -40,7 +40,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateWOQualifies(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: WO mode qualifies for info update")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	rs := newTestReplicaUpstream("replica-1", "10.0.0.1:1234", lhtypes.ModeWO)
+	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeWO)
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
 
@@ -52,7 +52,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateERRDoesNotQualify(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: ERR mode does not qualify")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	rs := newTestReplicaUpstream("replica-1", "10.0.0.1:1234", lhtypes.ModeERR)
+	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeERR)
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
 
@@ -64,7 +64,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateUnexpectedModeDowngradesTo
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: unexpected mode is downgraded to ERR")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	rs := newTestReplicaUpstream("replica-1", "10.0.0.1:1234", lhtypes.Mode("UNKNOWN"))
+	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.Mode("UNKNOWN"))
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
 
@@ -76,10 +76,10 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateUnexpectedModeDowngradesTo
 // This function is now called by BackupRestoreFinish after setting replicas
 // to ModeRW.
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockEmptyMap(c *C) {
-	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: empty upstreams does not panic")
+	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: empty backends does not panic")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.upstreams = map[string]Upstream{}
+	e.backends = map[string]Backend{}
 
 	// Should not panic with empty map
 	e.checkAndUpdateInfoFromReplicasNoLock()
@@ -89,9 +89,9 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAllERRSkipped(c *C) 
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: all-ERR replicas are skipped without network calls")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.upstreams = map[string]Upstream{
-		"replica-1": newTestReplicaUpstream("replica-1", "10.0.0.1:1234", lhtypes.ModeERR),
-		"replica-2": newTestReplicaUpstream("replica-2", "10.0.0.2:1234", lhtypes.ModeERR),
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeERR),
+		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeERR),
 	}
 
 	// All replicas are ERR, so ensureReplicaModeForInfoUpdate returns false
@@ -99,8 +99,8 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAllERRSkipped(c *C) 
 	e.checkAndUpdateInfoFromReplicasNoLock()
 
 	// Modes remain ERR (not downgraded further)
-	c.Assert(e.upstreams["replica-1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
-	c.Assert(e.upstreams["replica-2"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
+	c.Assert(e.backends["replica-1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
+	c.Assert(e.backends["replica-2"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
 }
 
 func (s *TestSuite) TestEngineFrontendTeardownRestoreInitiatorMarksStopped(c *C) {
@@ -143,9 +143,9 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorExposedInRestoreStatus(c *C
 	fmt.Println("Testing restore start errors are exposed through Engine.RestoreStatus")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.upstreams = map[string]Upstream{
-		"replica-1": newTestReplicaUpstream("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
-		"replica-2": newTestReplicaUpstream("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
 	}
 	backupURL := "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a"
 	restoreErr := fmt.Errorf("backup was deleted")
@@ -184,21 +184,21 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C)
 	c.Assert(string(e.restore.State), Equals, "error")
 }
 
-func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesUpstreamView(c *C) {
-	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock applies SnapshotMap/Head/ActualSize from Upstream.Get()")
+func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesBackendView(c *C) {
+	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock applies SnapshotMap/Head/ActualSize from Backend.Get()")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	u := newFakeUpstream("r1", "10.0.0.1:1234")
+	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	headLvol := &api.Lvol{Name: "vol-head", Parent: "snap-1"}
 	snap := &api.Lvol{Name: "snap-1", CreationTime: time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)}
-	u.View = &UpstreamView{
+	u.View = &BackendView{
 		SpecSize:   100,
 		ActualSize: 50,
 		Head:       headLvol,
 		Snapshots:  map[string]*api.Lvol{"snap-1": snap},
 	}
-	e.upstreams = map[string]Upstream{"r1": u}
+	e.backends = map[string]Backend{"r1": u}
 
 	e.checkAndUpdateInfoFromReplicasNoLock()
 
@@ -210,28 +210,28 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesUpstreamView(
 }
 
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockMarksERROnGetError(c *C) {
-	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock marks upstream ERR when Upstream.Get() returns an error")
+	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock marks backend ERR when Backend.Get() returns an error")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	u := newFakeUpstream("r1", "10.0.0.1:1234")
+	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
-	u.ViewErr = errors.New("upstream unavailable")
-	e.upstreams = map[string]Upstream{"r1": u}
+	u.ViewErr = errors.New("backend unavailable")
+	e.backends = map[string]Backend{"r1": u}
 
 	e.checkAndUpdateInfoFromReplicasNoLock()
 
-	c.Assert(e.upstreams["r1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
+	c.Assert(e.backends["r1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
 }
 
-func (s *TestSuite) TestResolveReplicaAncestorRoutesBackingImageThroughUpstream(c *C) {
-	fmt.Println("Testing resolveReplicaAncestor calls BackingImageGet via the Upstream interface")
+func (s *TestSuite) TestResolveReplicaAncestorRoutesBackingImageThroughBackend(c *C) {
+	fmt.Println("Testing resolveReplicaAncestor calls BackingImageGet via the Backend interface")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	u := newFakeUpstream("r1", "10.0.0.1:1234")
+	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	biSnap := &api.Lvol{Name: "bi-snap"}
 	u.BackingImageView = &api.BackingImage{Snapshot: biSnap}
-	view := &UpstreamView{
+	view := &BackendView{
 		BackingImageName: "ubuntu-22.04",
 		LvsUUID:          "lvs-uuid-1",
 		Head:             &api.Lvol{Name: "vol-head", Parent: "bi-snap"},
@@ -241,22 +241,22 @@ func (s *TestSuite) TestResolveReplicaAncestorRoutesBackingImageThroughUpstream(
 	ancestor, foundBI, foundSnap, ok := e.resolveReplicaAncestor("r1", view, u, false, false)
 	c.Assert(ok, Equals, true)
 	c.Assert(foundBI, Equals, true)
-	c.Assert(foundSnap, Equals, false) // no snapshots on this upstream
+	c.Assert(foundSnap, Equals, false) // no snapshots on this backend
 	c.Assert(ancestor, Equals, biSnap)
-	// BackingImageGet was forwarded via the Upstream interface, not directly to a replica client.
+	// BackingImageGet was forwarded via the Backend interface, not directly to a replica client.
 	c.Assert(len(u.BackingImageCalls), Equals, 1)
 	c.Assert(u.BackingImageCalls[0].Name, Equals, "ubuntu-22.04")
 	c.Assert(u.BackingImageCalls[0].LvsUUID, Equals, "lvs-uuid-1")
 }
 
 func (s *TestSuite) TestResolveReplicaAncestorMarksERROnBackingImageError(c *C) {
-	fmt.Println("Testing resolveReplicaAncestor marks upstream ERR when BackingImageGet fails")
+	fmt.Println("Testing resolveReplicaAncestor marks backend ERR when BackingImageGet fails")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	u := newFakeUpstream("r1", "10.0.0.1:1234")
+	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	u.BackingImageGetErr = errors.New("backing image not found")
-	view := &UpstreamView{
+	view := &BackendView{
 		BackingImageName: "ubuntu-22.04",
 		LvsUUID:          "lvs-uuid-1",
 		Head:             &api.Lvol{Name: "vol-head", Parent: "bi-snap"},
