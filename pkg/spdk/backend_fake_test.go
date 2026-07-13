@@ -7,11 +7,11 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
-// fakeUpstream is a test-only Upstream that returns preset responses without
+// fakeBackend is a test-only Backend that returns preset responses without
 // dialing SPDK, so tests can exercise engine code without real replica or
 // ShardGroup processes. Mode, BdevName, and Address hold real state so tests
 // can check the engine updates them (e.g. marking ERR on an RPC failure).
-type fakeUpstream struct {
+type fakeBackend struct {
 	mu sync.RWMutex
 
 	name     string
@@ -20,7 +20,7 @@ type fakeUpstream struct {
 	bdevName string
 
 	// Preset Get response; ViewErr (if set) is returned instead of View.
-	View    *UpstreamView
+	View    *BackendView
 	ViewErr error
 
 	// Per-RPC preset errors (zero value = success).
@@ -56,50 +56,50 @@ type fakeBackingImageCall struct {
 	LvsUUID string
 }
 
-// newFakeUpstream builds a fakeUpstream with default Mode=ModeWO, matching
-// newReplicaUpstream / newShardGroupUpstream lifecycle. Tests typically call
-// SetMode(ModeRW) afterwards to simulate a connected upstream.
-func newFakeUpstream(name, address string) *fakeUpstream {
-	return &fakeUpstream{
+// newFakeBackend builds a fakeBackend with default Mode=ModeWO, matching
+// newReplicaBackend / newShardGroupBackend lifecycle. Tests typically call
+// SetMode(ModeRW) afterwards to simulate a connected backend.
+func newFakeBackend(name, address string) *fakeBackend {
+	return &fakeBackend{
 		name:    name,
 		address: address,
 		mode:    types.ModeWO,
 	}
 }
 
-func (u *fakeUpstream) Name() string { return u.name }
+func (u *fakeBackend) Name() string { return u.name }
 
-func (u *fakeUpstream) Address() string {
+func (u *fakeBackend) Address() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return u.address
 }
 
-func (u *fakeUpstream) Mode() types.Mode {
+func (u *fakeBackend) Mode() types.Mode {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return u.mode
 }
 
-func (u *fakeUpstream) SetMode(m types.Mode) {
+func (u *fakeBackend) SetMode(m types.Mode) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.mode = m
 }
 
-func (u *fakeUpstream) BdevName() string {
+func (u *fakeBackend) BdevName() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return u.bdevName
 }
 
-func (u *fakeUpstream) SetBdevName(name string) {
+func (u *fakeBackend) SetBdevName(name string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.bdevName = name
 }
 
-func (u *fakeUpstream) Get() (*UpstreamView, error) {
+func (u *fakeBackend) Get() (*BackendView, error) {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	if u.ViewErr != nil {
@@ -108,42 +108,42 @@ func (u *fakeUpstream) Get() (*UpstreamView, error) {
 	return u.View, nil
 }
 
-func (u *fakeUpstream) SnapshotCreate(snapshotName string, opts *api.SnapshotOptions) error {
+func (u *fakeBackend) SnapshotCreate(snapshotName string, opts *api.SnapshotOptions) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.SnapshotCreateCalls = append(u.SnapshotCreateCalls, fakeSnapshotCreateCall{SnapshotName: snapshotName, Opts: opts})
 	return u.SnapshotCreateErr
 }
 
-func (u *fakeUpstream) SnapshotDelete(snapshotName string) error {
+func (u *fakeBackend) SnapshotDelete(snapshotName string) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.SnapshotDeleteCalls = append(u.SnapshotDeleteCalls, snapshotName)
 	return u.SnapshotDeleteErr
 }
 
-func (u *fakeUpstream) SnapshotRevert(snapshotName string) error {
+func (u *fakeBackend) SnapshotRevert(snapshotName string) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.SnapshotRevertCalls = append(u.SnapshotRevertCalls, snapshotName)
 	return u.SnapshotRevertErr
 }
 
-func (u *fakeUpstream) SnapshotPurge() error {
+func (u *fakeBackend) SnapshotPurge() error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.SnapshotPurgeCalls++
 	return u.SnapshotPurgeErr
 }
 
-func (u *fakeUpstream) SnapshotHash(snapshotName string, rehash bool) error {
+func (u *fakeBackend) SnapshotHash(snapshotName string, rehash bool) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.SnapshotHashCalls = append(u.SnapshotHashCalls, fakeSnapshotHashCall{SnapshotName: snapshotName, Rehash: rehash})
 	return u.SnapshotHashErr
 }
 
-func (u *fakeUpstream) BackingImageGet(name, lvsUUID string) (*api.BackingImage, error) {
+func (u *fakeBackend) BackingImageGet(name, lvsUUID string) (*api.BackingImage, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.BackingImageCalls = append(u.BackingImageCalls, fakeBackingImageCall{Name: name, LvsUUID: lvsUUID})
@@ -153,5 +153,5 @@ func (u *fakeUpstream) BackingImageGet(name, lvsUUID string) (*api.BackingImage,
 	return u.BackingImageView, nil
 }
 
-// Compile-time check that fakeUpstream satisfies the Upstream interface.
-var _ Upstream = (*fakeUpstream)(nil)
+// Compile-time check that fakeBackend satisfies the Backend interface.
+var _ Backend = (*fakeBackend)(nil)
