@@ -14,9 +14,9 @@ import (
 )
 
 // EngineCreate creates and starts an engine instance with the requested
-// replicas. dataLayoutType selects the upstream-RPC dispatch on the server:
-// DATA_LAYOUT_TYPE_REPLICATED constructs replicaUpstream entries (RAID1),
-// DATA_LAYOUT_TYPE_SHARDED constructs a single shardGroupUpstream (EC).
+// replicas. dataLayoutType selects the backend-RPC dispatch on the server:
+// DATA_LAYOUT_TYPE_REPLICATED constructs replicaBackend entries (RAID1),
+// DATA_LAYOUT_TYPE_SHARDED constructs a single shardGroupBackend (EC).
 // Without forwarding this field, callers would default to the proto3 zero
 // value (REPLICATED), and EC volumes would be silently miscreated as RAID1.
 func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool, snapshotMaxCount int32, dataLayoutType spdkrpc.DataLayoutType) (*api.Engine, error) {

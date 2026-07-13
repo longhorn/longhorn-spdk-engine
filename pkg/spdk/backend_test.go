@@ -12,7 +12,7 @@ import (
 	. "gopkg.in/check.v1"
 )
 
-func (s *TestSuite) TestSelectUpstreamFactory(c *C) {
+func (s *TestSuite) TestSelectBackendFactory(c *C) {
 	cases := []struct {
 		name     string
 		layout   spdkrpc.DataLayoutType
@@ -20,15 +20,15 @@ func (s *TestSuite) TestSelectUpstreamFactory(c *C) {
 		upAddr   string
 		wantType string // "replica" | "shardgroup"; "" => expect InvalidArgument
 	}{
-		{"replicated builds replicaUpstream", spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "r1", "10.0.0.1:1234", "replica"},
-		{"sharded builds shardGroupUpstream", spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_SHARDED, "sg1", "10.0.0.2:1234", "shardgroup"},
+		{"replicated builds replicaBackend", spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "r1", "10.0.0.1:1234", "replica"},
+		{"sharded builds shardGroupBackend", spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_SHARDED, "sg1", "10.0.0.2:1234", "shardgroup"},
 		{"unknown layout rejected", spdkrpc.DataLayoutType(42), "", "", ""},
 	}
 
 	for _, tc := range cases {
-		fmt.Println("Testing selectUpstreamFactory:", tc.name)
+		fmt.Println("Testing selectBackendFactory:", tc.name)
 
-		factory, err := selectUpstreamFactory(tc.layout, nil)
+		factory, err := selectBackendFactory(tc.layout, nil)
 		if tc.wantType == "" {
 			c.Assert(factory, IsNil, Commentf("case=%s", tc.name))
 			c.Assert(err, NotNil, Commentf("case=%s", tc.name))
@@ -42,10 +42,10 @@ func (s *TestSuite) TestSelectUpstreamFactory(c *C) {
 		u := factory(tc.upName, tc.upAddr)
 		switch tc.wantType {
 		case "replica":
-			_, ok := u.(*replicaUpstream)
+			_, ok := u.(*replicaBackend)
 			c.Assert(ok, Equals, true, Commentf("case=%s", tc.name))
 		case "shardgroup":
-			_, ok := u.(*shardGroupUpstream)
+			_, ok := u.(*shardGroupBackend)
 			c.Assert(ok, Equals, true, Commentf("case=%s", tc.name))
 		}
 		c.Assert(u.Name(), Equals, tc.upName, Commentf("case=%s", tc.name))
@@ -55,37 +55,37 @@ func (s *TestSuite) TestSelectUpstreamFactory(c *C) {
 
 func (s *TestSuite) TestIsShardedEngine(c *C) {
 	testCases := map[string]struct {
-		upstreams map[string]Upstream
-		expected  bool
+		backends map[string]Backend
+		expected bool
 	}{
-		"true when a shardGroupUpstream is present": {
-			upstreams: map[string]Upstream{"sg1": newShardGroupUpstream("sg1", "10.0.0.1:1234", nil)},
-			expected:  true,
+		"true when a shardGroupBackend is present": {
+			backends: map[string]Backend{"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil)},
+			expected: true,
 		},
-		"true when a shardGroupUpstream is mixed with replicaUpstreams": {
-			upstreams: map[string]Upstream{
-				"r1":  newReplicaUpstream("r1", "10.0.0.1:1234", nil),
-				"sg1": newShardGroupUpstream("sg1", "10.0.0.2:1234", nil),
+		"true when a shardGroupBackend is mixed with replicaBackends": {
+			backends: map[string]Backend{
+				"r1":  newReplicaBackend("r1", "10.0.0.1:1234", nil),
+				"sg1": newShardGroupBackend("sg1", "10.0.0.2:1234", nil),
 			},
 			expected: true,
 		},
-		"false when all upstreams are replicaUpstream": {
-			upstreams: map[string]Upstream{
-				"r1": newReplicaUpstream("r1", "10.0.0.1:1234", nil),
-				"r2": newReplicaUpstream("r2", "10.0.0.2:1234", nil),
+		"false when all backends are replicaBackend": {
+			backends: map[string]Backend{
+				"r1": newReplicaBackend("r1", "10.0.0.1:1234", nil),
+				"r2": newReplicaBackend("r2", "10.0.0.2:1234", nil),
 			},
 			expected: false,
 		},
-		"false when upstreams is empty": {
-			upstreams: map[string]Upstream{},
-			expected:  false,
+		"false when backends is empty": {
+			backends: map[string]Backend{},
+			expected: false,
 		},
 	}
 
 	for name, tc := range testCases {
 		fmt.Println("Testing isShardedEngine:", name)
 		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-		e.upstreams = tc.upstreams
+		e.backends = tc.backends
 		c.Assert(isShardedEngine(e), Equals, tc.expected, Commentf("case %q", name))
 	}
 }
