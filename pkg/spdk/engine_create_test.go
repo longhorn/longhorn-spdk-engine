@@ -10,13 +10,13 @@ import (
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
-// fakeFactoryWithViews returns an UpstreamFactory that hands out fakeUpstream
-// instances pre-loaded with the canned UpstreamView for each name. Used by
-// validateReplicaSize tests so the engine's per-upstream Get() returns the
+// fakeFactoryWithViews returns an BackendFactory that hands out fakeBackend
+// instances pre-loaded with the canned BackendView for each name. Used by
+// validateReplicaSize tests so the engine's per-backend Get() returns the
 // size we want to assert against.
-func fakeFactoryWithViews(views map[string]*UpstreamView) UpstreamFactory {
-	return func(name, address string) Upstream {
-		u := newFakeUpstream(name, address)
+func fakeFactoryWithViews(views map[string]*BackendView) BackendFactory {
+	return func(name, address string) Backend {
+		u := newFakeBackend(name, address)
 		if v, ok := views[name]; ok {
 			u.View = v
 		}
@@ -29,13 +29,13 @@ func (s *TestSuite) TestValidateReplicaSize(c *C) {
 		name       string
 		engineSize uint64
 		sizes      map[string]uint64 // replica name -> reported SpecSize; also defines the address map
-		viewErr    error             // if set, every upstream's Get() returns this
+		viewErr    error             // if set, every backend's Get() returns this
 		wantErrSub string            // "" => expect success
 	}{
 		{"accepts matching sizes", 100, map[string]uint64{"r1": 100, "r2": 100}, nil, ""},
 		{"rejects mismatched sizes", 100, map[string]uint64{"r1": 100, "r2": 200}, nil, "different replica sizes"},
 		{"rejects engine smaller than replicas", 50, map[string]uint64{"r1": 100}, nil, "smaller than replica size"},
-		{"propagates upstream Get error", 100, map[string]uint64{"r1": 100}, errors.New("upstream unavailable"), "upstream unavailable"},
+		{"propagates backend Get error", 100, map[string]uint64{"r1": 100}, errors.New("backend unavailable"), "backend unavailable"},
 		{"rejects empty map", 100, nil, nil, "no replicas"},
 	}
 
@@ -45,16 +45,16 @@ func (s *TestSuite) TestValidateReplicaSize(c *C) {
 		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, tc.engineSize, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 
 		addrs := map[string]string{}
-		views := map[string]*UpstreamView{}
+		views := map[string]*BackendView{}
 		for name, size := range tc.sizes {
 			addrs[name] = "10.0.0.1:1234"
-			views[name] = &UpstreamView{SpecSize: size}
+			views[name] = &BackendView{SpecSize: size}
 		}
 
 		factory := fakeFactoryWithViews(views)
 		if tc.viewErr != nil {
-			factory = func(name, address string) Upstream {
-				u := newFakeUpstream(name, address)
+			factory = func(name, address string) Backend {
+				u := newFakeBackend(name, address)
 				u.ViewErr = tc.viewErr
 				return u
 			}

@@ -18,8 +18,8 @@ func (s *TestSuite) TestServerEngineReplicaListEmptyForShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaList returns an empty replica map for EC engines")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.upstreams = map[string]Upstream{
-		"sg1": newShardGroupUpstream("sg1", "10.0.0.1:1234", nil),
+	e.backends = map[string]Backend{
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
 
 	srv := &Server{
@@ -52,8 +52,8 @@ func (s *TestSuite) TestServerEngineReplicaAddRejectedOnShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaAdd rejects EC engines with FailedPrecondition")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.upstreams = map[string]Upstream{
-		"sg1": newShardGroupUpstream("sg1", "10.0.0.1:1234", nil),
+	e.backends = map[string]Backend{
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
 
 	srv := &Server{
@@ -73,8 +73,8 @@ func (s *TestSuite) TestServerEngineReplicaDeleteRejectedOnShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaDelete rejects EC engines with FailedPrecondition")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.upstreams = map[string]Upstream{
-		"sg1": newShardGroupUpstream("sg1", "10.0.0.1:1234", nil),
+	e.backends = map[string]Backend{
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
 
 	srv := &Server{
@@ -94,8 +94,8 @@ func (s *TestSuite) TestServerEngineSnapshotHashStatusUnimplementedForShardedEng
 	fmt.Println("Testing Server.EngineSnapshotHashStatus returns Unimplemented for EC engines")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.upstreams = map[string]Upstream{
-		"sg1": newShardGroupUpstream("sg1", "10.0.0.1:1234", nil),
+	e.backends = map[string]Backend{
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
 
 	srv := &Server{
