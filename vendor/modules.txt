@@ -164,8 +164,8 @@ github.com/mschoch/smat
 # github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
 ## explicit
 github.com/munnerz/goautoneg
-# github.com/opencontainers/runc v1.2.8
-## explicit; go 1.22
+# github.com/opencontainers/runc v1.3.6
+## explicit; go 1.23.0
 github.com/opencontainers/runc/libcontainer/userns
 # github.com/pierrec/lz4/v4 v4.1.26
 ## explicit; go 1.17
