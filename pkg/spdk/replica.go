@@ -1660,6 +1660,9 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		}
 		r.isSnapshotCloning = false
 	}
+	r.isCloneReplica = false
+	r.cloneSourceReplicaName = ""
+	r.cloneEntrypointLvolName = ""
 
 	// The port can be released once the rebuilding and expose are stopped.
 	if r.PortStart != 0 {
@@ -2373,6 +2376,7 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 		if err != nil {
 			r.log.WithError(err).Errorf("Clone dst replica failed to do SnapshotCloneDstStart for snapshot %v with "+
 				"srcReplicaName %v, srcReplicaAddress %v", snapshotName, srcReplicaName, srcReplicaAddress)
+			r.isSnapshotCloning = false
 			if r.State != types.InstanceStateError {
 				r.State = types.InstanceStateError
 			}
@@ -2423,6 +2427,17 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 			}
 		}()
 
+		// Always notify the src replica to clear its snapshotCloningSrcCache
+		// entry — on success as completion, on failure as cleanup.
+		defer func() {
+			if cleanupErr := srcReplicaServiceCli.ReplicaSnapshotCloneSrcFinish(
+				r.snapshotCloningDstCache.srcReplicaName, r.Name); cleanupErr != nil {
+				r.log.WithError(cleanupErr).Warnf("Failed to notify src replica %s of linked-clone finish for dst %s; "+
+					"the src cache will be cleared on the next SnapshotCloneSrcStart",
+					r.snapshotCloningDstCache.srcReplicaName, r.Name)
+			}
+		}()
+
 		if err := srcReplicaServiceCli.ReplicaSnapshotCloneSrcStart(r.snapshotCloningDstCache.srcReplicaName,
 			snapshotName, r.Name, "", cloneMode); err != nil {
 			return err
@@ -2435,20 +2450,12 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 		r.log.Infof("Dst replica starting linked-clone: src replica %s (addr %s), snapshot %s, entrypoint %s", srcReplicaName, srcReplicaAddress, snapshotName, r.cloneEntrypointLvolName)
 		r.snapshotCloningDstCache.cloningState = types.ProgressStateComplete
 		if err := r.SnapshotCloneDstFinish(spdkClient, cloneMode); err != nil {
+			r.isCloneReplica = false
+			r.cloneSourceReplicaName = ""
+			r.cloneEntrypointLvolName = ""
 			return err
 		}
 		r.log.Infof("Dst replica finished linked-clone: snapshot %s, entrypoint %s set as chain base", snapshotName, r.cloneEntrypointLvolName)
-		// Notify the src replica that the linked-clone dst has finished so it
-		// can clear the in-memory snapshotCloningSrcCache entry.  Without this,
-		// syncCloneEntrypoints would treat the entrypoint as "in-flight"
-		// indefinitely even after the clone has completed.
-		// This is an in-memory-only cleanup on the src side (no SPDK work).
-		if cleanupErr := srcReplicaServiceCli.ReplicaSnapshotCloneSrcFinish(
-			r.snapshotCloningDstCache.srcReplicaName, r.Name); cleanupErr != nil {
-			r.log.WithError(cleanupErr).Warnf("Failed to notify src replica %s of linked-clone finish for dst %s; "+
-				"the src cache will be cleared on the next SnapshotCloneSrcStart",
-				r.snapshotCloningDstCache.srcReplicaName, r.Name)
-		}
 		return nil
 	}
 
@@ -2787,6 +2794,7 @@ func (r *Replica) doCleanupForSnapshotCloneDst(spdkClient *spdkclient.Client, cl
 		aggregatedErrors = append(aggregatedErrors, err)
 	}
 
+	r.snapshotCloningDstCache.snapshotName = ""
 	r.snapshotCloningDstCache.srcReplicaName = ""
 	r.snapshotCloningDstCache.srcReplicaAddress = ""
 	if r.snapshotCloningDstCache.monitorCancelFunc != nil {
