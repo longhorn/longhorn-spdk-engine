@@ -8,8 +8,8 @@ require (
 	github.com/cockroachdb/errors v1.13.0
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20260618071319-84c767bdab16
-	github.com/longhorn/go-common-libs v0.0.0-20260709061022-21a84065aa86
+	github.com/longhorn/backupstore v0.0.0-20260717143317-0e4420e3d34a
+	github.com/longhorn/go-common-libs v0.0.0-20260717062941-2c0ab58da729
 	github.com/longhorn/go-spdk-helper v0.7.1-0.20260717074340-e6426a9f29f9
 	github.com/longhorn/types v0.0.0-20260709032252-3d0a3cd8f06f
 	github.com/sirupsen/logrus v1.9.4
@@ -39,7 +39,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	golang.org/x/net v0.54.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912 // indirect
@@ -75,7 +75,7 @@ require (
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect; sindirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
