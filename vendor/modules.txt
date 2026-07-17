@@ -8,8 +8,6 @@ github.com/RoaringBitmap/roaring/internal
 # github.com/avast/retry-go/v4 v4.7.0
 ## explicit; go 1.20
 github.com/avast/retry-go/v4
-# github.com/avast/retry-go/v5 v5.0.0
-## explicit; go 1.20
 # github.com/beorn7/perks v1.0.1
 ## explicit; go 1.11
 github.com/beorn7/perks/quantile
@@ -131,7 +129,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.6.3-0.20260712050109-6357546afe9a
+# github.com/longhorn/go-spdk-helper v0.7.1-0.20260717074340-e6426a9f29f9
 ## explicit; go 1.25.10
 github.com/longhorn/go-spdk-helper/pkg/initiator
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
