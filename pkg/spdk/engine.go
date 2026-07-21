@@ -2081,17 +2081,18 @@ func (e *Engine) snapshotCloneLinkedN(snapshotName string, dstReplicaSrcReplicaP
 
 		srcCand, ok := srcReplicaCandidates[srcName]
 		if !ok {
-			e.log.Errorf("Src replica %s not found in src engine replica list, marking the paired dst replica %s ERR", srcName, dstName)
-			dstStatus.SetMode(types.ModeERR)
-			continue
+			e.log.Warnf("Src replica %s not found in src engine replica list for dst replica %s, will record clone error via empty src address", srcName, dstName)
 		}
 
-		dstEntries = append(dstEntries, dstEntry{
+		entry := dstEntry{
 			name:           dstName,
 			address:        dstStatus.Address(),
 			srcReplicaName: srcName,
-			srcReplicaAddr: srcCand.address,
-		})
+		}
+		if ok {
+			entry.srcReplicaAddr = srcCand.address
+		}
+		dstEntries = append(dstEntries, entry)
 	}
 
 	if len(dstEntries) == 0 {

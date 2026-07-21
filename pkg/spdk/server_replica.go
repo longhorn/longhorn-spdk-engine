@@ -332,7 +332,6 @@ func (s *Server) ReplicaSnapshotCloneDstStart(ctx context.Context, req *spdkrpc.
 		util.Param{Name: "name", Value: req.Name},
 		util.Param{Name: "snapshotName", Value: req.SnapshotName},
 		util.Param{Name: "srcReplicaName", Value: req.SrcReplicaName},
-		util.Param{Name: "srcReplicaAddress", Value: req.SrcReplicaAddress},
 	); err != nil {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%v", err)
 	}
