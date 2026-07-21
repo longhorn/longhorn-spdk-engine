@@ -116,6 +116,23 @@ func (s *TestSuite) TestEcUsableFitsSpecBoundary(c *C) {
 	c.Assert(ecUsableFitsSpec(1<<40, blockSize, (1<<40)*uint64(blockSize)), Equals, true)
 }
 
+// TestLvstoreUsableFitsSpecBoundary covers the equality boundary and the
+// production failure geometry: the 33 GiB head needed 8448 clusters, but
+// blobstore metadata left only 8439.
+func (s *TestSuite) TestLvstoreUsableFitsSpecBoundary(c *C) {
+	fmt.Println("Testing lvstoreUsableFitsSpec equality boundary and the production geometry")
+
+	const clusterSize = uint64(4 << 20)
+	const spec = uint64(33 << 30)
+
+	// Exact fit passes: 8448 clusters back a 33 GiB head with zero slack.
+	c.Assert(lvstoreUsableFitsSpec(8448, clusterSize, spec), Equals, true)
+	// The production failure: blobstore metadata took 9 of the 8448 clusters.
+	c.Assert(lvstoreUsableFitsSpec(8439, clusterSize, spec), Equals, false)
+	// One byte short fails.
+	c.Assert(lvstoreUsableFitsSpec(1000, clusterSize, 1000*clusterSize+1), Equals, false)
+}
+
 func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 	const initialSize = uint64(4 << 20)
 

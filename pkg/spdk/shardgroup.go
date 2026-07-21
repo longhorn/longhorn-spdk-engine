@@ -321,6 +321,12 @@ func ecUsableFitsSpec(numBlocks uint64, blockSize uint32, specSize uint64) bool 
 	return numBlocks*uint64(blockSize) >= specSize
 }
 
+// lvstoreUsableFitsSpec reports whether totalDataClusters clusters of
+// clusterSize bytes can back specSize bytes.
+func lvstoreUsableFitsSpec(totalDataClusters, clusterSize, specSize uint64) bool {
+	return totalDataClusters*clusterSize >= specSize
+}
+
 // assertEcUsableFitsSpecNoLock fails if the EC bdev is smaller than SpecSize.
 // The size comes from BdevGetBdevs because BdevEcInfo has no size field. The
 // caller must hold sg's lock.
@@ -335,7 +341,7 @@ func (sg *ShardGroup) assertEcUsableFitsSpecNoLock(spdkClient *spdkclient.Client
 	bdev := bdevList[0]
 	if !ecUsableFitsSpec(bdev.NumBlocks, bdev.BlockSize, sg.SpecSize) {
 		return fmt.Errorf("EC bdev %s usable capacity %d bytes < required %d bytes "+
-			"(shards under-sized: per-shard size must budget for the EC front reservation)",
+			"(shards under-sized: per-shard size must budget the EC front reservation and lvstore metadata)",
 			sg.EcBdevName, bdev.NumBlocks*uint64(bdev.BlockSize), sg.SpecSize)
 	}
 	return nil
@@ -599,8 +605,7 @@ func (sg *ShardGroup) Create(spdkClient *spdkclient.Client, superiorPortAllocato
 
 		// Fail fast if the EC bdev is too small to hold the head. The head is
 		// thin, so SPDK would otherwise accept an undersized volume and only
-		// fail later on write. Only the fresh-create path is guarded, so
-		// re-attach and salvage are left untouched.
+		// fail later on write.
 		if err := sg.assertEcUsableFitsSpecNoLock(spdkClient); err != nil {
 			return nil, err
 		}
@@ -623,6 +628,24 @@ func (sg *ShardGroup) Create(spdkClient *spdkclient.Client, superiorPortAllocato
 			return nil, fmt.Errorf("expected exactly one lvstore for uuid %s, found %d", lvsUUID, len(lvstoreList))
 		}
 		sg.ClusterSize = lvstoreList[0].ClusterSize
+
+		// The head lvol is thin, so SPDK would accept it even when the
+		// lvstore cannot back it, deferring the failure to an ENOSPC
+		// mid-workload. Fail the create here instead. Delete the fresh,
+		// empty lvstore first: leaving it behind would make the next
+		// Create find a lvstore without a head lvol and fail in
+		// tryDiscoverExistingLvstore, so the create would never become
+		// retryable.
+		if !lvstoreUsableFitsSpec(lvstoreList[0].TotalDataClusters, lvstoreList[0].ClusterSize, sg.SpecSize) {
+			if _, deleteErr := spdkClient.BdevLvolDeleteLvstore("", lvsUUID); deleteErr != nil {
+				sg.log.WithError(deleteErr).Warnf("Failed to delete under-sized lvstore %s (uuid %s)", sg.LvsName, lvsUUID)
+			}
+			sg.LvsUUID = ""
+			sg.ClusterSize = 0
+			return nil, fmt.Errorf("lvstore %s on EC bdev %s can back only %d of %d bytes "+
+				"(shards under-sized: blobstore metadata not budgeted)",
+				sg.LvsName, sg.EcBdevName, lvstoreList[0].TotalDataClusters*lvstoreList[0].ClusterSize, sg.SpecSize)
+		}
 
 		headLvolUUID, err := spdkClient.BdevLvolCreate("", lvsUUID, sg.HeadLvolName, util.BytesToMiB(sg.SpecSize), "", true)
 		if err != nil {
@@ -1412,6 +1435,14 @@ func (sg *ShardGroup) tryDiscoverExistingLvstore(spdkClient *spdkclient.Client) 
 	}
 	sg.LvsUUID = lvstoreList[0].UUID
 	sg.ClusterSize = lvstoreList[0].ClusterSize
+
+	// An existing lvstore may be too small to back the spec size. Warn
+	// instead of failing so the data stays accessible.
+	if !lvstoreUsableFitsSpec(lvstoreList[0].TotalDataClusters, lvstoreList[0].ClusterSize, sg.SpecSize) {
+		sg.log.Warnf("Discovered lvstore %s can back only %d of %d bytes; "+
+			"volume may hit ENOSPC when fully written",
+			sg.LvsName, lvstoreList[0].TotalDataClusters*lvstoreList[0].ClusterSize, sg.SpecSize)
+	}
 
 	headBdev, err := spdkClient.BdevLvolGetByName(sg.HeadAlias, 0)
 	if err != nil {
