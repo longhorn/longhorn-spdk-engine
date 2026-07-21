@@ -236,7 +236,6 @@ func (c *SPDKClient) ReplicaSnapshotCloneDstStart(name, snapshotName, srcReplica
 		util.Param{Name: "name", Value: name},
 		util.Param{Name: "snapshotName", Value: snapshotName},
 		util.Param{Name: "srcReplicaName", Value: srcReplicaName},
-		util.Param{Name: "srcReplicaAddress", Value: srcReplicaAddress},
 	); err != nil {
 		return err
 	}
