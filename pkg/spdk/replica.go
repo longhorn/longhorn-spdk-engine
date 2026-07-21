@@ -2367,6 +2367,25 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 		}
 	}()
 
+	// Empty srcReplicaAddress signals that the src replica was not found and the
+	// caller only wants to record the error in snapshotCloningDstCache so that
+	// SnapshotCloneDstStatusCheck returns an error state. Do not set
+	// isSnapshotCloning or transition replica state to Error.
+	// Notice that the upper caller (InstanceManager Proxy service) will not check
+	// the clone status for this replica since it will be marked as mode ERR. But
+	// recording the error in snapshotCloningDstCache may be still useful for
+	// debugging and troubleshooting.
+	if srcReplicaAddress == "" {
+		cloneErr := fmt.Errorf("linked-clone src replica %s not found in source engine", srcReplicaName)
+		r.log.WithError(cloneErr).Warn("Recording clone error without starting clone operation")
+		r.snapshotCloningDstCache.snapshotName = snapshotName
+		r.snapshotCloningDstCache.srcReplicaName = srcReplicaName
+		r.snapshotCloningDstCache.cloningError = cloneErr.Error()
+		r.snapshotCloningDstCache.cloningState = types.ProgressStateError
+		updateRequired = true
+		return cloneErr
+	}
+
 	if r.isSnapshotCloning {
 		return fmt.Errorf("replica %s cloning is in process", r.Name)
 	}
