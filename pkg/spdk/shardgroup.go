@@ -88,10 +88,9 @@ type ShardGroup struct {
 	EcBdevName  string // <volumeName>-ec
 	LvsName     string // <volumeName>-lvs
 	LvsUUID     string // populated after lvstore creation
-	ClusterSize uint64 // lvstore cluster size in bytes. Queried from SPDK, not
-	// hardcoded: the lvstore is created with cluster_sz=0 (SPDK's default,
-	// currently 4 MiB), and refreshECSnapshotMapNoLock multiplies
-	// NumAllocatedClusters by this value to get bytes.
+	ClusterSize uint64 // lvstore cluster size in bytes. Set to
+	// spdktypes.EcLvstoreClusterSize at create, queried back from SPDK.
+	// Used to convert NumAllocatedClusters to bytes.
 	HeadLvolName string // == VolumeName
 	HeadLvolUUID string // populated after head lvol creation
 	HeadAlias    string // <LvsName>/<HeadLvolName>
@@ -393,9 +392,9 @@ func (sg *ShardGroup) Get(spdkClient *spdkclient.Client) (*spdkrpc.ShardGroup, e
 // Per-lvol ActualSize is NumAllocatedClusters * sg.ClusterSize. The cluster
 // size MUST come from the lvstore (queried at create/discovery time, cached on
 // sg.ClusterSize) rather than from the defaultClusterSize constant - the
-// EC-stack lvstore is created with cluster_sz=0 so SPDK picks its own default
-// (currently 4 MiB), and using defaultClusterSize (1 MiB) would silently
-// report every size as 1/4 of physical.
+// EC-stack lvstore uses EcLvstoreClusterSize (4 MiB), pinned at create, so
+// using defaultClusterSize (1 MiB) would silently report every size as 1/4
+// of physical.
 //
 // sg.ActualSize sums head + all snapshots, mirroring the RAID1 path at
 // replica.go. Reporting only the head's allocation would drop to ~0 every
@@ -610,11 +609,14 @@ func (sg *ShardGroup) Create(spdkClient *spdkclient.Client, superiorPortAllocato
 			return nil, err
 		}
 
-		// Fresh-create path: create lvstore + head lvol on bdev_ec. We pass
-		// cluster_sz=0 so SPDK applies its compiled-in default; the actual size
-		// is then queried back so the NumAllocatedClusters -> bytes math in
-		// refreshECSnapshotMapNoLock multiplies by the right value.
-		lvsUUID, err := spdkClient.BdevLvolCreateLvstore(sg.EcBdevName, sg.LvsName, 0)
+		// Fresh-create path: create lvstore + head lvol on bdev_ec. The
+		// cluster size and md-pages ratio are pinned to the constants that
+		// ComputeShardSize sizes shards from, so an SPDK default change
+		// cannot alter the geometry. The cluster size is still queried back
+		// for the NumAllocatedClusters -> bytes math in
+		// refreshECSnapshotMapNoLock.
+		lvsUUID, err := spdkClient.BdevLvolCreateLvstoreWithMdRatio(sg.EcBdevName, sg.LvsName,
+			spdktypes.EcLvstoreClusterSize, spdktypes.EcLvstoreMdPagesPerClusterRatio)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to create lvstore %s on EC bdev %s", sg.LvsName, sg.EcBdevName)
 		}
