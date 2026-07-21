@@ -953,6 +953,22 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize uint64) (err
 		return errors.Wrapf(err, "failed to grow lvstore %s", sg.LvsName)
 	}
 
+	// The grown lvstore must back the new size before the head lvol grows
+	// into it. Failing here leaves the volume exposed and serving at the
+	// old size.
+	lvstoreList, err := spdkClient.BdevLvolGetLvstore("", sg.LvsUUID)
+	if err != nil {
+		return errors.Wrapf(err, "failed to query lvstore %s after grow for shardgroup %s", sg.LvsName, sg.Name)
+	}
+	if len(lvstoreList) != 1 {
+		return fmt.Errorf("expected exactly one lvstore for uuid %s, found %d", sg.LvsUUID, len(lvstoreList))
+	}
+	if !lvstoreUsableFitsSpec(lvstoreList[0].TotalDataClusters, lvstoreList[0].ClusterSize, newSize) {
+		return fmt.Errorf("lvstore %s on EC bdev %s can back only %d of %d bytes after grow "+
+			"(shards under-sized: blobstore metadata not budgeted)",
+			sg.LvsName, sg.EcBdevName, lvstoreList[0].TotalDataClusters*lvstoreList[0].ClusterSize, newSize)
+	}
+
 	// 4. Resize the head lvol.
 	//
 	// Why the teardown is mandatory: without it, bdev_lvol_resize HANGS on
