@@ -11,7 +11,7 @@ on:
 jobs:
   build-amd64:
     name: Build AMD64 binaries
-    runs-on: longhorn-infra-oracle-amd64-spdk-runners
+    runs-on: cncf-ubuntu-16-64-x86
     steps:
     - name: Checkout code
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -20,6 +20,15 @@ jobs:
       run: |
         sudo apt update
         sudo apt-get -y install make curl git kmod
+
+    - name: Set up hugepages
+      run: |
+        sudo sh -c "echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages"
+        grep Huge /proc/meminfo
+
+    - name: Load kernel modules
+      run: sudo modprobe nvme-tcp vfio_pci uio_pci_generic ublk_drv
+
     # Build binaries
     - name: Run ci
       run: make ci
@@ -32,7 +41,7 @@ jobs:
 
   build-arm64:
     name: Build ARM64 binaries
-    runs-on: longhorn-infra-oracle-arm64-spdk-runners
+    runs-on: oracle-vm-16cpu-64gb-arm64
     steps:
     - name: Checkout code
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -41,6 +50,15 @@ jobs:
       run: |
         sudo apt update
         sudo apt-get -y install make curl git kmod
+
+    - name: Set up hugepages
+      run: |
+        sudo sh -c "echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages"
+        grep Huge /proc/meminfo
+
+    - name: Load kernel modules
+      run: sudo modprobe nvme-tcp vfio_pci uio_pci_generic ublk_drv
+
     # Build binaries
     - name: Run ci
       run: sudo make ci
