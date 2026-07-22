@@ -161,7 +161,7 @@ func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 			map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
 		sg.State = tc.state
 
-		err := sg.Expand(nil, tc.target)
+		err := sg.Expand(nil, tc.target, 0)
 		if tc.wantErr {
 			c.Assert(err, NotNil, Commentf("case=%s", tc.name))
 			if tc.wantCode != grpccodes.OK {
@@ -183,8 +183,8 @@ func (s *TestSuite) TestShardGroupExpandDoesNotBroadcastWithoutSizeChange(c *C) 
 	sg.State = types.InstanceStateRunning
 
 	// No-op at target size and rejected shrink both leave SpecSize untouched.
-	c.Assert(sg.Expand(nil, 4<<20), IsNil)
-	c.Assert(sg.Expand(nil, 2<<20), NotNil)
+	c.Assert(sg.Expand(nil, 4<<20, 0), IsNil)
+	c.Assert(sg.Expand(nil, 2<<20, 0), NotNil)
 	c.Assert(len(sg.UpdateCh), Equals, 0)
 }
 
