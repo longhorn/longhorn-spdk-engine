@@ -601,14 +601,31 @@ func (r *Replica) recoverCloneReplicaInfo() {
 	r.cloneSourceReplicaName = ""
 	r.cloneEntrypointLvolName = ""
 
-	if len(r.ActiveChain) == 0 || r.ActiveChain[0] == nil || !IsCloneEntrypointLvol(r.ActiveChain[0].Name) {
+	if len(r.ActiveChain) == 0 {
 		return
 	}
-	r.isCloneReplica = true
-	r.cloneEntrypointLvolName = r.ActiveChain[0].Name
-	r.cloneSourceReplicaName = GetSourceReplicaNameFromCloneEntrypointLvolName(r.ActiveChain[0].Name)
-	r.log.Infof("Recovered linked-clone info: source replica %s, entrypoint %s",
-		r.cloneSourceReplicaName, r.cloneEntrypointLvolName)
+
+	// Case 1: entrypoint lvol is present at chain base
+	if r.ActiveChain[0] != nil && IsCloneEntrypointLvol(r.ActiveChain[0].Name) {
+		r.isCloneReplica = true
+		r.cloneEntrypointLvolName = r.ActiveChain[0].Name
+		r.cloneSourceReplicaName = GetSourceReplicaNameFromCloneEntrypointLvolName(r.ActiveChain[0].Name)
+		return
+	}
+
+	// Case 2: entrypoint lvol is missing (ActiveChain[0] == nil) but the root lvol's
+	// Parent field still references a clone entrypoint name. This means the entrypoint
+	// was deleted but the root lvol still knows its expected parent. Keep isCloneReplica
+	// true so syncCloneReplicaInfo can repair.
+	if r.ActiveChain[0] == nil && len(r.ActiveChain) >= 2 && r.ActiveChain[1] != nil &&
+		r.ActiveChain[1].Parent != "" && IsCloneEntrypointLvol(r.ActiveChain[1].Parent) {
+		epName := r.ActiveChain[1].Parent
+		r.isCloneReplica = true
+		r.cloneEntrypointLvolName = epName
+		r.cloneSourceReplicaName = GetSourceReplicaNameFromCloneEntrypointLvolName(epName)
+		r.log.Warnf("Recovered linked-clone info with missing entrypoint: source replica %s, entrypoint %s (needs repair)",
+			r.cloneSourceReplicaName, r.cloneEntrypointLvolName)
+	}
 }
 
 // syncCloneReplicaInfo verifies and fixes the linked-clone source information
@@ -1387,7 +1404,9 @@ func constructActiveChainFromSnapshotLvolMap(replicaName string, snapshotLvolMap
 			// Keep only this replica's root lvol in Children.
 			baseSvcLvol.Children = map[string]*Lvol{rootLvol.Name: rootLvol}
 		}
-		// If epBdevLvol is nil, the entrypoint was deleted; repair happens in syncCloneReplicaInfo.
+		// If epBdevLvol is nil, the entrypoint was deleted; baseSvcLvol stays nil (ActiveChain[0] = nil).
+		// recoverCloneReplicaInfo will detect this via the root lvol's Parent field and still
+		// set isCloneReplica so that syncCloneReplicaInfo can perform the repair.
 	}
 	newChain = append(newChain, baseSvcLvol)
 
