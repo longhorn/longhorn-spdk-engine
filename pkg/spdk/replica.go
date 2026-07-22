@@ -3944,31 +3944,28 @@ func (r *Replica) RebuildingDstFinish(spdkClient *spdkclient.Client) (err error)
 	}
 
 	defer func() {
+		// Always perform cleanup to disconnect the external snapshot NVMe controller.
+		// Without this, subsequent ReplicaDelete would trigger bdev_nvme_detach_controller
+		// which can hang on same-node NVMe-oF connections.
+		// Run cleanup BEFORE assigning final status so it doesn't overwrite error/complete state.
+		r.log.Debugf("Rebuilding dst replica preparing doCleanupForRebuildingDst with src replica %s address %s external snapshot name %s bdev name %s",
+			r.rebuildingDstCache.srcReplicaName, r.rebuildingDstCache.srcReplicaAddress, r.rebuildingDstCache.externalSnapshotName, r.rebuildingDstCache.externalSnapshotBdevName)
+		cleanupErr := r.doCleanupForRebuildingDst(spdkClient)
+		if cleanupErr != nil {
+			r.log.WithError(cleanupErr).Warn("Rebuilding dst cleanup failed")
+		}
+
 		if err != nil {
 			if r.State != types.InstanceStateError {
 				r.State = types.InstanceStateError
 			}
 			r.ErrorMsg = err.Error()
-			if r.rebuildingDstCache.rebuildingError == "" {
-				r.rebuildingDstCache.rebuildingError = err.Error()
-				r.rebuildingDstCache.rebuildingState = types.ProgressStateError
-			}
+			r.rebuildingDstCache.rebuildingError = err.Error()
+			r.rebuildingDstCache.rebuildingState = types.ProgressStateError
 		} else {
 			if r.State != types.InstanceStateError {
 				r.ErrorMsg = ""
 			}
-		}
-
-		// Always perform cleanup to disconnect the external snapshot NVMe controller.
-		// Without this, subsequent ReplicaDelete would trigger bdev_nvme_detach_controller
-		// which can hang on same-node NVMe-oF connections.
-		r.log.Debugf("Rebuilding dst replica preparing doCleanupForRebuildingDst with src replica %s address %s external snapshot name %s bdev name %s",
-			r.rebuildingDstCache.srcReplicaName, r.rebuildingDstCache.srcReplicaAddress, r.rebuildingDstCache.externalSnapshotName, r.rebuildingDstCache.externalSnapshotBdevName)
-		_ = r.doCleanupForRebuildingDst(spdkClient)
-
-		// Mark completion only after cleanup so observers always see the final
-		// state (Complete or cleared) rather than Complete followed by "".
-		if err == nil {
 			r.rebuildingDstCache.processingState = types.ProgressStateComplete
 			r.rebuildingDstCache.rebuildingState = types.ProgressStateComplete
 			r.lastRebuildingAt = time.Now()
