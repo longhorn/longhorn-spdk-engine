@@ -333,9 +333,26 @@ func exceedsInPlaceGrowthCeiling(newSize, creationSize uint64) bool {
 	return creationSize > 0 && newSize > spdktypes.EcLvstoreMaxGrowthFactor*creationSize
 }
 
-// assertEcUsableFitsSpecNoLock fails if the EC bdev is smaller than SpecSize.
-// The size comes from BdevGetBdevs because BdevEcInfo has no size field. The
-// caller must hold sg's lock.
+// ecUsableExceedsCreationCap reports whether the EC bdev is too large for
+// SPDK to size lvstore metadata for (EcLvstoreMaxCreationSize). SPDK floors
+// the device to whole clusters before sizing, and admission
+// (ValidateECCreationSize) compares the same way, so compare in clusters to
+// agree with both at the boundary.
+func ecUsableExceedsCreationCap(usable uint64) bool {
+	return usable/spdktypes.EcLvstoreClusterSize > uint64(spdktypes.EcLvstoreMaxCreationSize)/spdktypes.EcLvstoreClusterSize
+}
+
+// assertEcUsableFitsSpecNoLock fails if the EC bdev cannot host the lvstore
+// and head lvol. Two checks:
+//
+//   - The device size, floored to whole clusters, must not exceed
+//     EcLvstoreMaxCreationSize. SPDK sizes lvstore metadata from the device
+//     size, not SpecSize, and the shards over-provision, so the device is
+//     what must stay under the limit.
+//   - The device size must be at least SpecSize.
+//
+// The size comes from BdevGetBdevs because BdevEcInfo has no size field.
+// The caller must hold sg's lock.
 func (sg *ShardGroup) assertEcUsableFitsSpecNoLock(spdkClient *spdkclient.Client) error {
 	bdevList, err := spdkClient.BdevGetBdevs(sg.EcBdevName, 0)
 	if err != nil {
@@ -345,10 +362,20 @@ func (sg *ShardGroup) assertEcUsableFitsSpecNoLock(spdkClient *spdkclient.Client
 		return fmt.Errorf("expected exactly one EC bdev %s for capacity check, got %d", sg.EcBdevName, len(bdevList))
 	}
 	bdev := bdevList[0]
+	usable := bdev.NumBlocks * uint64(bdev.BlockSize)
+	if ecUsableExceedsCreationCap(usable) {
+		return fmt.Errorf("EC bdev %s size %d bytes exceeds the lvstore creation limit %d bytes: volume size %d is too large",
+			sg.EcBdevName, usable, uint64(spdktypes.EcLvstoreMaxCreationSize), sg.SpecSize)
+	}
+	if modeled := spdktypes.EcUsableSize(int64(sg.SpecSize), int(sg.DataChunks), int(sg.StripSizeKb)); modeled != usable {
+		sg.log.Warnf("EC bdev %s usable size %d bytes differs from the %d bytes modeled from the shard sizing formula; "+
+			"a shard was sized off-formula, so admission and this check may disagree near the creation cap",
+			sg.EcBdevName, usable, modeled)
+	}
 	if !ecUsableFitsSpec(bdev.NumBlocks, bdev.BlockSize, sg.SpecSize) {
 		return fmt.Errorf("EC bdev %s usable capacity %d bytes < required %d bytes "+
 			"(shards under-sized: per-shard size must budget the EC front reservation and lvstore metadata)",
-			sg.EcBdevName, bdev.NumBlocks*uint64(bdev.BlockSize), sg.SpecSize)
+			sg.EcBdevName, usable, sg.SpecSize)
 	}
 	return nil
 }
@@ -609,9 +636,11 @@ func (sg *ShardGroup) Create(spdkClient *spdkclient.Client, superiorPortAllocato
 			return nil, fmt.Errorf("salvage requested but existing lvstore/head not found for shardgroup %s", sg.Name)
 		}
 
-		// Fail fast if the EC bdev is too small to hold the head. The head is
-		// thin, so SPDK would otherwise accept an undersized volume and only
-		// fail later on write.
+		// Fail fast if the EC bdev cannot host the head: too large for
+		// SPDK's lvstore md-pages sizing bound, or too small for SpecSize
+		// (the head is thin, so SPDK would otherwise accept an undersized
+		// volume and only fail later on write). Only the fresh-create path
+		// is guarded: an existing lvstore was created under the bound.
 		if err := sg.assertEcUsableFitsSpecNoLock(spdkClient); err != nil {
 			return nil, err
 		}
@@ -990,8 +1019,9 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 		return fmt.Errorf("expected exactly one lvstore for uuid %s, found %d", sg.LvsUUID, len(lvstoreList))
 	}
 	if !lvstoreUsableFitsSpec(lvstoreList[0].TotalDataClusters, lvstoreList[0].ClusterSize, newSize) {
-		return fmt.Errorf("lvstore %s on EC bdev %s can back only %d of %d bytes after grow "+
-			"(shards under-sized: blobstore metadata not budgeted)",
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"lvstore %s on EC bdev %s can back only %d of %d bytes after grow: "+
+				"shards may be under-sized, or the lvstore metadata cannot support this size",
 			sg.LvsName, sg.EcBdevName, lvstoreList[0].TotalDataClusters*lvstoreList[0].ClusterSize, newSize)
 	}
 

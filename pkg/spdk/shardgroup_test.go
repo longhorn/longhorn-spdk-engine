@@ -116,6 +116,24 @@ func (s *TestSuite) TestEcUsableFitsSpecBoundary(c *C) {
 	c.Assert(ecUsableFitsSpec(1<<40, blockSize, (1<<40)*uint64(blockSize)), Equals, true)
 }
 
+// TestEcUsableCreationCapBoundary pins the creation-cap boundary to the
+// cluster-floored comparison SPDK and admission (ValidateECCreationSize)
+// use: a partial cluster over the raw cap still passes; one whole cluster
+// over fails.
+func (s *TestSuite) TestEcUsableCreationCapBoundary(c *C) {
+	fmt.Println("Testing ecUsableExceedsCreationCap cluster-floored boundary")
+
+	cap := uint64(spdktypes.EcLvstoreMaxCreationSize)
+	cluster := uint64(spdktypes.EcLvstoreClusterSize)
+
+	// At the cap passes.
+	c.Assert(ecUsableExceedsCreationCap(cap), Equals, false)
+	// A partial cluster over passes: SPDK floors the device to clusters.
+	c.Assert(ecUsableExceedsCreationCap(cap+cluster-1), Equals, false)
+	// One whole cluster over fails.
+	c.Assert(ecUsableExceedsCreationCap(cap+cluster), Equals, true)
+}
+
 // TestLvstoreUsableFitsSpecBoundary covers the equality boundary and the
 // production failure geometry: the 33 GiB head needed 8448 clusters, but
 // blobstore metadata left only 8439.
