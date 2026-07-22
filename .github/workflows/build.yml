@@ -41,6 +41,7 @@ jobs:
 
   build-arm64:
     name: Build ARM64 binaries
+    if: false
     runs-on: oracle-vm-16cpu-64gb-arm64
     steps:
     - name: Checkout code
