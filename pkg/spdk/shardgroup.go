@@ -326,6 +326,13 @@ func lvstoreUsableFitsSpec(totalDataClusters, clusterSize, specSize uint64) bool
 	return totalDataClusters*clusterSize >= specSize
 }
 
+// exceedsInPlaceGrowthCeiling reports whether newSize is beyond the
+// in-place growth ceiling (EcLvstoreMaxGrowthFactor x creationSize).
+// creationSize == 0 means unknown; the ceiling is not enforced.
+func exceedsInPlaceGrowthCeiling(newSize, creationSize uint64) bool {
+	return creationSize > 0 && newSize > spdktypes.EcLvstoreMaxGrowthFactor*creationSize
+}
+
 // assertEcUsableFitsSpecNoLock fails if the EC bdev is smaller than SpecSize.
 // The size comes from BdevGetBdevs because BdevEcInfo has no size field. The
 // caller must hold sg's lock.
@@ -873,11 +880,16 @@ func (sg *ShardGroup) SetErrorState() {
 // All k+m shards must be resized via ShardExpand on their nodes before
 // calling this.
 //
+// creationSize is the volume size when the ShardGroup was created. The
+// lvstore metadata is sized at creation for EcLvstoreMaxGrowthFactor x that
+// size, so expansion beyond the ceiling is rejected. Zero means unknown:
+// the check is skipped and the post-grow capacity check is the backstop.
+//
 // Unlike Shard.Expand, a failure here does not set Error on the
 // ShardGroup directly. Sync sees IsExposed=true with no live subsystem
 // and moves the ShardGroup to Error. The two layers recover differently,
 // so do not copy the Shard.Expand error-marking defer here.
-func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize uint64) (err error) {
+func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSize uint64) (err error) {
 	sg.Lock()
 	prevSpecSize := sg.SpecSize
 	defer func() {
@@ -911,6 +923,18 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize uint64) (err
 	if sg.SpecSize == newSize {
 		sg.log.Infof("Shardgroup %s already at size %d", sg.Name, newSize)
 		return nil
+	}
+
+	// Backstop for callers that skipped ExpandPrecheck. By this point the
+	// shard lvols were already resized by per-shard ShardExpand calls; this
+	// check only keeps the EC bdev, lvstore, and head lvol at their current
+	// size. The oversized shard lvols are thin, so the extra allocation is
+	// harmless and is reused if a legal-size expansion follows.
+	if exceedsInPlaceGrowthCeiling(newSize, creationSize) {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"shardgroup %s: new size %d exceeds the %dx in-place growth ceiling %d (creation size %d); shard-group rebuild required",
+			sg.Name, newSize, spdktypes.EcLvstoreMaxGrowthFactor,
+			uint64(spdktypes.EcLvstoreMaxGrowthFactor)*creationSize, creationSize)
 	}
 
 	sg.log.Infof("Expanding shardgroup to size %d", newSize)
@@ -1026,15 +1050,29 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize uint64) (err
 }
 
 // ExpandPrecheck validates that the ShardGroup's EC stack is in a state where
-// expansion can proceed: no rebuild in progress, no scrub in progress, all
-// slots NORMAL. Returns expansionRequired=true if the new size is larger than
-// the current size and preconditions are met.
-func (sg *ShardGroup) ExpandPrecheck(spdkClient *spdkclient.Client, newSize uint64) (expansionRequired bool, err error) {
+// expansion can proceed: the target is within the in-place growth ceiling, no
+// rebuild in progress, no scrub in progress, all slots NORMAL. Returns
+// expansionRequired=true if the new size is larger than the current size and
+// preconditions are met.
+//
+// creationSize is the volume size when the ShardGroup was created; pass 0
+// when unknown to skip the ceiling check.
+func (sg *ShardGroup) ExpandPrecheck(spdkClient *spdkclient.Client, newSize, creationSize uint64) (expansionRequired bool, err error) {
 	sg.RLock()
 	defer sg.RUnlock()
 
 	if sg.SpecSize >= newSize {
 		return false, nil
+	}
+
+	// Gate the ceiling here, before the caller resizes any shard lvol. The
+	// matching check in Expand is only a backstop for callers that skip the
+	// precheck.
+	if exceedsInPlaceGrowthCeiling(newSize, creationSize) {
+		return false, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"shardgroup %s: new size %d exceeds the %dx in-place growth ceiling %d (creation size %d); shard-group rebuild required",
+			sg.Name, newSize, spdktypes.EcLvstoreMaxGrowthFactor,
+			uint64(spdktypes.EcLvstoreMaxGrowthFactor)*creationSize, creationSize)
 	}
 
 	ecInfo, err := sg.getEcBdevInfoNoLock(spdkClient)
