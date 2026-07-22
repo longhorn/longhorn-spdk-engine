@@ -2865,15 +2865,25 @@ func (r *Replica) snapshotLinkedCloneSrcStart(spdkClient *spdkclient.Client, sna
 			}
 			expectedParentLvolName := snapLvolName
 			if entrypointParent != expectedParentLvolName {
-				r.log.Warnf("Clone entrypoint %s has wrong or missing parent (got %q, expected %q); "+
-					"the src snapshot was likely collapsed into it during a concurrent rebuild. "+
-					"Deleting orphaned entrypoint to recreate from current src snapshot.",
-					epLvolName, entrypointParent, expectedParentLvolName)
-				if _, delErr := spdkClient.BdevLvolDelete(epBdev.UUID); delErr != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(delErr) {
-					return errors.Wrapf(delErr, "failed to delete orphaned entrypoint %s", epLvolName)
+				if len(epInfo.CloneReplicas) > 0 {
+					cloneNames := make([]string, 0, len(epInfo.CloneReplicas))
+					for name := range epInfo.CloneReplicas {
+						cloneNames = append(cloneNames, name)
+					}
+					r.log.Warnf("Clone entrypoint %s has wrong parent (got %q, expected %q) but still has active clone replicas %v referencing it; "+
+						"cannot delete, will reuse existing entrypoint",
+						epLvolName, entrypointParent, expectedParentLvolName, cloneNames)
+				} else {
+					r.log.Warnf("Clone entrypoint %s has wrong or missing parent (got %q, expected %q); "+
+						"the src snapshot was likely collapsed into it during a concurrent rebuild. "+
+						"Deleting orphaned entrypoint to recreate from current src snapshot.",
+						epLvolName, entrypointParent, expectedParentLvolName)
+					if _, delErr := spdkClient.BdevLvolDelete(epBdev.UUID); delErr != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(delErr) {
+						return errors.Wrapf(delErr, "failed to delete orphaned entrypoint %s", epLvolName)
+					}
+					delete(r.cloneEntrypointMap, epLvolName)
+					epInfo = nil
 				}
-				delete(r.cloneEntrypointMap, epLvolName)
-				epInfo = nil
 			}
 		}
 	}
