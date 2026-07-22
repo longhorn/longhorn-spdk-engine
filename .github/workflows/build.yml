@@ -14,7 +14,42 @@ jobs:
     runs-on: cncf-ubuntu-16-64-x86
     steps:
     - name: Checkout code
+<<<<<<< HEAD
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+=======
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+    - name: Install make curl git kmod
+      run: |
+        sudo apt update
+        sudo apt-get -y install make curl git kmod
+
+    - name: Set up hugepages
+      run: |
+        sudo sh -c "echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages"
+        grep Huge /proc/meminfo
+
+    - name: Load kernel modules
+      run: sudo modprobe nvme-tcp vfio_pci uio_pci_generic ublk_drv
+
+    # Build binaries
+    - name: Run ci
+      run: make ci
+
+    - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+      with:
+        files: ./coverage.out
+        flags: unittests
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+  build-arm64:
+    name: Build ARM64 binaries
+    if: false
+    runs-on: oracle-vm-16cpu-64gb-arm64
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+>>>>>>> 4846914 (chore(workflow): disable arm64 testing)
 
     - name: Install make curl git kmod
       run: |
