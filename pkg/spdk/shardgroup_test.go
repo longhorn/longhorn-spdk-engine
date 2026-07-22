@@ -193,6 +193,63 @@ func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 	}
 }
 
+func (s *TestSuite) TestExceedsInPlaceGrowthCeilingBoundary(c *C) {
+	fmt.Println("Testing exceedsInPlaceGrowthCeiling boundary and the unknown-creation-size fail-open")
+
+	const creationSize = uint64(4 << 30)
+	ceiling := uint64(spdktypes.EcLvstoreMaxGrowthFactor) * creationSize
+
+	// Exactly 10x is allowed (ceiling is inclusive).
+	c.Assert(exceedsInPlaceGrowthCeiling(ceiling, creationSize), Equals, false)
+	// One MiB past the ceiling is rejected.
+	c.Assert(exceedsInPlaceGrowthCeiling(ceiling+1<<20, creationSize), Equals, true)
+	// Unknown creation size never rejects.
+	c.Assert(exceedsInPlaceGrowthCeiling(1<<60, 0), Equals, false)
+}
+
+// TestShardGroupExpandGrowthCeilingPreflight verifies the ceiling rejection
+// happens before any SPDK call: a nil spdkClient would panic otherwise.
+func (s *TestSuite) TestShardGroupExpandGrowthCeilingPreflight(c *C) {
+	fmt.Println("Testing ShardGroup.Expand rejects beyond-ceiling targets before any SPDK call")
+
+	const creationSize = uint64(4 << 20)
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", creationSize, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg.State = types.InstanceStateRunning
+
+	overCeiling := uint64(spdktypes.EcLvstoreMaxGrowthFactor)*creationSize + 1<<20
+	err := sg.Expand(nil, overCeiling, creationSize)
+	c.Assert(err, NotNil)
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+	// The volume is untouched and no update is broadcast.
+	c.Assert(sg.SpecSize, Equals, creationSize)
+	c.Assert(len(sg.UpdateCh), Equals, 0)
+}
+
+// TestShardGroupExpandPrecheckGrowthCeilingGate verifies the precheck rejects
+// beyond-ceiling targets before any SPDK call: a nil spdkClient would panic
+// otherwise.
+func (s *TestSuite) TestShardGroupExpandPrecheckGrowthCeilingGate(c *C) {
+	fmt.Println("Testing ShardGroup.ExpandPrecheck rejects beyond-ceiling targets before any SPDK call")
+
+	const creationSize = uint64(4 << 20)
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", creationSize, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg.State = types.InstanceStateRunning
+
+	overCeiling := uint64(spdktypes.EcLvstoreMaxGrowthFactor)*creationSize + 1<<20
+	required, err := sg.ExpandPrecheck(nil, overCeiling, creationSize)
+	c.Assert(err, NotNil)
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+	c.Assert(required, Equals, false)
+
+	// At or below the current size the precheck short-circuits to "no
+	// expansion required" before the ceiling gate.
+	required, err = sg.ExpandPrecheck(nil, creationSize, creationSize)
+	c.Assert(err, IsNil)
+	c.Assert(required, Equals, false)
+}
+
 func (s *TestSuite) TestShardGroupExpandDoesNotBroadcastWithoutSizeChange(c *C) {
 	fmt.Println("Testing ShardGroup.Expand does not broadcast an update when SpecSize is unchanged")
 
