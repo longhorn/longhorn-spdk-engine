@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,6 +90,15 @@ const (
 	spdkTargetStartupProbeDelay = 1 * time.Second
 	spdkTargetStopPollInterval  = 200 * time.Millisecond
 )
+
+func multiThreadTestConcurrentCount() int {
+	// The ARM64 CI runner has less headroom for the race-enabled integration
+	// suite, so keep these tests concurrent but lower their peak resource usage.
+	if runtime.GOARCH == "arm64" {
+		return 3
+	}
+	return 5
+}
 
 func Test(t *testing.T) { TestingT(t) }
 
@@ -1907,7 +1917,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 		c.Assert(disk, IsNil)
 	}()
 
-	concurrentCount := 5
+	concurrentCount := multiThreadTestConcurrentCount()
 	dataCountInMB := int64(100)
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
@@ -2289,7 +2299,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 		}
 	}
 
-	concurrentCount := 5
+	concurrentCount := multiThreadTestConcurrentCount()
 	dataCountInMB := int64(10)
 	wg := sync.WaitGroup{}
 	wg.Add(concurrentCount)
@@ -3379,7 +3389,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 		backingImageName = bi.Name
 	}
 
-	concurrentCount := 5
+	concurrentCount := multiThreadTestConcurrentCount()
 	dataCountInMB := int64(100)
 
 	// Pre-create all resources concurrently — each goroutine creates the
