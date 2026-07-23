@@ -940,15 +940,8 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 	if sg.SpecSize > newSize {
 		return fmt.Errorf("cannot shrink shardgroup %s from %d to %d", sg.Name, sg.SpecSize, newSize)
 	}
-	// False-success window: SpecSize is committed right after the head-lvol
-	// resize, before the re-expose. If the re-expose failed, a retry lands
-	// here and returns success while the NVMe-oF target is still down; Sync
-	// is what flags the torn-down subsystem and moves the ShardGroup to
-	// Error. So SpecSize == newSize does not guarantee the expose completed.
-	// Follow-up: once bdev_ec_resize distinguishes "base bdevs not grown"
-	// (-EALREADY, idempotent) from a genuine size error, tolerate that error
-	// at the BdevEcResize call, move the SpecSize commit back to the end of
-	// the function, and this fast path becomes honest again.
+	// SpecSize is committed only after the whole chain succeeds, so
+	// equality here means the expansion completed.
 	if sg.SpecSize == newSize {
 		sg.log.Infof("Shardgroup %s already at size %d", sg.Name, newSize)
 		return nil
@@ -989,8 +982,9 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 	// BDEV_EVENT_RESIZE (no-op) instead of BDEV_EVENT_REMOVE (failure cascade),
 	// so the slot stays NORMAL with no spurious rebuild triggered.
 	//
-	// Without the SPDK patch this reset is a no-op for size refresh and the
-	// BdevEcResize below would fail with -114 "Base bdevs have not grown".
+	// Without the SPDK patch this reset is a no-op for size refresh, the
+	// BdevEcResize below would be a no-op (resized=false), and the
+	// post-grow capacity check would reject the expansion.
 	for slotIndex := uint32(0); slotIndex < sg.DataChunks+sg.ParityChunks; slotIndex++ {
 		controllerName := GetShardLvolName(sg.VolumeName, slotIndex)
 		if _, err := spdkClient.BdevNvmeResetController(controllerName); err != nil {
@@ -998,9 +992,16 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 		}
 	}
 
-	// 2. Resize bdev_ec to pick up the larger base bdevs.
-	if _, err := spdkClient.BdevEcResize(sg.EcBdevName); err != nil {
+	// 2. Resize bdev_ec to pick up the larger base bdevs. A no-op
+	// (resized=false) means the EC bdev already matches its base bdevs:
+	// a retry, or shards that did not grow. The post-grow capacity check
+	// decides which.
+	resizeResp, err := spdkClient.BdevEcResize(sg.EcBdevName)
+	if err != nil {
 		return errors.Wrapf(err, "failed to resize EC bdev %s", sg.EcBdevName)
+	}
+	if !resizeResp.Resized {
+		sg.log.Warnf("EC bdev %s resize was a no-op; resuming a prior expansion or shards did not grow", sg.EcBdevName)
 	}
 
 	// 3. Grow the lvstore to fill the resized bdev_ec.
@@ -1059,13 +1060,6 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 		return fmt.Errorf("head lvol %s was not resized", sg.HeadAlias)
 	}
 
-	// Record the new size as soon as the head resize lands. If the re-expose
-	// or the cache refresh below fails, a retried Expand must not re-run
-	// BdevEcResize - it fails when the base bdevs have not grown again. The
-	// retry hits the size-equality fast path instead, and Sync flags the
-	// torn-down subsystem if the re-expose was the step that failed.
-	sg.SpecSize = newSize
-
 	if err := spdkClient.StartExposeBdev(sg.Nqn, sg.HeadLvolUUID, generateNGUID(sg.HeadLvolName),
 		sg.IP, strconv.Itoa(int(sg.Port))); err != nil {
 		return errors.Wrapf(err, "failed to re-expose shardgroup %s after head-lvol resize", sg.Name)
@@ -1074,6 +1068,11 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
 		return errors.Wrapf(err, "failed to refresh shardgroup snapshot/head cache after expansion for %s", sg.Name)
 	}
+
+	// Commit the new size only after the whole chain succeeded. Every
+	// step above is idempotent, so a retried Expand resumes the chain
+	// after any mid-chain failure.
+	sg.SpecSize = newSize
 
 	sg.log.Info("Expanded shardgroup")
 	return nil

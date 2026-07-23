@@ -166,9 +166,8 @@ func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 		{"rejects error", types.InstanceStateError, 8 << 20, true, grpccodes.FailedPrecondition},
 		{"rejects unaligned size", types.InstanceStateRunning, 8<<20 + 1, true, grpccodes.OK},
 		{"rejects shrink", types.InstanceStateRunning, 2 << 20, true, grpccodes.OK},
-		// No-op at target size is also the retry path after a partial expansion
-		// failure: SpecSize is recorded right after the head resize, so a retried
-		// Expand hits this fast path instead of re-running BdevEcResize.
+		// SpecSize is committed only after the full expansion chain succeeds,
+		// so being at the target size means there is nothing to do.
 		{"no-op at target size", types.InstanceStateRunning, initialSize, false, grpccodes.OK},
 	}
 
