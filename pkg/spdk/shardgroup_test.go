@@ -134,6 +134,25 @@ func (s *TestSuite) TestEcUsableCreationCapBoundary(c *C) {
 	c.Assert(ecUsableExceedsCreationCap(cap+cluster), Equals, true)
 }
 
+// TestDiscoveredSpecSize pins the resume rule for salvage after an
+// interrupted expansion: a head smaller than the requested spec wins (the
+// expansion must re-run from the head size); a head at or above the spec
+// keeps the requested size (clean path or SPDK cluster rounding).
+func (s *TestSuite) TestDiscoveredSpecSize(c *C) {
+	fmt.Println("Testing discoveredSpecSize resume rule")
+
+	const gib = uint64(1 << 30)
+
+	// Interrupted expansion: head still at the old size.
+	c.Assert(discoveredSpecSize(10*gib, 20*gib), Equals, 10*gib)
+	// Clean path: head matches the spec.
+	c.Assert(discoveredSpecSize(10*gib, 10*gib), Equals, 10*gib)
+	// Cluster rounding: head slightly larger than the spec.
+	c.Assert(discoveredSpecSize(10*gib+2*1024*1024, 10*gib), Equals, 10*gib)
+	// One byte short is still a pending expansion.
+	c.Assert(discoveredSpecSize(10*gib-1, 10*gib), Equals, 10*gib-1)
+}
+
 // TestLvstoreUsableFitsSpecBoundary covers the equality boundary and the
 // production failure geometry: the 33 GiB head needed 8448 clusters, but
 // blobstore metadata left only 8439.
@@ -166,9 +185,8 @@ func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 		{"rejects error", types.InstanceStateError, 8 << 20, true, grpccodes.FailedPrecondition},
 		{"rejects unaligned size", types.InstanceStateRunning, 8<<20 + 1, true, grpccodes.OK},
 		{"rejects shrink", types.InstanceStateRunning, 2 << 20, true, grpccodes.OK},
-		// No-op at target size is also the retry path after a partial expansion
-		// failure: SpecSize is recorded right after the head resize, so a retried
-		// Expand hits this fast path instead of re-running BdevEcResize.
+		// SpecSize is committed only after the full expansion chain succeeds,
+		// so being at the target size means there is nothing to do.
 		{"no-op at target size", types.InstanceStateRunning, initialSize, false, grpccodes.OK},
 	}
 
