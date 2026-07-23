@@ -116,6 +116,41 @@ func (s *TestSuite) TestEcUsableFitsSpecBoundary(c *C) {
 	c.Assert(ecUsableFitsSpec(1<<40, blockSize, (1<<40)*uint64(blockSize)), Equals, true)
 }
 
+// TestEcUsableCreationCapBoundary pins the creation-cap boundary to the
+// cluster-floored comparison SPDK and admission (ValidateECCreationSize)
+// use: a partial cluster over the raw cap still passes; one whole cluster
+// over fails.
+func (s *TestSuite) TestEcUsableCreationCapBoundary(c *C) {
+	fmt.Println("Testing ecUsableExceedsCreationCap cluster-floored boundary")
+
+	cap := uint64(spdktypes.EcLvstoreMaxCreationSize)
+	cluster := uint64(spdktypes.EcLvstoreClusterSize)
+
+	// At the cap passes.
+	c.Assert(ecUsableExceedsCreationCap(cap), Equals, false)
+	// A partial cluster over passes: SPDK floors the device to clusters.
+	c.Assert(ecUsableExceedsCreationCap(cap+cluster-1), Equals, false)
+	// One whole cluster over fails.
+	c.Assert(ecUsableExceedsCreationCap(cap+cluster), Equals, true)
+}
+
+// TestLvstoreUsableFitsSpecBoundary covers the equality boundary and the
+// production failure geometry: the 33 GiB head needed 8448 clusters, but
+// blobstore metadata left only 8439.
+func (s *TestSuite) TestLvstoreUsableFitsSpecBoundary(c *C) {
+	fmt.Println("Testing lvstoreUsableFitsSpec equality boundary and the production geometry")
+
+	const clusterSize = uint64(4 << 20)
+	const spec = uint64(33 << 30)
+
+	// Exact fit passes: 8448 clusters back a 33 GiB head with zero slack.
+	c.Assert(lvstoreUsableFitsSpec(8448, clusterSize, spec), Equals, true)
+	// The production failure: blobstore metadata took 9 of the 8448 clusters.
+	c.Assert(lvstoreUsableFitsSpec(8439, clusterSize, spec), Equals, false)
+	// One byte short fails.
+	c.Assert(lvstoreUsableFitsSpec(1000, clusterSize, 1000*clusterSize+1), Equals, false)
+}
+
 func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 	const initialSize = uint64(4 << 20)
 
@@ -131,9 +166,8 @@ func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 		{"rejects error", types.InstanceStateError, 8 << 20, true, grpccodes.FailedPrecondition},
 		{"rejects unaligned size", types.InstanceStateRunning, 8<<20 + 1, true, grpccodes.OK},
 		{"rejects shrink", types.InstanceStateRunning, 2 << 20, true, grpccodes.OK},
-		// No-op at target size is also the retry path after a partial expansion
-		// failure: SpecSize is recorded right after the head resize, so a retried
-		// Expand hits this fast path instead of re-running BdevEcResize.
+		// SpecSize is committed only after the full expansion chain succeeds,
+		// so being at the target size means there is nothing to do.
 		{"no-op at target size", types.InstanceStateRunning, initialSize, false, grpccodes.OK},
 	}
 
@@ -144,7 +178,7 @@ func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 			map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
 		sg.State = tc.state
 
-		err := sg.Expand(nil, tc.target)
+		err := sg.Expand(nil, tc.target, 0)
 		if tc.wantErr {
 			c.Assert(err, NotNil, Commentf("case=%s", tc.name))
 			if tc.wantCode != grpccodes.OK {
@@ -158,6 +192,63 @@ func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 	}
 }
 
+func (s *TestSuite) TestExceedsInPlaceGrowthCeilingBoundary(c *C) {
+	fmt.Println("Testing exceedsInPlaceGrowthCeiling boundary and the unknown-creation-size fail-open")
+
+	const creationSize = uint64(4 << 30)
+	ceiling := uint64(spdktypes.EcLvstoreMaxGrowthFactor) * creationSize
+
+	// Exactly 10x is allowed (ceiling is inclusive).
+	c.Assert(exceedsInPlaceGrowthCeiling(ceiling, creationSize), Equals, false)
+	// One MiB past the ceiling is rejected.
+	c.Assert(exceedsInPlaceGrowthCeiling(ceiling+1<<20, creationSize), Equals, true)
+	// Unknown creation size never rejects.
+	c.Assert(exceedsInPlaceGrowthCeiling(1<<60, 0), Equals, false)
+}
+
+// TestShardGroupExpandGrowthCeilingPreflight verifies the ceiling rejection
+// happens before any SPDK call: a nil spdkClient would panic otherwise.
+func (s *TestSuite) TestShardGroupExpandGrowthCeilingPreflight(c *C) {
+	fmt.Println("Testing ShardGroup.Expand rejects beyond-ceiling targets before any SPDK call")
+
+	const creationSize = uint64(4 << 20)
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", creationSize, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg.State = types.InstanceStateRunning
+
+	overCeiling := uint64(spdktypes.EcLvstoreMaxGrowthFactor)*creationSize + 1<<20
+	err := sg.Expand(nil, overCeiling, creationSize)
+	c.Assert(err, NotNil)
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+	// The volume is untouched and no update is broadcast.
+	c.Assert(sg.SpecSize, Equals, creationSize)
+	c.Assert(len(sg.UpdateCh), Equals, 0)
+}
+
+// TestShardGroupExpandPrecheckGrowthCeilingGate verifies the precheck rejects
+// beyond-ceiling targets before any SPDK call: a nil spdkClient would panic
+// otherwise.
+func (s *TestSuite) TestShardGroupExpandPrecheckGrowthCeilingGate(c *C) {
+	fmt.Println("Testing ShardGroup.ExpandPrecheck rejects beyond-ceiling targets before any SPDK call")
+
+	const creationSize = uint64(4 << 20)
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", creationSize, 2, 1, 64,
+		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg.State = types.InstanceStateRunning
+
+	overCeiling := uint64(spdktypes.EcLvstoreMaxGrowthFactor)*creationSize + 1<<20
+	required, err := sg.ExpandPrecheck(nil, overCeiling, creationSize)
+	c.Assert(err, NotNil)
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+	c.Assert(required, Equals, false)
+
+	// At or below the current size the precheck short-circuits to "no
+	// expansion required" before the ceiling gate.
+	required, err = sg.ExpandPrecheck(nil, creationSize, creationSize)
+	c.Assert(err, IsNil)
+	c.Assert(required, Equals, false)
+}
+
 func (s *TestSuite) TestShardGroupExpandDoesNotBroadcastWithoutSizeChange(c *C) {
 	fmt.Println("Testing ShardGroup.Expand does not broadcast an update when SpecSize is unchanged")
 
@@ -166,8 +257,8 @@ func (s *TestSuite) TestShardGroupExpandDoesNotBroadcastWithoutSizeChange(c *C) 
 	sg.State = types.InstanceStateRunning
 
 	// No-op at target size and rejected shrink both leave SpecSize untouched.
-	c.Assert(sg.Expand(nil, 4<<20), IsNil)
-	c.Assert(sg.Expand(nil, 2<<20), NotNil)
+	c.Assert(sg.Expand(nil, 4<<20, 0), IsNil)
+	c.Assert(sg.Expand(nil, 2<<20, 0), NotNil)
 	c.Assert(len(sg.UpdateCh), Equals, 0)
 }
 
