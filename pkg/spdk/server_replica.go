@@ -39,6 +39,9 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 	if req.LvsName == "" && req.LvsUuid == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "either lvstore name or UUID is required")
 	}
+	if err := ValidateReplicaOrSnapshotName(req.Name); err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid replica name: %v", err)
+	}
 
 	r, err := s.newReplica(req)
 	if err != nil {
@@ -184,6 +187,9 @@ func (s *Server) ReplicaSnapshotCreate(ctx context.Context, req *spdkrpc.Snapsho
 	}
 	if req.SnapshotName == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "snapshot name is required")
+	}
+	if err := ValidateReplicaOrSnapshotName(req.SnapshotName); err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid snapshot name: %v", err)
 	}
 
 	s.RLock()
