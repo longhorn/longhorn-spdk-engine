@@ -74,7 +74,30 @@ const (
 
 var (
 	cloneEntrypointLvolSeparator = "-" + ReplicaCloneEntrypointLvolInfix + "-"
+
+	// reservedNameTokens are substrings that must not appear in user-supplied
+	// replica or snapshot names. Their presence would cause the classification
+	// helpers (IsCloneEntrypointLvol, IsCloneEntrypointTmpHeadLvol, etc.) and
+	// extraction helpers (GetSourceReplicaNameFromCloneEntrypointLvolName, etc.)
+	// to misidentify ordinary lvols as internal objects.
+	reservedNameTokens = []string{cloneEntrypointLvolSeparator}
+	reservedNameSuffix = "-" + ReplicaCloneEntrypointTmpHeadSuffix
 )
+
+// ValidateReplicaOrSnapshotName checks that a user-supplied replica or snapshot
+// name does not contain reserved tokens that would confuse the internal lvol
+// classification and extraction helpers.
+func ValidateReplicaOrSnapshotName(name string) error {
+	for _, token := range reservedNameTokens {
+		if strings.Contains(name, token) {
+			return fmt.Errorf("name %q contains reserved token %q which is used internally for clone entrypoint management", name, token)
+		}
+	}
+	if strings.HasSuffix(name, reservedNameSuffix) {
+		return fmt.Errorf("name %q ends with reserved suffix %q which is used internally for clone entrypoint temporary heads", name, reservedNameSuffix)
+	}
+	return nil
+}
 
 var (
 	// ErrEngineFrontendCreateInvalidArgument indicates the create request carries

@@ -468,6 +468,11 @@ func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.Snapshot
 	if req.Name == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name are required")
 	}
+	if req.SnapshotName != "" {
+		if err := ValidateReplicaOrSnapshotName(req.SnapshotName); err != nil {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid snapshot name: %v", err)
+		}
+	}
 
 	s.RLock()
 	e := s.engineMap[req.Name]
