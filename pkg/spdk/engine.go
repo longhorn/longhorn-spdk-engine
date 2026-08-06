@@ -14,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 
-	retrygo "github.com/avast/retry-go/v4"
+	retrygo "github.com/avast/retry-go/v5"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
@@ -1814,14 +1814,15 @@ func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, sna
 			replicaBdevList = append(replicaBdevList, replicaStatus.BdevName())
 		}
 
-		engineErr = retrygo.Do(
+		engineErr = retrygo.New(
+			retrygo.Attempts(uint(maxRetries)),
+			retrygo.Delay(retryInterval),
+			retrygo.LastErrorOnly(true),
+		).Do(
 			func() error {
 				_, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList, "")
 				return err
 			},
-			retrygo.Attempts(uint(maxRetries)),
-			retrygo.Delay(retryInterval),
-			retrygo.LastErrorOnly(true),
 		)
 	}
 
@@ -2705,7 +2706,12 @@ func (e *Engine) waitForRestoreComplete() error {
 		"snapshotName": e.RestoringSnapshotName,
 	}).Info("Waiting for restore to complete")
 
-	err := retrygo.Do(
+	err := retrygo.New(
+		retrygo.Delay(restorePeriodicRefreshInterval),
+		retrygo.MaxDelay(restorePeriodicRefreshInterval),
+		retrygo.DelayType(retrygo.FixedDelay),
+		retrygo.Attempts(0), // retry forever until success or unrecoverable error
+	).Do(
 		func() error {
 			e.restore.RLock()
 			restoreProgress := e.restore.Progress
@@ -2735,10 +2741,6 @@ func (e *Engine) waitForRestoreComplete() error {
 
 			return fmt.Errorf("restore is still in progress")
 		},
-		retrygo.Delay(restorePeriodicRefreshInterval),
-		retrygo.MaxDelay(restorePeriodicRefreshInterval),
-		retrygo.DelayType(retrygo.FixedDelay),
-		retrygo.Attempts(0), // retry forever until success or unrecoverable error
 	)
 
 	if err != nil {
