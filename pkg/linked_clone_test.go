@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/avast/retry-go/v4"
+	"github.com/avast/retry-go/v5"
 
 	. "gopkg.in/check.v1"
 
@@ -325,7 +325,7 @@ func (s *TestSuite) TestLinkedCloneSyncCleanupTmpHeadOnlyEntrypoint(c *C) {
 		// We must do this atomically with retries because the monitoring loop
 		// fires every 3 s and deletes orphaned tmp-heads (loop 1), racing with
 		// our setup.
-		err = retry.Do(func() error {
+		err = retry.New(monitoringRetryOpts(lce.ctx, 10)...).Do(func() error {
 			_, _ = lce.rawSPDKCli.BdevLvolDelete(tmpHeadAlias)
 			_, _ = lce.rawSPDKCli.BdevLvolDelete(epAlias)
 			// Step 1: clone srcSnapshot → writable tmpHead
@@ -338,19 +338,19 @@ func (s *TestSuite) TestLinkedCloneSyncCleanupTmpHeadOnlyEntrypoint(c *C) {
 				return fmt.Errorf("monitoring may have deleted tmp-head before ep snapshot: %w", snapErr)
 			}
 			return nil
-		}, monitoringRetryOpts(lce.ctx, 10)...)
+		})
 		c.Assert(err, IsNil)
 
 		// Wait for sync to detect the tmp-head-only entrypoint, delete the
 		// tmp-head (pass 1), then delete the now-childless entrypoint (pass 1
 		// or the next cycle).  Both lvols must be gone.
-		err = retry.Do(func() error {
+		err = retry.New(monitoringRetryOpts(lce.ctx, 20)...).Do(func() error {
 			_, epErr := lce.rawSPDKCli.BdevLvolGetByName(epAlias, 0)
 			if epErr != nil {
 				return nil
 			}
 			return fmt.Errorf("entrypoint %s still exists, waiting for sync cleanup", epLvolName)
-		}, monitoringRetryOpts(lce.ctx, 20)...)
+		})
 		c.Assert(err, IsNil)
 
 		_, err = lce.rawSPDKCli.BdevLvolGetByName(tmpHeadAlias, 0)
@@ -474,7 +474,8 @@ func (s *TestSuite) TestLinkedCloneNReplicaSimultaneous(c *C) {
 
 // waitForReplicaRW polls until replicaName is in RW mode in the engine, or times out.
 func (lce *linkedCloneTestEnv) waitForReplicaRW(c *C, engineName, replicaName string) {
-	err := retry.Do(func() error {
+	err := retry.New(retry.Delay(defaultTestRebuildingWaitInterval), retry.Attempts(uint(defaultTestRebuildingWaitCount)),
+		retry.DelayType(retry.FixedDelay)).Do(func() error {
 		e, err := lce.spdkCli.EngineGet(engineName)
 		if err != nil {
 			return err
@@ -483,8 +484,7 @@ func (lce *linkedCloneTestEnv) waitForReplicaRW(c *C, engineName, replicaName st
 			return fmt.Errorf("replica %s mode is %v, waiting for RW", replicaName, e.ReplicaModeMap[replicaName])
 		}
 		return nil
-	}, retry.Delay(defaultTestRebuildingWaitInterval), retry.Attempts(uint(defaultTestRebuildingWaitCount)),
-		retry.DelayType(retry.FixedDelay))
+	})
 	c.Assert(err, IsNil, Commentf("timed out waiting for replica %s to become RW", replicaName))
 }
 
@@ -811,14 +811,14 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		err = lce.spdkCli.EngineFrontendExpand(context.Background(), efName, expandedSize)
 		c.Assert(err, IsNil)
 
-		err = retry.Do(func() error {
+		err = retry.New(retry.Attempts(30), retry.Delay(1*time.Second),
+			retry.DelayType(retry.FixedDelay), retry.LastErrorOnly(true)).Do(func() error {
 			size := GetBlockDeviceSize(ne, cloneEndpoint)
 			if size < int64(expandedSize) {
 				return fmt.Errorf("device size %d < expected %d", size, expandedSize)
 			}
 			return nil
-		}, retry.Attempts(30), retry.Delay(1*time.Second),
-			retry.DelayType(retry.FixedDelay), retry.LastErrorOnly(true))
+		})
 		c.Assert(err, IsNil)
 
 		// ── Step 5: write to expanded region + snapshot ───────────────────────────

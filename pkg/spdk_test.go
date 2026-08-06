@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/avast/retry-go/v4"
+	"github.com/avast/retry-go/v5"
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -287,7 +287,7 @@ func waitForDiskReady(ctx context.Context, spdkCli *client.SPDKClient, loopDevic
 
 	var readyDisk *spdkrpc.Disk
 
-	err := retry.Do(func() error {
+	err := retry.New(opts...).Do(func() error {
 		logrus.Info("Checking if the disk is in 'ready' state")
 		disk, err := spdkCli.DiskGet(defaultTestDiskName, loopDevicePath, diskDriverName)
 		if err != nil {
@@ -301,7 +301,7 @@ func waitForDiskReady(ctx context.Context, spdkCli *client.SPDKClient, loopDevic
 		logrus.Infof("Disk %s is in %v state", disk.Name, disk.State)
 		readyDisk = disk
 		return nil
-	}, opts...)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to wait for disk %s to be in 'ready' state: %w", defaultTestDiskName, err)
 	}
@@ -1483,7 +1483,7 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyMultipleReplicasReconstruction(c 
 			}(name)
 		}
 
-		err := retry.Do(func() error {
+		err := retry.New(monitoringRetryOpts(env.ctx, 8)...).Do(func() error {
 			for _, name := range replicaNames {
 				replica, err := env.spdkCli.ReplicaGet(name)
 				if err != nil {
@@ -1494,7 +1494,7 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyMultipleReplicasReconstruction(c 
 				}
 			}
 			return nil
-		}, monitoringRetryOpts(env.ctx, 8)...)
+		})
 		c.Assert(err, IsNil)
 
 		replicaMap, err := env.spdkCli.ReplicaList()
@@ -1552,7 +1552,7 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyMixedValidAndInvalidLvolNames(c *
 		}()
 
 		// Wait for both the valid replica and mismatching-size replica to be detected
-		err = retry.Do(func() error {
+		err = retry.New(monitoringRetryOpts(env.ctx, 8)...).Do(func() error {
 			replica, err := env.spdkCli.ReplicaGet(validReplicaName)
 			if err != nil {
 				return err
@@ -1568,7 +1568,7 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyMixedValidAndInvalidLvolNames(c *
 				return fmt.Errorf("replica %s state is %s, expected %s", mismatchReplica.Name, mismatchReplica.State, types.InstanceStateStopped)
 			}
 			return nil
-		}, monitoringRetryOpts(env.ctx, 8)...)
+		})
 		c.Assert(err, IsNil)
 
 		// Verify the mismatching-size replica is reconstructed with the wrong specSize.
@@ -1609,16 +1609,16 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyStaleCacheRemoval(c *C) {
 			_, _ = env.rawSPDKCli.BdevLvolDelete(replicaAlias)
 		}()
 
-		err = retry.Do(func() error {
+		err = retry.New(monitoringRetryOpts(env.ctx, 8)...).Do(func() error {
 			_, err := env.spdkCli.ReplicaGet(replicaName)
 			return err
-		}, monitoringRetryOpts(env.ctx, 8)...)
+		})
 		c.Assert(err, IsNil)
 
 		_, err = env.rawSPDKCli.BdevLvolDelete(replicaAlias)
 		c.Assert(err, IsNil)
 
-		err = retry.Do(func() error {
+		err = retry.New(monitoringRetryOpts(env.ctx, 8)...).Do(func() error {
 			_, err := env.spdkCli.ReplicaGet(replicaName)
 			if isReplicaNotFound(err) {
 				return nil
@@ -1627,7 +1627,7 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyStaleCacheRemoval(c *C) {
 				return fmt.Errorf("replica %s still exists in cache", replicaName)
 			}
 			return err
-		}, monitoringRetryOpts(env.ctx, 8)...)
+		})
 		c.Assert(err, IsNil)
 	})
 }
@@ -1648,7 +1648,7 @@ func (s *TestSuite) TestRuntimeMonitoringVerifySkipRebuildingAndCloningLvol(c *C
 			}(name)
 		}
 
-		err := retry.Do(func() error {
+		err := retry.New(monitoringRetryOpts(env.ctx, 4)...).Do(func() error {
 			for _, name := range []string{rebuildingLvolName, cloningLvolName, baseReplicaName} {
 				_, err := env.spdkCli.ReplicaGet(name)
 				if !isReplicaNotFound(err) {
@@ -1659,7 +1659,7 @@ func (s *TestSuite) TestRuntimeMonitoringVerifySkipRebuildingAndCloningLvol(c *C
 				}
 			}
 			return nil
-		}, monitoringRetryOpts(env.ctx, 4)...)
+		})
 		c.Assert(err, IsNil)
 	})
 }
@@ -1677,7 +1677,7 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyCleanupOrphanBackingImageTempHead
 			_, _ = env.rawSPDKCli.BdevLvolDelete(tempHeadAlias)
 		}()
 
-		err = retry.Do(func() error {
+		err = retry.New(monitoringRetryOpts(env.ctx, 8)...).Do(func() error {
 			bdevs, err := env.rawSPDKCli.BdevGetBdevs("", 0)
 			if err != nil {
 				return err
@@ -1690,7 +1690,7 @@ func (s *TestSuite) TestRuntimeMonitoringVerifyCleanupOrphanBackingImageTempHead
 				}
 			}
 			return nil
-		}, monitoringRetryOpts(env.ctx, 8)...)
+		})
 		c.Assert(err, IsNil)
 	})
 }
@@ -4428,7 +4428,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
 	c.Assert(err, IsNil)
 
 	// 8. Wait for Replica Add to Complete
-	err = retry.Do(func() error {
+	err = retry.New(retry.Delay(1*time.Second), retry.Attempts(60)).Do(func() error {
 		e, err := spdkCli.EngineGet(engineName)
 		if err != nil {
 			return err
@@ -4437,7 +4437,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
 			return fmt.Errorf("replica %s is not RW yest: %v", replicaNames[1], e.ReplicaModeMap[replicaNames[1]])
 		}
 		return nil
-	}, retry.Delay(1*time.Second), retry.Attempts(60))
+	})
 	c.Assert(err, IsNil)
 
 	// 9. Verify rebuilt replica works with the engine by removing replica 1
@@ -4566,7 +4566,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	// The Engine sets the mode to ERR before running SPDK cleanup, so this
 	// returns quickly without waiting for detach timeouts.
 	waitForReplicaERR := func(replicaName string) {
-		err = retry.Do(func() error {
+		err = retry.New(retry.Delay(500*time.Millisecond), retry.Attempts(30)).Do(func() error {
 			e, err := spdkCli.EngineGet(engineName)
 			if err != nil {
 				return err
@@ -4579,7 +4579,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 				return fmt.Errorf("replica %s mode is %v, expected ERR", replicaName, mode)
 			}
 			return nil
-		}, retry.Delay(500*time.Millisecond), retry.Attempts(30))
+		})
 		c.Assert(err, IsNil)
 	}
 
@@ -4719,7 +4719,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	internalEngine.SetReplicaAddFinishUnlockedHook(nil)
 
 	// Wait for Replica Add to Complete
-	err = retry.Do(func() error {
+	err = retry.New(retry.Delay(1*time.Second), retry.Attempts(60)).Do(func() error {
 		e, err := spdkCli.EngineGet(engineName)
 		if err != nil {
 			return err
@@ -4728,7 +4728,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 			return fmt.Errorf("replica %s is not RW yet: %v", replicaNames[1], e.ReplicaModeMap[replicaNames[1]])
 		}
 		return nil
-	}, retry.Delay(1*time.Second), retry.Attempts(60))
+	})
 	c.Assert(err, IsNil)
 
 	// 6c. Test MockReplicaAdder fallback always uses the real adder.
@@ -4755,7 +4755,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, replicaNames[1], replica2Address, defaultTestFastSync, "", "", "")
 	c.Assert(err, IsNil)
 
-	err = retry.Do(func() error {
+	err = retry.New(retry.Delay(1*time.Second), retry.Attempts(60)).Do(func() error {
 		e, err := spdkCli.EngineGet(engineName)
 		if err != nil {
 			return err
@@ -4764,7 +4764,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 			return fmt.Errorf("replica %s is not RW yet after fallback test: %v", replicaNames[1], e.ReplicaModeMap[replicaNames[1]])
 		}
 		return nil
-	}, retry.Delay(1*time.Second), retry.Attempts(60))
+	})
 	c.Assert(err, IsNil)
 
 	internalEngine.SetReplicaAdder(nil)
@@ -4856,7 +4856,7 @@ func (s *TestSuite) TestSPDKEngineReplicaAddWithoutEngineFrontendInfo(c *C) {
 	err = spdkCli.EngineReplicaAdd(engineName, replicaNames[1], replica2Address, defaultTestFastSync, "", "", "", "", "")
 	c.Assert(err, IsNil)
 
-	err = retry.Do(func() error {
+	err = retry.New(retry.Delay(1*time.Second), retry.Attempts(60)).Do(func() error {
 		e, err := spdkCli.EngineGet(engineName)
 		if err != nil {
 			return err
@@ -4865,7 +4865,7 @@ func (s *TestSuite) TestSPDKEngineReplicaAddWithoutEngineFrontendInfo(c *C) {
 			return fmt.Errorf("replica %s is not RW yet: %v", replicaNames[1], e.ReplicaModeMap[replicaNames[1]])
 		}
 		return nil
-	}, retry.Delay(1*time.Second), retry.Attempts(60))
+	})
 	c.Assert(err, IsNil)
 }
 
@@ -4923,7 +4923,18 @@ func connectTargetWithInternalHostNQN(ip, port, nqn string, ne *commonns.Executo
 }
 
 func writeDataToBlockDevice(ne *commonns.Executor, endpoint string, offsetInMB, dataCountInMB int64) error {
-	return retry.Do(
+	return retry.New(
+		retry.Attempts(30),
+		retry.Delay(1*time.Second),
+		retry.DelayType(retry.FixedDelay),
+		retry.LastErrorOnly(true),
+		retry.OnRetry(func(n uint, err error) {
+			logrus.WithFields(logrus.Fields{
+				"attempt": n + 1,
+				"error":   err,
+			}).Warn("Write data to block device failed, retrying...")
+		}),
+	).Do(
 		func() error {
 			_, err := ne.Execute(
 				nil,
@@ -4940,15 +4951,5 @@ func writeDataToBlockDevice(ne *commonns.Executor, endpoint string, offsetInMB, 
 			)
 			return err
 		},
-		retry.Attempts(30),
-		retry.Delay(1*time.Second),
-		retry.DelayType(retry.FixedDelay),
-		retry.LastErrorOnly(true),
-		retry.OnRetry(func(n uint, err error) {
-			logrus.WithFields(logrus.Fields{
-				"attempt": n + 1,
-				"error":   err,
-			}).Warn("Write data to block device failed, retrying...")
-		}),
 	)
 }
