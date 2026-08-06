@@ -10,7 +10,7 @@ require (
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20260722010828-e5f4ddc47e4d
 	github.com/longhorn/go-common-libs v0.0.0-20260717062941-2c0ab58da729
-	github.com/longhorn/go-spdk-helper v0.7.1-0.20260728132652-3feba885fc22
+	github.com/longhorn/go-spdk-helper v0.8.1-0.20260805151852-965182d14959
 	github.com/longhorn/types v0.0.0-20260729075217-67e368561d11
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.11.1
@@ -25,7 +25,10 @@ require (
 require (
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
+<<<<<<< HEAD
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
+=======
+>>>>>>> 8446790 (chore(vendor): update go-spdk-helper)
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
@@ -79,9 +82,15 @@ require (
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+<<<<<<< HEAD
 	golang.org/x/text v0.37.0 // indirect; sindirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
+=======
+	golang.org/x/text v0.39.0 // indirect; sindirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
+	k8s.io/klog/v2 v2.140.0 // indirect
+>>>>>>> 8446790 (chore(vendor): update go-spdk-helper)
 	k8s.io/mount-utils v0.31.3 // indirect
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 // indirect
 )
