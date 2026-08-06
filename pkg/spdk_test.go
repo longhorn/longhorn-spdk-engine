@@ -1780,8 +1780,7 @@ func (s *TestSuite) TestSPDKEngineCreateWithSalvageRequested(c *C) {
 	primaryNQN := helpertypes.GetNQN(primaryReplica.Name)
 	primaryPort := strconv.Itoa(int(primaryReplica.PortStart))
 
-	// The replica subsystem only accepts the internal host NQN, so the plain
-	// kernel-initiator ConnectTarget (default host NQN) would be rejected.
+	// The replica subsystem rejects the default host NQN ConnectTarget presents.
 	err = connectTargetWithInternalHostNQN(ip, primaryPort, primaryNQN, ne)
 	c.Assert(err, IsNil)
 	defer func() {
@@ -4903,16 +4902,18 @@ func readAndVerifyBlockDevicePattern(c *C, endpoint string, expected []byte, off
 	c.Assert(readBuf, DeepEquals, expected)
 }
 
-// connectTargetWithInternalHostNQN connects the kernel initiator to a subsystem
-// while presenting the internal host NQN that restricted subsystems (e.g.
-// replicas) accept. No production path does this — replicas are consumed only
-// by the SPDK initiator — but the test needs a raw block device to seed data
-// into a single replica directly.
+// internalHostID pairs with InternalHostNQN below; the kernel rejects reusing
+// the default host ID with a different host NQN.
+const internalHostID = "5f8e6cb3-0000-4000-8000-3fb3a1a73d9e"
+
+// connectTargetWithInternalHostNQN kernel-connects to a subsystem restricted
+// to the internal host NQN. Test-only: no production path does this.
 func connectTargetWithInternalHostNQN(ip, port, nqn string, ne *commonns.Executor) error {
 	_, err := ne.Execute(nil, "nvme", []string{
 		"connect",
 		"-t", "tcp",
 		"--nqn", nqn,
+		"-I", internalHostID,
 		"-q", helpertypes.InternalHostNQN,
 		"-a", ip,
 		"-s", port,
