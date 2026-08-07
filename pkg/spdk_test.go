@@ -4777,6 +4777,32 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	c.Assert(err, IsNil)
 	err = f.Close()
 	c.Assert(err, IsNil)
+
+	// 7. Test synchronous destination setup failure through the frontend wrapper.
+	// Reuse a reachable replica address with a missing replica name so
+	// ReplicaRebuildingDstStart fails deterministically without a transport timeout.
+	missingReplicaName := fmt.Sprintf("%s-replica-missing", volumeName)
+	missingReplicaAddress := replica2Address
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, missingReplicaName, missingReplicaAddress, defaultTestFastSync, "", "", "")
+	c.Assert(err, NotNil)
+
+	engine, err = spdkCli.EngineGet(engineName)
+	c.Assert(err, IsNil)
+	c.Assert(engine.State, Equals, types.InstanceStateRunning)
+	c.Assert(engine.ErrorMsg, Equals, "")
+	c.Assert(engine.ReplicaModeMap[missingReplicaName], Equals, types.ModeERR)
+	for _, replicaName := range replicaNames {
+		c.Assert(engine.ReplicaModeMap[replicaName], Equals, types.ModeRW)
+	}
+
+	engineFrontend, err = spdkCli.EngineFrontendGet(engineFrontendName)
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
+	c.Assert(engineFrontend.ErrorMsg, Equals, "")
+	c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+
+	continuedData := writePatternToBlockDevice(c, endpoint, 'R', 4096, 4096)
+	readAndVerifyBlockDevicePattern(c, endpoint, continuedData, 4096)
 }
 
 func (s *TestSuite) TestSPDKEngineReplicaAddWithoutEngineFrontendInfo(c *C) {
