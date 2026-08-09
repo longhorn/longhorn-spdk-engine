@@ -440,9 +440,9 @@ func (s *TestSuite) TestLinkedCloneNReplicaSimultaneous(c *C) {
 			c.Assert(err, IsNil)
 			c.Assert(r.State, Equals, types.InstanceStateRunning,
 				Commentf("dst replica %s should be running after N-replica clone (errorMsg: %s)", name, r.ErrorMsg))
-			c.Assert(r.IsCloneReplica, Equals, true,
+			c.Assert(r.LinkedCloneInfo, NotNil,
 				Commentf("dst replica %s should be marked as clone replica (errorMsg: %s)", name, r.ErrorMsg))
-			c.Assert(r.CloneSourceReplicaName, Equals, lce.srcReplicaName,
+			c.Assert(r.LinkedCloneInfo.SourceReplicaName, Equals, lce.srcReplicaName,
 				Commentf("dst replica %s should reference correct src replica (errorMsg: %s)", name, r.ErrorMsg))
 		}
 
@@ -459,12 +459,11 @@ func (s *TestSuite) TestLinkedCloneNReplicaSimultaneous(c *C) {
 		// Verify src replica has exactly one entrypoint shared by all N dst replicas.
 		srcReplica, err := lce.spdkCli.ReplicaGet(lce.srcReplicaName)
 		c.Assert(err, IsNil)
-		expectedEP := server.GetCloneEntrypointLvolName(lce.srcReplicaName, lce.snapshotName)
-		c.Assert(srcReplica.CloneEntrypointMap, HasLen, 1,
-			Commentf("src replica should have exactly one entrypoint, got %v", srcReplica.CloneEntrypointMap))
-		c.Assert(srcReplica.CloneEntrypointMap[expectedEP], Equals, int32(nReplicas),
-			Commentf("entrypoint %s should have %d clone replicas, got %d",
-				expectedEP, nReplicas, srcReplica.CloneEntrypointMap[expectedEP]))
+		c.Assert(srcReplica.CloneSnapshotUsage, HasLen, 1,
+			Commentf("src replica should have exactly one entrypoint, got %v", srcReplica.CloneSnapshotUsage))
+		c.Assert(srcReplica.CloneSnapshotUsage[lce.snapshotName], Equals, int32(nReplicas),
+			Commentf("entrypoint for snapshot %s should have %d clone replicas, got %d",
+				lce.snapshotName, nReplicas, srcReplica.CloneSnapshotUsage[lce.snapshotName]))
 	})
 }
 
@@ -494,16 +493,15 @@ func (lce *linkedCloneTestEnv) assertCloneReplicaEntrypoint(c *C, replicaName st
 	c.Assert(err, IsNil)
 	c.Assert(r.State, Equals, types.InstanceStateRunning,
 		Commentf("rebuilt replica %s should be running (errorMsg: %s)", replicaName, r.ErrorMsg))
-	c.Assert(r.IsCloneReplica, Equals, true,
+	c.Assert(r.LinkedCloneInfo, NotNil,
 		Commentf("rebuilt replica %s should be a clone replica", replicaName))
-	c.Assert(r.CloneSourceReplicaName, Equals, lce.srcReplicaName,
+	c.Assert(r.LinkedCloneInfo.SourceReplicaName, Equals, lce.srcReplicaName,
 		Commentf("rebuilt replica %s should reference src replica %s", replicaName, lce.srcReplicaName))
-	c.Assert(r.CloneEntrypointLvolName, Not(Equals), "",
-		Commentf("rebuilt replica %s must have a non-empty clone entrypoint", replicaName))
-	expectedEpName := server.GetCloneEntrypointLvolName(lce.srcReplicaName, lce.snapshotName)
-	c.Assert(r.CloneEntrypointLvolName, Equals, expectedEpName,
-		Commentf("rebuilt replica %s has wrong entrypoint: got %s, want %s",
-			replicaName, r.CloneEntrypointLvolName, expectedEpName))
+	c.Assert(r.LinkedCloneInfo.SourceSnapshotName, Not(Equals), "",
+		Commentf("rebuilt replica %s must have a non-empty source snapshot name", replicaName))
+	c.Assert(r.LinkedCloneInfo.SourceSnapshotName, Equals, lce.snapshotName,
+		Commentf("rebuilt replica %s has wrong source snapshot: got %s, want %s",
+			replicaName, r.LinkedCloneInfo.SourceSnapshotName, lce.snapshotName))
 }
 
 // ---------------------------------------------------------------------------
@@ -578,7 +576,11 @@ func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
 		// can deterministically find/create the clone entrypoint and verify the
 		// src replica is RW in its engine.
 		err = lce.spdkCli.EngineFrontendReplicaAdd(efName, dst2Name, dst2Address, defaultTestFastSync,
-			lce.srcReplicaName, lce.srcEngineName, lce.serviceAddress)
+			&spdkrpc.LinkedCloneSource{
+				ReplicaName:   lce.srcReplicaName,
+				EngineName:    lce.srcEngineName,
+				EngineAddress: lce.serviceAddress,
+			})
 		c.Assert(err, IsNil)
 
 		// Wait for the rebuild to complete (replica must reach RW mode).
@@ -683,7 +685,11 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 		defer func() { _ = lce.spdkCli.EngineDelete(lce.srcEngineName) }()
 
 		err = lce.spdkCli.EngineFrontendReplicaAdd(efName, dst2Name, dst2Address, defaultTestFastSync,
-			lce.srcReplicaName, lce.srcEngineName, lce.serviceAddress)
+			&spdkrpc.LinkedCloneSource{
+				ReplicaName:   lce.srcReplicaName,
+				EngineName:    lce.srcEngineName,
+				EngineAddress: lce.serviceAddress,
+			})
 		c.Assert(err, IsNil)
 
 		// Wait for rebuild to complete.
@@ -853,7 +859,11 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		// Before the SPDK fix this returned -EINVAL (strict cluster-count
 		// equality); with the fix (child >= parent) it succeeds.
 		err = lce.spdkCli.EngineFrontendReplicaAdd(efName, dst2Name, dst2Address, defaultTestFastSync,
-			lce.srcReplicaName, lce.srcEngineName, lce.serviceAddress)
+			&spdkrpc.LinkedCloneSource{
+				ReplicaName:   lce.srcReplicaName,
+				EngineName:    lce.srcEngineName,
+				EngineAddress: lce.serviceAddress,
+			})
 		c.Assert(err, IsNil)
 
 		// ── Step 8: wait for rebuild + assert entrypoints ─────────────────────────

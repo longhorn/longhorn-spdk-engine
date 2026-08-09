@@ -34,12 +34,14 @@ func newTestReplica(name, lvsName string) *Replica {
 // syncCloneReplicaInfo unit tests.  ActiveChain[0] is nil (entrypoint removed)
 // and ActiveChain[1] is the chain root snapshot.
 func newTestRunningCloneReplica(dstName, srcName, lvsName, epLvolName, rootSnapName string) *Replica {
+	snapshotName := GetSnapshotNameFromCloneEntrypointLvolName(srcName, epLvolName)
 	return &Replica{
 		Name:                    dstName,
 		LvsName:                 lvsName,
 		State:                   types.InstanceState(types.InstanceStateRunning),
 		isCloneReplica:          true,
 		cloneSourceReplicaName:  srcName,
+		cloneSourceSnapshotName: snapshotName,
 		cloneEntrypointLvolName: epLvolName,
 		ActiveChain: []*Lvol{
 			nil, // entrypoint not in chain (already removed from SPDK)
@@ -375,14 +377,15 @@ func (s *TestSuite) TestServiceReplicaToProtoReplicaCloneMetadata(c *C) {
 	cloneR := newTestReplica("dst-r-00000001", "test-disk")
 	cloneR.isCloneReplica = true
 	cloneR.cloneSourceReplicaName = srcReplicaName
+	cloneR.cloneSourceSnapshotName = "snap-1"
 	cloneR.cloneEntrypointLvolName = epLvolName
 	cloneR.SnapshotLvolMap = map[string]*Lvol{}
 
 	proto := ServiceReplicaToProtoReplica(cloneR)
 	c.Assert(proto, NotNil)
-	c.Assert(proto.IsCloneReplica, Equals, true)
-	c.Assert(proto.CloneSourceReplicaName, Equals, srcReplicaName)
-	c.Assert(proto.CloneEntrypointLvolName, Equals, epLvolName)
+	c.Assert(proto.LinkedCloneInfo, NotNil)
+	c.Assert(proto.LinkedCloneInfo.SourceReplicaName, Equals, srcReplicaName)
+	c.Assert(proto.LinkedCloneInfo.SourceSnapshotName, Equals, "snap-1")
 
 	// Source replica: entrypoint map is forwarded with clone counts
 	srcR := newTestReplica(srcReplicaName, "test-disk")
@@ -404,11 +407,11 @@ func (s *TestSuite) TestServiceReplicaToProtoReplicaCloneMetadata(c *C) {
 
 	proto = ServiceReplicaToProtoReplica(srcR)
 	c.Assert(proto, NotNil)
-	c.Assert(proto.IsCloneReplica, Equals, false)
-	c.Assert(proto.CloneEntrypointMap, NotNil)
-	c.Assert(len(proto.CloneEntrypointMap), Equals, 2)
-	c.Assert(proto.CloneEntrypointMap[epLvolName], Equals, int32(2))
-	c.Assert(proto.CloneEntrypointMap[ep2Name], Equals, int32(1))
+	c.Assert(proto.LinkedCloneInfo, IsNil)
+	c.Assert(proto.CloneSnapshotUsage, NotNil)
+	c.Assert(len(proto.CloneSnapshotUsage), Equals, 2)
+	c.Assert(proto.CloneSnapshotUsage["snap-1"], Equals, int32(2))
+	c.Assert(proto.CloneSnapshotUsage["snap-2"], Equals, int32(1))
 
 	// Plain replica: no clone metadata
 	plainR := newTestReplica("plain-r-00000001", "test-disk")
@@ -416,10 +419,8 @@ func (s *TestSuite) TestServiceReplicaToProtoReplicaCloneMetadata(c *C) {
 
 	proto = ServiceReplicaToProtoReplica(plainR)
 	c.Assert(proto, NotNil)
-	c.Assert(proto.IsCloneReplica, Equals, false)
-	c.Assert(proto.CloneSourceReplicaName, Equals, "")
-	c.Assert(proto.CloneEntrypointLvolName, Equals, "")
-	c.Assert(proto.CloneEntrypointMap, IsNil)
+	c.Assert(proto.LinkedCloneInfo, IsNil)
+	c.Assert(proto.CloneSnapshotUsage, IsNil)
 }
 
 // ---------------------------------------------------------------------------
