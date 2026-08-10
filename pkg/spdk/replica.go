@@ -1689,11 +1689,6 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		}
 		r.isSnapshotCloning = false
 	}
-	r.isCloneReplica = false
-	r.cloneSourceReplicaName = ""
-	r.cloneSourceSnapshotName = ""
-	r.cloneEntrypointLvolName = ""
-
 	// The port can be released once the rebuilding and expose are stopped.
 	if r.PortStart != 0 {
 		if err := superiorPortAllocator.ReleaseRange(r.PortStart, r.PortEnd); err != nil {
@@ -1721,6 +1716,11 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 	if _, err := spdkClient.BdevLvolDelete(r.Alias); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return err
 	}
+
+	r.isCloneReplica = false
+	r.cloneSourceReplicaName = ""
+	r.cloneSourceSnapshotName = ""
+	r.cloneEntrypointLvolName = ""
 
 	updateRequired = true
 
