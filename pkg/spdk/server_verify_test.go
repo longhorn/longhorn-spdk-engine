@@ -10,21 +10,31 @@ import (
 	cockroacherrors "github.com/cockroachdb/errors"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	. "gopkg.in/check.v1"
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
+	commonnet "github.com/longhorn/go-common-libs/net"
 	spdkjsonrpc "github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
-
-	. "gopkg.in/check.v1"
 )
+
+func (s *TestSuite) SetUpTest(c *C) {
+	engineFrontendGetIPForPod = func(commonnet.IPFamily) (string, error) {
+		return "127.0.0.1", nil
+	}
+}
+
+func (s *TestSuite) TearDownTest(c *C) {
+	engineFrontendGetIPForPod = commonnet.GetIPForPodByFamily
+}
 
 func (s *TestSuite) TestNewReplicaExistingReplicaUpdatesMetadataIdempotently(c *C) {
 	server := &Server{
 		replicaMap: map[string]*Replica{
-			"r1": NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil),
+			"r1": NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil),
 		},
 	}
 
@@ -45,7 +55,7 @@ func (s *TestSuite) TestNewReplicaExistingReplicaUpdatesMetadataIdempotently(c *
 func (s *TestSuite) TestNewReplicaExistingReplicaAllowsMatchingMetadata(c *C) {
 	server := &Server{
 		replicaMap: map[string]*Replica{
-			"r1": NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil),
+			"r1": NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil),
 		},
 	}
 
@@ -132,8 +142,8 @@ func (s *TestSuite) TestBuildLvsUUIDNameMap(c *C) {
 func (s *TestSuite) TestHandleVerifyErrorBrokenPipe(c *C) {
 	fmt.Println("Testing handleVerifyError with broken pipe error")
 
-	replica := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil)
-	engine := NewEngine("e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	replica := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil)
+	engine := NewEngine("e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	engineFrontend := NewEngineFrontend("ef1", "e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
 
 	replica.State = lhtypes.InstanceStateRunning
@@ -168,7 +178,7 @@ func (s *TestSuite) TestHandleVerifyErrorBrokenPipe(c *C) {
 func (s *TestSuite) TestHandleVerifyErrorNonBrokenPipeNoStateChange(c *C) {
 	fmt.Println("Testing handleVerifyError with non-broken pipe error does not change state")
 
-	replica := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil)
+	replica := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil)
 	replica.State = lhtypes.InstanceStateRunning
 
 	state := &verifyState{
@@ -188,7 +198,7 @@ func (s *TestSuite) TestHandleVerifyErrorNonBrokenPipeNoStateChange(c *C) {
 func (s *TestSuite) TestHandleVerifyErrorNoopForNilError(c *C) {
 	fmt.Println("Testing handleVerifyError with nil error does not change state")
 
-	replica := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil)
+	replica := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil)
 	replica.State = lhtypes.InstanceStateRunning
 
 	state := &verifyState{
@@ -208,10 +218,10 @@ func (s *TestSuite) TestHandleVerifyErrorNoopForNilError(c *C) {
 func (s *TestSuite) TestHandleVerifyErrorBrokenPipeKeepsStoppedAndError(c *C) {
 	fmt.Println("Testing handleVerifyError with broken pipe error keeps stopped and error states")
 
-	replicaStopped := NewReplica(context.Background(), "r-stopped", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil)
+	replicaStopped := NewReplica(context.Background(), "r-stopped", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil)
 	replicaStopped.State = lhtypes.InstanceStateStopped
 
-	engineErrored := NewEngine("e-err", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	engineErrored := NewEngine("e-err", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	engineErrored.State = lhtypes.InstanceStateError
 
 	engineFrontendRunning := NewEngineFrontend("ef-run", "e-err", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
@@ -245,7 +255,7 @@ func (s *TestSuite) TestHandleVerifyErrorBrokenPipeKeepsStoppedAndError(c *C) {
 func (s *TestSuite) TestShardSetErrorState(c *C) {
 	fmt.Println("Testing Shard.SetErrorState transitions and update broadcast")
 
-	sh := NewShard("vol-a", 0, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+	sh := NewShard("vol-a", 0, "disk-a", "uuid-a", 1<<20, testIPFamily(), make(chan interface{}, 1))
 	sh.State = lhtypes.InstanceStateRunning
 	sh.SetErrorState()
 	c.Assert(sh.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
@@ -253,7 +263,7 @@ func (s *TestSuite) TestShardSetErrorState(c *C) {
 
 	// Stopped and Error states are left untouched, with no broadcast.
 	for _, state := range []lhtypes.InstanceState{lhtypes.InstanceStateStopped, lhtypes.InstanceStateError} {
-		sh := NewShard("vol-a", 0, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+		sh := NewShard("vol-a", 0, "disk-a", "uuid-a", 1<<20, testIPFamily(), make(chan interface{}, 1))
 		sh.State = state
 		sh.SetErrorState()
 		c.Assert(sh.State, Equals, state)
@@ -264,8 +274,7 @@ func (s *TestSuite) TestShardSetErrorState(c *C) {
 func (s *TestSuite) TestShardGroupSetErrorState(c *C) {
 	fmt.Println("Testing ShardGroup.SetErrorState transitions and update broadcast")
 
-	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
-		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 	sg.State = lhtypes.InstanceStateRunning
 	sg.SetErrorState()
 	c.Assert(sg.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
@@ -273,8 +282,7 @@ func (s *TestSuite) TestShardGroupSetErrorState(c *C) {
 
 	// Stopped and Error states are left untouched, with no broadcast.
 	for _, state := range []lhtypes.InstanceState{lhtypes.InstanceStateStopped, lhtypes.InstanceStateError} {
-		sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
-			map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+		sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 		sg.State = state
 		sg.SetErrorState()
 		c.Assert(sg.State, Equals, state)
@@ -285,16 +293,14 @@ func (s *TestSuite) TestShardGroupSetErrorState(c *C) {
 func (s *TestSuite) TestHandleVerifyErrorBrokenPipeMarksShardsAndShardGroups(c *C) {
 	fmt.Println("Testing handleVerifyError with broken pipe error marks shards and shardgroups as error")
 
-	shardRunning := NewShard("vol-1", 0, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+	shardRunning := NewShard("vol-1", 0, "disk-a", "uuid-a", 1<<20, testIPFamily(), make(chan interface{}, 1))
 	shardRunning.State = lhtypes.InstanceStateRunning
-	shardStopped := NewShard("vol-1", 1, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+	shardStopped := NewShard("vol-1", 1, "disk-a", "uuid-a", 1<<20, testIPFamily(), make(chan interface{}, 1))
 	shardStopped.State = lhtypes.InstanceStateStopped
 
-	sgRunning := NewShardGroup(context.Background(), "sg-run", "vol-1", 4<<20, 2, 1, 64,
-		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sgRunning := NewShardGroup(context.Background(), "sg-run", "vol-1", 4<<20, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 	sgRunning.State = lhtypes.InstanceStateRunning
-	sgErrored := NewShardGroup(context.Background(), "sg-err", "vol-1", 4<<20, 2, 1, 64,
-		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sgErrored := NewShardGroup(context.Background(), "sg-err", "vol-1", 4<<20, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 	sgErrored.State = lhtypes.InstanceStateError
 
 	state := &verifyState{
@@ -330,16 +336,16 @@ func (s *TestSuite) TestNewVerifyStateLockedCopiesMaps(c *C) {
 
 	server := &Server{
 		replicaMap: map[string]*Replica{
-			"r1": NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil),
+			"r1": NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil),
 		},
 		engineMap: map[string]*Engine{
-			"e1": NewEngine("e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil),
+			"e1": NewEngine("e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil),
 		},
 		engineFrontendMap: map[string]*EngineFrontend{
 			"ef1": NewEngineFrontend("ef1", "e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil),
 		},
 		backingImageMap: map[string]*BackingImage{
-			"bi1": NewBackingImage(context.Background(), "bi1", "uuid-bi1", "disk-uuid", 1024, "checksum", make(chan interface{}, 1), nil),
+			"bi1": NewBackingImage(context.Background(), "bi1", "uuid-bi1", "disk-uuid", 1024, "checksum", testIPFamily(), make(chan interface{}, 1), nil),
 		},
 		spdkClient: nil,
 	}
@@ -369,9 +375,9 @@ func (s *TestSuite) TestNewVerifyStateLockedCopiesMaps(c *C) {
 func (s *TestSuite) TestApplyVerifiedStateSkipsConcurrentReplicaMutation(c *C) {
 	fmt.Println("Testing applyVerifiedState skips stale replica map overwrite after concurrent mutation")
 
-	r1 := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil)
-	r2 := NewReplica(context.Background(), "r2", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil)
-	replacement := NewReplica(context.Background(), "r2", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil)
+	r1 := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil)
+	r2 := NewReplica(context.Background(), "r2", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil)
+	replacement := NewReplica(context.Background(), "r2", "disk-a", "uuid-a", 1024, true, testIPFamily(), make(chan interface{}, 1), nil)
 
 	server := &Server{
 		replicaMap: map[string]*Replica{
@@ -407,9 +413,9 @@ func (s *TestSuite) TestApplyVerifiedStateSkipsConcurrentReplicaMutation(c *C) {
 func (s *TestSuite) TestApplyVerifiedStateSkipsConcurrentShardMutation(c *C) {
 	fmt.Println("Testing applyVerifiedState skips stale shard map overwrite after concurrent mutation")
 
-	sh1 := NewShard("vol-1", 0, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
-	sh2 := NewShard("vol-1", 1, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
-	replacement := NewShard("vol-1", 1, "disk-a", "uuid-a", 1<<20, make(chan interface{}, 1))
+	sh1 := NewShard("vol-1", 0, "disk-a", "uuid-a", 1<<20, testIPFamily(), make(chan interface{}, 1))
+	sh2 := NewShard("vol-1", 1, "disk-a", "uuid-a", 1<<20, testIPFamily(), make(chan interface{}, 1))
+	replacement := NewShard("vol-1", 1, "disk-a", "uuid-a", 1<<20, testIPFamily(), make(chan interface{}, 1))
 
 	server := &Server{
 		replicaMap: map[string]*Replica{},
@@ -447,10 +453,8 @@ func (s *TestSuite) TestApplyVerifiedStateSkipsConcurrentShardMutation(c *C) {
 func (s *TestSuite) TestApplyVerifiedStateSkipsConcurrentShardGroupMutation(c *C) {
 	fmt.Println("Testing applyVerifiedState skips stale shardgroup map overwrite after concurrent mutation")
 
-	sg1 := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
-		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
-	replacement := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
-		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg1 := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
+	replacement := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 
 	server := &Server{
 		replicaMap: map[string]*Replica{},
@@ -617,6 +621,68 @@ func (s *TestSuite) TestEngineFrontendCreateDoesNotRegisterFailedFrontend(c *C) 
 	srv.RUnlock()
 	c.Assert(exists, Equals, true)
 	c.Assert(ef, NotNil)
+}
+
+func (s *TestSuite) TestEngineFrontendCreatePropagatesIPSelectionError(c *C) {
+	srv := &Server{
+		engineFrontendMap: map[string]*EngineFrontend{},
+		volumeHostLocks:   map[string]*volumeHostLockEntry{},
+		updateChs: map[lhtypes.InstanceType]chan interface{}{
+			lhtypes.InstanceTypeEngineFrontend: make(chan interface{}, 1),
+		},
+	}
+
+	selectorCalled := false
+	engineFrontendGetIPForPod = func(commonnet.IPFamily) (string, error) {
+		selectorCalled = true
+		return "", errors.New("selection failed")
+	}
+
+	req := &spdkrpc.EngineFrontendCreateRequest{
+		Name:          "ef-test",
+		EngineName:    "engine-a",
+		VolumeName:    "vol-a",
+		Frontend:      lhtypes.FrontendSPDKTCPNvmf,
+		SpecSize:      1024,
+		TargetAddress: "",
+	}
+	c.Assert(req.TargetAddress, Equals, "")
+
+	_, err := srv.EngineFrontendCreate(context.Background(), req)
+	c.Assert(err, NotNil)
+	c.Assert(selectorCalled, Equals, true)
+
+	st, ok := grpcstatus.FromError(err)
+	c.Assert(ok, Equals, true)
+	c.Assert(st.Code(), Equals, grpccodes.Internal)
+	c.Assert(st.Message(), Equals, "failed to get local IP for engine frontend ef-test: selection failed")
+}
+func (s *TestSuite) TestEngineFrontendResolverReceivesServerIPFamily(c *C) {
+	for _, family := range []commonnet.IPFamily{commonnet.IPFamilyIPv4, commonnet.IPFamilyIPv6} {
+		srv := &Server{
+			ipFamily:          family,
+			engineFrontendMap: map[string]*EngineFrontend{},
+			volumeHostLocks:   map[string]*volumeHostLockEntry{},
+			updateChs: map[lhtypes.InstanceType]chan interface{}{
+				lhtypes.InstanceTypeEngineFrontend: make(chan interface{}, 1),
+			},
+		}
+		var captured commonnet.IPFamily
+		engineFrontendGetIPForPod = func(got commonnet.IPFamily) (string, error) {
+			captured = got
+			return "", errors.New("selection failed")
+		}
+
+		_, err := srv.EngineFrontendCreate(context.Background(), &spdkrpc.EngineFrontendCreateRequest{
+			Name:       "ef-family",
+			EngineName: "engine-a",
+			VolumeName: "vol-a",
+			Frontend:   lhtypes.FrontendSPDKTCPNvmf,
+			SpecSize:   1024,
+		})
+		c.Assert(err, NotNil, Commentf("family=%s", family))
+		c.Assert(captured, Equals, family)
+	}
 }
 
 func (s *TestSuite) TestToEngineFrontendCreateGRPCErrorMapsKnownErrors(c *C) {

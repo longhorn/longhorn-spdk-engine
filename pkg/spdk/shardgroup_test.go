@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	. "gopkg.in/check.v1"
-
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	. "gopkg.in/check.v1"
+
+	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
-	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
@@ -193,8 +193,7 @@ func (s *TestSuite) TestShardGroupExpandPreconditions(c *C) {
 	for _, tc := range cases {
 		fmt.Println("Testing ShardGroup.Expand:", tc.name)
 
-		sg := NewShardGroup(context.Background(), "sg-1", "vol-1", initialSize, 2, 1, 64,
-			map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+		sg := NewShardGroup(context.Background(), "sg-1", "vol-1", initialSize, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 		sg.State = tc.state
 
 		err := sg.Expand(nil, tc.target, 0)
@@ -231,8 +230,7 @@ func (s *TestSuite) TestShardGroupExpandGrowthCeilingPreflight(c *C) {
 	fmt.Println("Testing ShardGroup.Expand rejects beyond-ceiling targets before any SPDK call")
 
 	const creationSize = uint64(4 << 20)
-	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", creationSize, 2, 1, 64,
-		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", creationSize, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 	sg.State = types.InstanceStateRunning
 
 	overCeiling := uint64(spdktypes.EcLvstoreMaxGrowthFactor)*creationSize + 1<<20
@@ -251,8 +249,7 @@ func (s *TestSuite) TestShardGroupExpandPrecheckGrowthCeilingGate(c *C) {
 	fmt.Println("Testing ShardGroup.ExpandPrecheck rejects beyond-ceiling targets before any SPDK call")
 
 	const creationSize = uint64(4 << 20)
-	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", creationSize, 2, 1, 64,
-		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", creationSize, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 	sg.State = types.InstanceStateRunning
 
 	overCeiling := uint64(spdktypes.EcLvstoreMaxGrowthFactor)*creationSize + 1<<20
@@ -271,8 +268,7 @@ func (s *TestSuite) TestShardGroupExpandPrecheckGrowthCeilingGate(c *C) {
 func (s *TestSuite) TestShardGroupExpandDoesNotBroadcastWithoutSizeChange(c *C) {
 	fmt.Println("Testing ShardGroup.Expand does not broadcast an update when SpecSize is unchanged")
 
-	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
-		map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 	sg.State = types.InstanceStateRunning
 
 	// No-op at target size and rejected shrink both leave SpecSize untouched.
@@ -289,8 +285,7 @@ func (s *TestSuite) TestShardGroupSnapshotDeleteRejectsNonRunningState(c *C) {
 		types.InstanceStateStopped,
 		types.InstanceStateError,
 	} {
-		sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64,
-			map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+		sg := NewShardGroup(context.Background(), "sg-1", "vol-1", 4<<20, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), make(chan interface{}, 1))
 		sg.State = state
 
 		err := sg.SnapshotDelete(nil, "snap-1")

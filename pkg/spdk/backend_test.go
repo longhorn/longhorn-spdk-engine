@@ -3,13 +3,13 @@ package spdk
 import (
 	"fmt"
 
-	"github.com/longhorn/types/pkg/generated/spdkrpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	. "gopkg.in/check.v1"
+
+	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
-
-	. "gopkg.in/check.v1"
 )
 
 func (s *TestSuite) TestSelectBackendFactory(c *C) {
@@ -84,7 +84,7 @@ func (s *TestSuite) TestIsShardedEngine(c *C) {
 
 	for name, tc := range testCases {
 		fmt.Println("Testing isShardedEngine:", name)
-		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 		e.backends = tc.backends
 		c.Assert(isShardedEngine(e), Equals, tc.expected, Commentf("case %q", name))
 	}

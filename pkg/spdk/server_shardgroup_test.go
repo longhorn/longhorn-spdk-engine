@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
-
-	. "gopkg.in/check.v1"
 )
 
 const (
@@ -18,8 +18,7 @@ const (
 
 func newShardGroupReuseFixture(state lhtypes.InstanceState) (*Server, *ShardGroup) {
 	updateCh := make(chan interface{}, 1)
-	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize,
-		2, 1, 64, map[string]*ShardEndpoint{}, false, updateCh)
+	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize, 2, 1, 64, map[string]*ShardEndpoint{}, false, testIPFamily(), updateCh)
 	sg.State = state
 
 	srv := &Server{

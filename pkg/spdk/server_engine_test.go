@@ -6,18 +6,17 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	. "gopkg.in/check.v1"
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
-
-	. "gopkg.in/check.v1"
 )
 
 func (s *TestSuite) TestServerEngineReplicaListEmptyForShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaList returns an empty replica map for EC engines")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -51,7 +50,7 @@ func (s *TestSuite) TestServerEngineReplicaListNotFound(c *C) {
 func (s *TestSuite) TestServerEngineReplicaAddRejectedOnShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaAdd rejects EC engines with FailedPrecondition")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -72,7 +71,7 @@ func (s *TestSuite) TestServerEngineReplicaAddRejectedOnShardedEngine(c *C) {
 func (s *TestSuite) TestServerEngineReplicaDeleteRejectedOnShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaDelete rejects EC engines with FailedPrecondition")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -93,7 +92,7 @@ func (s *TestSuite) TestServerEngineReplicaDeleteRejectedOnShardedEngine(c *C) {
 func (s *TestSuite) TestServerEngineSnapshotHashStatusUnimplementedForShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineSnapshotHashStatus returns Unimplemented for EC engines")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
