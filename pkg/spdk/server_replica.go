@@ -48,6 +48,11 @@ func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRe
 		return nil, err
 	}
 
+	// A replica reconstructed from an on-disk lvol during startup, or reused
+	// from the replica map, was registered before this request existed; adopt
+	// the host-ACL decision carried by the latest create request.
+	r.SetRestrictHostACL(req.RestrictHostAcl)
+
 	defer func() {
 		// Always update the replica map
 		s.Lock()
