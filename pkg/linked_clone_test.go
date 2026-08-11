@@ -68,7 +68,7 @@ func (lce *linkedCloneTestEnv) setupSrcReplicaWithSnapshot(c *C) func() {
 	spdkCli := lce.spdkCli
 
 	_, err := spdkCli.ReplicaCreate(lce.srcReplicaName, defaultTestDiskName, lce.disk.Uuid,
-		defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		defaultTestLvolSize, defaultTestReplicaPortCount, "", true)
 	c.Assert(err, IsNil)
 
 	err = spdkCli.ReplicaSnapshotCreate(lce.srcReplicaName, lce.snapshotName,
@@ -89,7 +89,7 @@ func (lce *linkedCloneTestEnv) setupSrcReplicaWithSnapshot(c *C) func() {
 // createDstReplica creates the destination (clone) replica.
 func (lce *linkedCloneTestEnv) createDstReplica(c *C) {
 	_, err := lce.spdkCli.ReplicaCreate(lce.dstReplicaName, defaultTestDiskName,
-		lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", true)
 	c.Assert(err, IsNil)
 }
 
@@ -366,7 +366,7 @@ func (lce *linkedCloneTestEnv) createNDstReplicas(c *C, n int) []string {
 		suffix := strings.ReplaceAll(util.UUID(), "-", "")[:6]
 		name := fmt.Sprintf("%s-dst-%d-%s", lce.volumeName, i, suffix)
 		_, err := lce.spdkCli.ReplicaCreate(name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", true)
 		c.Assert(err, IsNil)
 		names[i] = name
 	}
@@ -564,7 +564,7 @@ func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
 		// Create a brand-new dst replica 2 (no prior clone data).
 		dst2Name := fmt.Sprintf("%s-dst2", lce.volumeName)
 		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", true)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
 
@@ -628,7 +628,7 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 		dst2Suffix := strings.ReplaceAll(util.UUID(), "-", "")[:6]
 		dst2Name := fmt.Sprintf("%s-dst2-%s", lce.volumeName, dst2Suffix)
 		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", true)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
 		err = lce.spdkCli.ReplicaSnapshotCloneDstStart(
@@ -731,12 +731,12 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		srcReplica2Name := fmt.Sprintf("%s-src-r2", lce.volumeName)
 
 		_, err = lce.spdkCli.ReplicaCreate(lce.srcReplicaName, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", true)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(lce.srcReplicaName, true) }()
 
 		_, err = lce.spdkCli.ReplicaCreate(srcReplica2Name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", true)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(srcReplica2Name, true) }()
 
@@ -843,7 +843,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 
 		dst2Name := fmt.Sprintf("%s-expand-dst2", lce.volumeName)
 		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
-			lce.disk.Uuid, expandedSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, expandedSize, defaultTestReplicaPortCount, "", true)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
 
