@@ -139,7 +139,7 @@ func (s *TestSuite) TestLinkedCloneReplicaReadableWritable(c *C) {
 		engineFrontendName := fmt.Sprintf("%s-ef", lce.volumeName)
 		engineFrontend, err := lce.spdkCli.EngineFrontendCreate(engineFrontendName, lce.volumeName, lce.engineName,
 			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 		c.Assert(err, IsNil)
 		c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 		defer func() {
@@ -545,7 +545,7 @@ func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
 		efName := fmt.Sprintf("%s-rebuild-ef", lce.volumeName)
 		ef, err := lce.spdkCli.EngineFrontendCreate(efName, lce.volumeName, engineName,
 			types.FrontendEmpty, defaultTestLvolSize,
-			net.JoinHostPort(lce.ip, strconv.Itoa(types.SPDKServicePort)), 0, 0)
+			net.JoinHostPort(lce.ip, strconv.Itoa(types.SPDKServicePort)), 0, 0, 0)
 		c.Assert(err, IsNil)
 		c.Assert(ef.State, Equals, types.InstanceStateRunning)
 		defer func() { _ = lce.spdkCli.EngineFrontendDelete(efName) }()
@@ -654,7 +654,7 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 		efName := fmt.Sprintf("%s-reuse-ef", lce.volumeName)
 		ef, err := lce.spdkCli.EngineFrontendCreate(efName, lce.volumeName, engineName,
 			types.FrontendEmpty, defaultTestLvolSize,
-			net.JoinHostPort(lce.ip, strconv.Itoa(types.SPDKServicePort)), 0, 0)
+			net.JoinHostPort(lce.ip, strconv.Itoa(types.SPDKServicePort)), 0, 0, 0)
 		c.Assert(err, IsNil)
 		c.Assert(ef.State, Equals, types.InstanceStateRunning)
 		defer func() { _ = lce.spdkCli.EngineFrontendDelete(efName) }()
@@ -761,7 +761,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		srcEfName := fmt.Sprintf("%s-src-ef", lce.volumeName)
 		_, err = lce.spdkCli.EngineFrontendCreate(srcEfName, srcVolumeName, lce.srcEngineName,
 			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-			net.JoinHostPort(srcEngine.IP, strconv.Itoa(int(srcEngine.Port))), 0, 0)
+			net.JoinHostPort(srcEngine.IP, strconv.Itoa(int(srcEngine.Port))), 0, 0, 0)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineFrontendDelete(srcEfName) }()
 
@@ -800,7 +800,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		efName := fmt.Sprintf("%s-ef", lce.volumeName)
 		_, err = lce.spdkCli.EngineFrontendCreate(efName, lce.volumeName, lce.engineName,
 			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-			net.JoinHostPort(cloneEngine0.IP, strconv.Itoa(int(cloneEngine0.Port))), 0, 0)
+			net.JoinHostPort(cloneEngine0.IP, strconv.Itoa(int(cloneEngine0.Port))), 0, 0, 0)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineFrontendDelete(efName) }()
 
