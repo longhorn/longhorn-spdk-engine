@@ -508,7 +508,7 @@ func (s *TestSuite) TestSPDKEngineFrontendCreateWithoutEngine(c *C) {
 
 	// Create engine frontend (NVMe/TCP initiator)
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(ip, strconv.Itoa(30000)), 0, 0)
+		net.JoinHostPort(ip, strconv.Itoa(30000)), 0, 0, 0)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateError)
 	c.Assert(engineFrontend.ErrorMsg, Not(Equals), "")
@@ -705,7 +705,7 @@ func (s *TestSuite) TestSPDKEngineAndEngineFrontendCreateAndDeleteWithDifferentF
 			assertEngineEndpoint(c, e.IP, e.Port, test.expectEngineEndpoint)
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, test.frontend, defaultTestLvolSize,
-				net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0)
+				net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 			c.Assert(engineFrontend.ErrorMsg, Equals, "")
@@ -844,7 +844,7 @@ func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
 
 	// Create engine frontend (NVMe/TCP initiator)
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0)
+		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0)
 
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
@@ -1073,7 +1073,7 @@ func (s *TestSuite) TestSPDKEngineFrontendExpand(c *C) {
 
 	// Create engine frontend (NVMe/TCP initiator)
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0)
+		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0)
 
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
@@ -1194,7 +1194,7 @@ func (s *TestSuite) TestSPDKEngineSnapshotCreateAndDelete(c *C) {
 	c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
 
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(ip, strconv.Itoa(int(engine.Port))), 0, 0)
+		net.JoinHostPort(ip, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend, NotNil)
 
@@ -1348,7 +1348,7 @@ func (s *TestSuite) TestSPDKEngineFrontendSnapshotRevert(c *C) {
 			engineFrontendTargetAddress := net.JoinHostPort(ip, strconv.Itoa(int(engine.Port)))
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, tc.engineFrontendType, defaultTestLvolSize,
-				engineFrontendTargetAddress, 0, 0)
+				engineFrontendTargetAddress, 0, 0, 0)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend, NotNil)
 
@@ -1832,7 +1832,7 @@ func (s *TestSuite) TestSPDKEngineCreateWithSalvageRequested(c *C) {
 	c.Assert(err, IsNil)
 
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0)
+		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 
@@ -1983,7 +1983,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 			c.Assert(engine.IP, Not(Equals), "")
@@ -2082,7 +2082,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(engine.Port, Not(Equals), int32(0))
 
 			engineFrontend, err = spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
@@ -2372,7 +2372,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(engine.Port, Not(Equals), int32(0))
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
@@ -3437,7 +3437,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			}
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(vol.engineFrontendName, vol.volumeName, vol.engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 			if err != nil {
 				createErrs[idx] = fmt.Errorf("failed to create engine frontend for vol %d: %w", idx, err)
 				return
@@ -3732,7 +3732,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(engine.Port, Not(Equals), int32(0))
 
 			engineFrontend, err = spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
@@ -3885,7 +3885,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(engine.Port, Not(Equals), int32(0))
 
 			engineFrontend, err = spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
@@ -4253,7 +4253,7 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 		c.Assert(engine.Port, Not(Equals), int32(0))
 
 		engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, prevFrontend, volumeSize,
-			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 		c.Assert(err, IsNil)
 		c.Assert(engineFrontend.Endpoint, Equals, prevEndpoint)
 	}
@@ -4400,7 +4400,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
 
 	// 3. Create Engine Frontend
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 
@@ -4545,7 +4545,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 
 	// 3. Create Engine Frontend
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0)
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 
