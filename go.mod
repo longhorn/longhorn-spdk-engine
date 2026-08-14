@@ -10,7 +10,7 @@ require (
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20260722010828-e5f4ddc47e4d
 	github.com/longhorn/go-common-libs v0.0.0-20260717062941-2c0ab58da729
-	github.com/longhorn/go-spdk-helper v0.8.1-0.20260805151852-965182d14959
+	github.com/longhorn/go-spdk-helper v0.9.1-0.20260814082531-318b4a23bb34
 	github.com/longhorn/types v0.0.0-20260810232958-141f76734364
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.11.1
@@ -75,7 +75,7 @@ require (
 	github.com/slok/goresilience v0.2.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.39.0 // indirect; sindirect
+	golang.org/x/text v0.40.0 // indirect; sindirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/mount-utils v0.31.3 // indirect
