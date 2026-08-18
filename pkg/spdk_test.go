@@ -4783,7 +4783,7 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	// ReplicaRebuildingDstStart fails deterministically without a transport timeout.
 	missingReplicaName := fmt.Sprintf("%s-replica-missing", volumeName)
 	missingReplicaAddress := replica2Address
-	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, missingReplicaName, missingReplicaAddress, defaultTestFastSync, "", "", "")
+	err = spdkCli.EngineFrontendReplicaAdd(engineFrontendName, missingReplicaName, missingReplicaAddress, defaultTestFastSync, nil)
 	c.Assert(err, NotNil)
 
 	engine, err = spdkCli.EngineGet(engineName)
