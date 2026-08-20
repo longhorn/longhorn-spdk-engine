@@ -19,6 +19,7 @@ import (
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
+	commonnet "github.com/longhorn/go-common-libs/net"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 
@@ -92,9 +93,15 @@ type Server struct {
 	metadataDir string
 
 	newServiceClient ServiceClientFactory
+	ipFamily         commonnet.IPFamily
 }
 
-func NewServer(ctx context.Context, portStart, portEnd int32, newServiceClient ServiceClientFactory) (*Server, error) {
+func NewServer(ctx context.Context, portStart, portEnd int32, ipFamily commonnet.IPFamily, newServiceClient ServiceClientFactory) (*Server, error) {
+	switch ipFamily {
+	case commonnet.IPFamilyUnspecified, commonnet.IPFamilyIPv4, commonnet.IPFamilyIPv6:
+	default:
+		return nil, fmt.Errorf("invalid IP family %q", ipFamily)
+	}
 	if newServiceClient == nil {
 		newServiceClient = GetServiceClient
 	}
@@ -128,7 +135,8 @@ func NewServer(ctx context.Context, portStart, portEnd int32, newServiceClient S
 	}
 
 	s := &Server{
-		ctx: ctx,
+		ctx:      ctx,
+		ipFamily: ipFamily,
 
 		hotplugActive: atomic.Bool{},
 
@@ -517,7 +525,7 @@ func (s *Server) rebuildCachedLvolObjects(state *verifyState) error {
 				continue
 			}
 			backingImage := NewBackingImage(s.ctx, backingImageName, backingImageUUID, lvsUUID, size, expectedChecksum,
-				s.updateChs[types.InstanceTypeBackingImage],
+				s.ipFamily, s.updateChs[types.InstanceTypeBackingImage],
 				func(address string) (backingImageServiceClient, error) {
 					return s.newServiceClient(address)
 				})
@@ -529,13 +537,13 @@ func (s *Server) rebuildCachedLvolObjects(state *verifyState) error {
 			lvsUUID := bdevLvol.DriverSpecific.Lvol.LvolStoreUUID
 			specSize := bdevLvol.NumBlocks * uint64(bdevLvol.BlockSize)
 			actualSize := bdevLvol.DriverSpecific.Lvol.NumAllocatedClusters * uint64(defaultClusterSize)
-			state.replicaMap[lvolName] = NewReplica(s.ctx, lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, true, s.updateChs[types.InstanceTypeReplica], s.newServiceClient)
+			state.replicaMap[lvolName] = NewReplica(s.ctx, lvolName, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, true, s.ipFamily, s.updateChs[types.InstanceTypeReplica], s.newServiceClient)
 			state.replicaMapForSync[lvolName] = state.replicaMap[lvolName]
 			logrus.Infof("Detected one possible existing replica %s(%s) with disk %s(%s), spec size %d, actual size %d", bdevLvol.Aliases[0], bdevLvol.UUID, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, actualSize)
 		} else if volumeName, slotIndex, err := ParseShardLvolName(lvolName); err == nil {
 			lvsUUID := bdevLvol.DriverSpecific.Lvol.LvolStoreUUID
 			specSize := bdevLvol.NumBlocks * uint64(bdevLvol.BlockSize)
-			shard := NewShard(volumeName, slotIndex, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.updateChs[types.InstanceTypeShard])
+			shard := NewShard(volumeName, slotIndex, lvsUUIDNameMap[lvsUUID], lvsUUID, specSize, s.ipFamily, s.updateChs[types.InstanceTypeShard])
 			shard.UUID = bdevLvol.UUID
 			// Key by the external shard name (matches what clients send via
 			// Name); the on-disk lvolName is preserved on shard.LvolName.
@@ -752,7 +760,7 @@ func (s *Server) newReplica(req *spdkrpc.ReplicaCreateRequest) (*Replica, error)
 	if !exists {
 		return nil, fmt.Errorf("lvstore %v(%v) does not exist for replica %v creation", req.LvsName, req.LvsUuid, req.Name)
 	}
-	return NewReplica(s.ctx, req.Name, req.LvsName, req.LvsUuid, req.SpecSize, true, s.updateChs[types.InstanceTypeReplica], s.newServiceClient), nil
+	return NewReplica(s.ctx, req.Name, req.LvsName, req.LvsUuid, req.SpecSize, true, s.ipFamily, s.updateChs[types.InstanceTypeReplica], s.newServiceClient), nil
 }
 
 func (s *Server) getBackingImage(backingImageName, lvsUUID string) (backingImage *BackingImage, err error) {
@@ -866,7 +874,7 @@ func (s *Server) newBackingImage(req *spdkrpc.BackingImageCreateRequest) (*Backi
 			return nil, err
 		}
 		s.backingImageMap[backingImageSnapLvolName] = NewBackingImage(s.ctx, req.Name, req.BackingImageUuid, req.LvsUuid, req.Size, req.Checksum,
-			s.updateChs[types.InstanceTypeBackingImage],
+			s.ipFamily, s.updateChs[types.InstanceTypeBackingImage],
 			func(address string) (backingImageServiceClient, error) {
 				return s.newServiceClient(address)
 			})

@@ -42,7 +42,7 @@ func (s *TestSuite) TestValidateReplicaSize(c *C) {
 	for _, tc := range cases {
 		fmt.Println("Testing validateReplicaSize:", tc.name)
 
-		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, tc.engineSize, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, tc.engineSize, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 
 		addrs := map[string]string{}
 		views := map[string]*BackendView{}

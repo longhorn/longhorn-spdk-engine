@@ -502,5 +502,5 @@ func (s *Server) getOrCreateShardGroup(req *spdkrpc.ShardGroupCreateRequest) (*S
 
 	return NewShardGroup(s.ctx, req.Name, req.VolumeName, req.SpecSize,
 		req.Spec.DataChunks, req.Spec.ParityChunks, req.Spec.StripSizeKb, shards,
-		req.Spec.SalvageRequested, s.updateChs[types.InstanceTypeShardGroup]), nil
+		req.Spec.SalvageRequested, s.ipFamily, s.updateChs[types.InstanceTypeShardGroup]), nil
 }

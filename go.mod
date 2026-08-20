@@ -2,6 +2,8 @@ module github.com/longhorn/longhorn-spdk-engine
 
 go 1.26.0
 
+replace github.com/longhorn/go-common-libs => github.com/COLDTURNIP/longhorn-go-common-libs v0.0.0-20260812053030-be5ec4607a0c
+
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/avast/retry-go/v5 v5.0.0

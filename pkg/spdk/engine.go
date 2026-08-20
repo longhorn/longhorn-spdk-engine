@@ -11,12 +11,13 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/util/retry"
 
 	retrygo "github.com/avast/retry-go/v5"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/longhorn/backupstore"
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
@@ -115,8 +116,8 @@ type Engine struct {
 
 	ctx       context.Context
 	cancelCtx context.CancelFunc
-
-	restore *EngineRestore
+	ipFamily  commonnet.IPFamily
+	restore   *EngineRestore
 
 	Name       string
 	VolumeName string
@@ -180,7 +181,7 @@ type Engine struct {
 	newServiceClient ServiceClientFactory
 }
 
-func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}, snapshotMaxCount int32, newServiceClient ServiceClientFactory) *Engine {
+func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}, snapshotMaxCount int32, ipFamily commonnet.IPFamily, newServiceClient ServiceClientFactory) *Engine {
 	log := logrus.StandardLogger().WithFields(logrus.Fields{
 		"engineName": engineName,
 		"volumeName": volumeName,
@@ -199,9 +200,9 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 	ctx, cancelCtx := context.WithCancel(context.Background())
 
 	e := &Engine{
-		ctx:       ctx,
-		cancelCtx: cancelCtx,
-
+		ctx:        ctx,
+		cancelCtx:  cancelCtx,
+		ipFamily:   ipFamily,
 		Name:       engineName,
 		VolumeName: volumeName,
 		Frontend:   frontend,
@@ -333,7 +334,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 // kernel multipath layer does not route I/O to the new path until explicitly
 // promoted.
 func (e *Engine) createNVMeTCPTarget(spdkClient *spdkclient.Client, superiorPortAllocator *commonbitmap.Bitmap, portCount int32, initialANAState NvmeTCPANAState) error {
-	podIP, err := commonnet.GetIPForPod()
+	podIP, err := commonnet.GetIPForPodByFamily(e.ipFamily)
 	if err != nil {
 		return err
 	}

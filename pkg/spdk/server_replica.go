@@ -781,7 +781,7 @@ func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCre
 	}
 
 	var backup *Backup
-	backup, err = NewBackup(s.spdkClient, backupName, req.VolumeName, req.SnapshotName, replica, s.portAllocator, func() {
+	backup, err = NewBackup(s.spdkClient, backupName, req.VolumeName, req.SnapshotName, replica, s.portAllocator, s.ipFamily, func() {
 		s.Lock()
 		defer s.Unlock()
 		s.onBackupTerminalLocked()

@@ -116,7 +116,7 @@ github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20260730002911-add09e6eb92c
+# github.com/longhorn/go-common-libs v0.0.0-20260730002911-add09e6eb92c => github.com/COLDTURNIP/longhorn-go-common-libs v0.0.0-20260812053030-be5ec4607a0c
 ## explicit; go 1.25.10
 github.com/longhorn/go-common-libs/backup
 github.com/longhorn/go-common-libs/bitmap
@@ -453,3 +453,4 @@ sigs.k8s.io/randfill/bytesource
 # sigs.k8s.io/structured-merge-diff/v6 v6.3.3
 ## explicit; go 1.23
 sigs.k8s.io/structured-merge-diff/v6/value
+# github.com/longhorn/go-common-libs => github.com/COLDTURNIP/longhorn-go-common-libs v0.0.0-20260812053030-be5ec4607a0c

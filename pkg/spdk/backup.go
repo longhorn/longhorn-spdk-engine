@@ -37,9 +37,9 @@ type Fragmap struct {
 type Backup struct {
 	sync.Mutex
 
-	spdkClient    *spdkclient.Client
-	portAllocator *commonbitmap.Bitmap
-
+	spdkClient     *spdkclient.Client
+	portAllocator  *commonbitmap.Bitmap
+	ipFamily       commonnet.IPFamily
 	Name           string
 	VolumeName     string
 	SnapshotName   string
@@ -78,7 +78,7 @@ type Backup struct {
 var _ backupstore.DeltaBlockBackupOperations = (*Backup)(nil)
 
 // NewBackup creates a new backup instance
-func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotName string, replica *Replica, superiorPortAllocator *commonbitmap.Bitmap, onTerminal func()) (*Backup, error) {
+func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotName string, replica *Replica, superiorPortAllocator *commonbitmap.Bitmap, ipFamily commonnet.IPFamily, onTerminal func()) (*Backup, error) {
 	log := logrus.WithFields(logrus.Fields{
 		"backupName":   backupName,
 		"volumeName":   volumeName,
@@ -92,7 +92,7 @@ func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotNa
 		replicaAddress = replica.GetAddress()
 	}
 
-	podIP, err := commonnet.GetIPForPod()
+	podIP, err := commonnet.GetIPForPodByFamily(ipFamily)
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +113,7 @@ func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotNa
 	return &Backup{
 		spdkClient:     spdkClient,
 		portAllocator:  superiorPortAllocator,
+		ipFamily:       ipFamily,
 		Name:           backupName,
 		VolumeName:     volumeName,
 		SnapshotName:   snapshotName,
