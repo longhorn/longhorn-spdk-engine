@@ -20,7 +20,7 @@ import (
 // DATA_LAYOUT_TYPE_SHARDED constructs a single shardGroupBackend (EC).
 // Without forwarding this field, callers would default to the proto3 zero
 // value (REPLICATED), and EC volumes would be silently miscreated as RAID1.
-func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool, snapshotMaxCount int32, dataLayoutType spdkrpc.DataLayoutType) (*api.Engine, error) {
+func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool, snapshotMaxCount int32, dataLayoutType spdkrpc.DataLayoutType, transportType spdkrpc.DataEngineTransport) (*api.Engine, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to start engine: missing required parameter name")
 	}
@@ -36,15 +36,16 @@ func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize ui
 	defer cancel()
 
 	resp, err := client.EngineCreate(ctx, &spdkrpc.EngineCreateRequest{
-		Name:              name,
-		VolumeName:        volumeName,
-		Frontend:          frontend,
-		SpecSize:          specSize,
-		ReplicaAddressMap: replicaAddressMap,
-		PortCount:         portCount,
-		SalvageRequested:  salvageRequested,
-		SnapshotMaxCount:  snapshotMaxCount,
-		DataLayoutType:    dataLayoutType,
+		Name:                name,
+		VolumeName:          volumeName,
+		Frontend:            frontend,
+		SpecSize:            specSize,
+		ReplicaAddressMap:   replicaAddressMap,
+		PortCount:           portCount,
+		SalvageRequested:    salvageRequested,
+		SnapshotMaxCount:    snapshotMaxCount,
+		DataLayoutType:      dataLayoutType,
+		DataEngineTransport: transportType,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to start engine")
