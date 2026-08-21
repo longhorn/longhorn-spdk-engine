@@ -85,6 +85,11 @@ type Replica struct {
 	IsExposed               bool
 	SnapshotChecksumEnabled bool
 
+	// restrictHostACL limits every subsystem this replica exposes to the
+	// internal host NQN. Follows the latest ReplicaCreate request; false
+	// keeps the any-host ACL.
+	restrictHostACL bool
+
 	// SnapshotLvolHashStatusMap map[<snapshot lvol name>]LvolHashStatus.
 	SnapshotLvolHashStatusMap sync.Map
 
@@ -360,6 +365,24 @@ func (r *Replica) GetAddress() string {
 	r.RLock()
 	defer r.RUnlock()
 	return net.JoinHostPort(r.IP, strconv.Itoa(int(r.PortStart)))
+}
+
+// exposeAllowedHosts returns the host NQN allowlist for every subsystem this
+// replica exposes: the internal host NQN when the restriction is requested,
+// or nil to keep the subsystem open to any host.
+func (r *Replica) exposeAllowedHosts() []string {
+	if r.restrictHostACL {
+		return []string{helpertypes.InternalHostNQN}
+	}
+	return nil
+}
+
+// SetRestrictHostACL applies the host-ACL decision carried by a ReplicaCreate
+// request.
+func (r *Replica) SetRestrictHostACL(restrict bool) {
+	r.Lock()
+	defer r.Unlock()
+	r.restrictHostACL = restrict
 }
 
 func (r *Replica) prepareIPAndPorts(portCount int32, superiorPortAllocator *commonbitmap.Bitmap) error {
@@ -1513,7 +1536,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 	}
 
 	if err := spdkClient.StartExposeBdev(r.Nqn, r.Head.UUID, generateNGUID(r.Name), r.IP, strconv.Itoa(int(r.PortStart)),
-		helpertypes.InternalHostNQN); err != nil {
+		r.exposeAllowedHosts()...); err != nil {
 		return nil, err
 	}
 
@@ -1806,7 +1829,7 @@ func (r *Replica) Expand(spdkClient *spdkclient.Client, size uint64) error {
 	// If we had previously exposed the bdev, we must re-expose it after the resize.
 	if reExposeBdev {
 		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.Head.UUID, generateNGUID(r.Name), r.IP, strconv.Itoa(int(r.PortStart)),
-			helpertypes.InternalHostNQN); err != nil {
+			r.exposeAllowedHosts()...); err != nil {
 			return errors.Wrapf(err, "failed to start expose replica %v after expansion", r.Name)
 		}
 		r.IsExposed = true
@@ -2167,7 +2190,7 @@ func (r *Replica) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName str
 		r.IsExposed = false
 
 		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), headLvolUUID, generateNGUID(r.Name), r.IP, strconv.Itoa(int(r.PortStart)),
-			helpertypes.InternalHostNQN); err != nil {
+			r.exposeAllowedHosts()...); err != nil {
 			return nil, err
 		}
 		r.IsExposed = true
@@ -2532,7 +2555,7 @@ func (r *Replica) SnapshotCloneDstStart(spdkClient *spdkclient.Client, snapshotN
 
 	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.snapshotCloningDstCache.cloningLvol.Name),
 		r.snapshotCloningDstCache.cloningLvol.UUID, generateNGUID(r.snapshotCloningDstCache.cloningLvol.Name), r.IP,
-		strconv.Itoa(int(r.snapshotCloningDstCache.cloningPort)), helpertypes.InternalHostNQN); err != nil {
+		strconv.Itoa(int(r.snapshotCloningDstCache.cloningPort)), r.exposeAllowedHosts()...); err != nil {
 		return err
 	}
 	dstCloningLvolAddress := net.JoinHostPort(r.IP, strconv.Itoa(int(r.snapshotCloningDstCache.cloningPort)))
@@ -3289,7 +3312,7 @@ func (r *Replica) RebuildingSrcStart(spdkClient *spdkclient.Client, dstReplicaNa
 		return "", err
 	}
 	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(snapLvol.Name), snapLvol.UUID, generateNGUID(snapLvol.Name), r.IP, strconv.Itoa(int(port)),
-		helpertypes.InternalHostNQN); err != nil {
+		r.exposeAllowedHosts()...); err != nil {
 		return "", err
 	}
 	exposedSnapshotLvolAddress = net.JoinHostPort(r.IP, strconv.Itoa(int(port)))
@@ -3869,7 +3892,7 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	r.ActiveChain = append(r.ActiveChain, r.Head)
 
 	if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.Name), r.Head.UUID, generateNGUID(r.Name), r.IP, strconv.Itoa(int(r.PortStart)),
-		helpertypes.InternalHostNQN); err != nil {
+		r.exposeAllowedHosts()...); err != nil {
 		return "", err
 	}
 	r.IsExposed = true
@@ -4402,7 +4425,7 @@ func (r *Replica) rebuildingDstShallowCopyPrepare(spdkClient *spdkclient.Client,
 	if r.rebuildingDstCache.rebuildingPort != 0 {
 		if err := spdkClient.StartExposeBdev(helpertypes.GetNQN(r.rebuildingDstCache.rebuildingLvol.Name), r.rebuildingDstCache.rebuildingLvol.UUID,
 			generateNGUID(r.rebuildingDstCache.rebuildingLvol.Name), r.IP, strconv.Itoa(int(r.rebuildingDstCache.rebuildingPort)),
-			helpertypes.InternalHostNQN); err != nil {
+			r.exposeAllowedHosts()...); err != nil {
 			return "", false, err
 		}
 		dstRebuildingLvolAddress = net.JoinHostPort(r.IP, strconv.Itoa(int(r.rebuildingDstCache.rebuildingPort)))
