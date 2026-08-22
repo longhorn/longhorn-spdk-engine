@@ -21,6 +21,8 @@ import (
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
+
+	"github.com/longhorn/types/pkg/generated/spdkrpc"
 )
 
 func discoverAndConnectNVMeTarget(srcIP string, srcPort int32, maxRetries int, retryInterval time.Duration) (subsystemNQN, controllerName string, err error) {
@@ -74,7 +76,9 @@ func exposeSnapshotLvolBdev(spdkClient *spdkclient.Client, lvsName, lvolName, ip
 	}
 
 	portStr := strconv.Itoa(int(port))
-	err = spdkClient.StartExposeBdev(helpertypes.GetNQN(lvolName), bdevLvolList[0].UUID, generateNGUID(lvolName), ip, portStr)
+	// Backup/restore snapshot export stays on TCP for the MVP; only the
+	// engine<->replica head fabric is transport-selectable.
+	err = spdkClient.StartExposeBdev(helpertypes.GetNQN(lvolName), bdevLvolList[0].UUID, generateNGUID(lvolName), ip, portStr, spdktypes.NvmeTransportTypeTCP)
 	if err != nil {
 		return "", "", errors.Wrapf(err, "failed to expose snapshot lvol bdev %v", lvolName)
 	}
@@ -119,11 +123,32 @@ func splitHostPort(address string) (string, int32, error) {
 	return address, 0, nil
 }
 
-// connectNVMfBdev connects to the NVMe/TCP target, which is exposed by a remote lvol bdev.
-// controllerName is typically the lvol name, and address is the IP:port of the NVMe/TCP target.
-func connectNVMfBdev(spdkClient *spdkclient.Client, controllerName, address string, ctrlrLossTimeout, fastIOFailTimeoutSec int, maxRetries int, retryInterval time.Duration) (bdevName string, err error) {
+// nvmeTransportFromProto maps the spdkrpc.TransportType enum to the
+// go-spdk-helper NVMe transport type used throughout the engine/replica code.
+// The zero value (TRANSPORT_TYPE_TCP) maps to TCP so that engines and
+// replicas created by an older control plane - which never sets the field -
+// keep their historical TCP behavior.
+func nvmeTransportFromProto(t spdkrpc.TransportType) spdktypes.NvmeTransportType {
+	switch t {
+	case spdkrpc.TransportType_TRANSPORT_TYPE_RDMA:
+		return spdktypes.NvmeTransportTypeRDMA
+	default:
+		return spdktypes.NvmeTransportTypeTCP
+	}
+}
+
+// connectNVMfBdev connects to the NVMe-oF target, which is exposed by a remote lvol bdev.
+// controllerName is typically the lvol name, and address is the IP:port of the NVMe-oF target.
+// trtype selects the NVMe-oF transport (TCP or RDMA); it must match the transport the
+// remote side used to expose the bdev. An empty trtype defaults to TCP for backward
+// compatibility.
+func connectNVMfBdev(spdkClient *spdkclient.Client, controllerName, address string, trtype spdktypes.NvmeTransportType, ctrlrLossTimeout, fastIOFailTimeoutSec int, maxRetries int, retryInterval time.Duration) (bdevName string, err error) {
 	if controllerName == "" || address == "" {
 		return "", fmt.Errorf("controllerName or address is empty")
+	}
+
+	if trtype == "" {
+		trtype = spdktypes.NvmeTransportTypeTCP
 	}
 
 	defer func() {
@@ -165,7 +190,7 @@ func connectNVMfBdev(spdkClient *spdkclient.Client, controllerName, address stri
 				helpertypes.GetNQN(controllerName),
 				ip,
 				port,
-				spdktypes.NvmeTransportTypeTCP,
+				trtype,
 				adrfam,
 				int32(ctrlrLossTimeout),
 				replicaReconnectDelaySec,

@@ -39,7 +39,11 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	}
 
 	if e == nil {
-		s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine], req.SnapshotMaxCount, s.newServiceClient)
+		// Select the internal engine<->replica NVMe-oF transport. Unset (TCP=0)
+		// preserves historical TCP behavior. Must match the transport the replicas
+		// used to expose their heads.
+		transportType := nvmeTransportFromProto(req.TransportType)
+		s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, transportType, req.SpecSize, s.updateChs[types.InstanceTypeEngine], req.SnapshotMaxCount, s.newServiceClient)
 		e = s.engineMap[req.Name]
 	}
 
