@@ -15,7 +15,7 @@ import (
 )
 
 // ReplicaCreate creates and starts a replica in the specified lvstore.
-func (c *SPDKClient) ReplicaCreate(name, lvsName, lvsUUID string, specSize uint64, portCount int32, backingImageName string, transportType spdkrpc.DataEngineTransport) (*api.Replica, error) {
+func (c *SPDKClient) ReplicaCreate(name, lvsName, lvsUUID string, specSize uint64, portCount int32, backingImageName string, transportType spdkrpc.TransportType) (*api.Replica, error) {
 	if name == "" || lvsName == "" || lvsUUID == "" {
 		return nil, fmt.Errorf("failed to start SPDK replica: missing required parameters")
 	}
@@ -31,7 +31,7 @@ func (c *SPDKClient) ReplicaCreate(name, lvsName, lvsUUID string, specSize uint6
 		SpecSize:            specSize,
 		PortCount:           portCount,
 		BackingImageName:    backingImageName,
-		DataEngineTransport: transportType,
+		TransportType: transportType,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to start SPDK replica")

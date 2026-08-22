@@ -123,14 +123,14 @@ func splitHostPort(address string) (string, int32, error) {
 	return address, 0, nil
 }
 
-// nvmeTransportFromProto maps the spdkrpc.DataEngineTransport enum to the
+// nvmeTransportFromProto maps the spdkrpc.TransportType enum to the
 // go-spdk-helper NVMe transport type used throughout the engine/replica code.
-// The zero value (DATA_ENGINE_TRANSPORT_TCP) maps to TCP so that engines and
+// The zero value (TRANSPORT_TYPE_TCP) maps to TCP so that engines and
 // replicas created by an older control plane - which never sets the field -
 // keep their historical TCP behavior.
-func nvmeTransportFromProto(t spdkrpc.DataEngineTransport) spdktypes.NvmeTransportType {
+func nvmeTransportFromProto(t spdkrpc.TransportType) spdktypes.NvmeTransportType {
 	switch t {
-	case spdkrpc.DataEngineTransport_DATA_ENGINE_TRANSPORT_RDMA:
+	case spdkrpc.TransportType_TRANSPORT_TYPE_RDMA:
 		return spdktypes.NvmeTransportTypeRDMA
 	default:
 		return spdktypes.NvmeTransportTypeTCP
