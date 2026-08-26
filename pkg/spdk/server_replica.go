@@ -951,6 +951,9 @@ func (s *Server) pruneRetainedBackupsLocked() {
 	}
 }
 
+// Deprecated: unused. The backup restore workflow was moved from the replica to the
+// engine level by commit fe318421, so the live path is EngineBackupRestore. The
+// replica-side restore below is kept only so the rpc still has an implementation.
 func (s *Server) ReplicaBackupRestore(ctx context.Context, req *spdkrpc.ReplicaBackupRestoreRequest) (ret *emptypb.Empty, err error) {
 	s.RLock()
 	replica := s.replicaMap[req.ReplicaName]
