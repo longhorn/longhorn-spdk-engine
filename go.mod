@@ -12,7 +12,7 @@ require (
 	github.com/longhorn/go-common-libs v0.0.0-20260730002911-add09e6eb92c
 	github.com/longhorn/go-spdk-helper v0.9.1-0.20260828012436-4ec507083142
 	github.com/longhorn/types v0.0.0-20260814104707-529643438923
-	github.com/sirupsen/logrus v1.9.4
+	github.com/sirupsen/logrus v1.10.0
 	github.com/stretchr/testify v1.12.0
 	go.uber.org/multierr v1.11.0
 	google.golang.org/grpc v1.83.0
