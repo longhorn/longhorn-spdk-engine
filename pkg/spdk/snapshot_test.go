@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"strings"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
-
-	. "gopkg.in/check.v1"
 )
 
 func (s *TestSuite) TestSnapshotOperationPreCheckCreateGeneratesName(c *C) {
 	fmt.Println("Testing snapshotOperationPreCheckWithoutLock generates snapshot name for create operation")
 
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 
 	snapshotName, err := e.snapshotOperationPreCheckWithoutLock("", SnapshotOperationCreate)
 	c.Assert(err, IsNil)
@@ -25,7 +25,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckCreateGeneratesName(c *C) {
 func (s *TestSuite) TestSnapshotOperationPreCheckDeleteEmptyName(c *C) {
 	fmt.Println("Testing snapshotOperationPreCheckWithoutLock returns error for delete operation with empty snapshot name")
 
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 
 	_, err := e.snapshotOperationPreCheckWithoutLock("", SnapshotOperationDelete)
 	c.Assert(err, NotNil)
@@ -35,7 +35,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckDeleteEmptyName(c *C) {
 func (s *TestSuite) TestSnapshotOperationPreCheckCreateFailsWhenSnapshotMaxCountReached(c *C) {
 	fmt.Println("Testing snapshotOperationPreCheckWithoutLock returns error when snapshot max count is reached")
 
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.SnapshotMaxCount = 2
 	e.SnapshotMap["snap-1"] = &api.Lvol{Name: "snap-1"}
 	e.SnapshotMap["snap-2"] = &api.Lvol{Name: "snap-2"}
@@ -48,7 +48,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckCreateFailsWhenSnapshotMaxCount
 func (s *TestSuite) TestSnapshotOperationPreCheckRevertReadsSnapshotsViaBackend(c *C) {
 	fmt.Println("Testing snapshotOperationPreCheckWithoutLock for revert reads snapshot map via Backend.Get()")
 
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.Frontend = types.FrontendEmpty // revert requires empty frontend
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(types.ModeRW)
@@ -67,7 +67,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckRevertReadsSnapshotsViaBackend(
 func (s *TestSuite) TestSnapshotOperationPreCheckRevertRejectsMissingSnapshot(c *C) {
 	fmt.Println("Testing snapshotOperationPreCheckWithoutLock for revert rejects when snapshot is absent from Backend.Get()")
 
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.Frontend = types.FrontendEmpty
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(types.ModeRW)
@@ -85,7 +85,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckRevertRejectsMissingSnapshot(c 
 func (s *TestSuite) TestSnapshotOperationPreCheckRevertPropagatesBackendError(c *C) {
 	fmt.Println("Testing snapshotOperationPreCheckWithoutLock for revert propagates Backend.Get() error")
 
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.Frontend = types.FrontendEmpty
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(types.ModeRW)
@@ -100,7 +100,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckRevertPropagatesBackendError(c 
 func (s *TestSuite) TestSnapshotOperationPreCheckSkipsNonDispatchableBackends(c *C) {
 	fmt.Println("Testing snapshotOperationPreCheckWithoutLock skips non-dispatchable backends")
 
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.Frontend = types.FrontendEmpty
 
 	dispatchable := newFakeBackend("r1", "10.0.0.1:1234")
@@ -127,7 +127,7 @@ func (s *TestSuite) TestSnapshotOperationPreCheckSkipsNonDispatchableBackends(c 
 }
 
 func newEngineWithFakeBackend() (*Engine, *fakeBackend) {
-	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(types.ModeRW)
 	e.backends = map[string]Backend{"r1": u}
@@ -225,7 +225,7 @@ func (s *TestSuite) TestReplicaSnapshotOperationUnknownOp(c *C) {
 func (s *TestSuite) TestEngineFrontendSnapshotOperationCreateFailsWhenInitiatorNil(c *C) {
 	fmt.Println("Testing engine frontend snapshotOperation returns error when initiator is nil for create operation")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", types.FrontendSPDKTCPBlockdev, 10, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	ef.State = types.InstanceStateRunning
 	ef.Frontend = types.FrontendSPDKTCPBlockdev
 	ef.Endpoint = "/dev/longhorn/test"

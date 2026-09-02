@@ -4,13 +4,14 @@ import (
 	"errors"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
+	. "gopkg.in/check.v1"
+
 	btypes "github.com/longhorn/backupstore/types"
 	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
 	commonns "github.com/longhorn/go-common-libs/ns"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
-	"github.com/sirupsen/logrus"
-
-	. "gopkg.in/check.v1"
 )
 
 func (s *TestSuite) TestUpdateBackupStatusPrefersErrorOverComplete(c *C) {
@@ -111,7 +112,7 @@ func (s *TestSuite) TestBackupTerminalCallbackRunsAfterCleanup(c *C) {
 		Name:       "backup-a",
 		VolumeName: "vol-a",
 		State:      btypes.ProgressStateComplete,
-		replica:    &Replica{Name: "replica-a"},
+		replica:    &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		fragmap:    &Fragmap{},
 		log:        logrus.New(),
 		onTerminal: func() {
@@ -158,7 +159,7 @@ func (s *TestSuite) TestBackupCloseSnapshotDoesNotMarkTerminalOnCleanupFailure(c
 		Name:           "backup-a",
 		VolumeName:     "vol-a",
 		State:          btypes.ProgressStateComplete,
-		replica:        &Replica{Name: "replica-a"},
+		replica:        &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		fragmap:        &Fragmap{},
 		subsystemNQN:   "nqn-a",
 		controllerName: "ctrl-a",
@@ -201,7 +202,7 @@ func (s *TestSuite) TestBackupCloseSnapshotDoesNotMarkTerminalOnPortReleaseFailu
 		Port:       200,
 		fragmap:    &Fragmap{},
 		executor:   &commonns.Executor{},
-		replica:    &Replica{Name: "replica-a"},
+		replica:    &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		log:        logrus.New(),
 		onTerminal: func() {
 			callbackCh <- struct{}{}
@@ -236,7 +237,7 @@ func (s *TestSuite) TestBackupCreateFailureRetainsMapEntryWhenResourcesActive(c 
 		Name:         "backup-leak",
 		VolumeName:   "vol-a",
 		State:        btypes.ProgressStateInProgress,
-		replica:      &Replica{Name: "replica-a"},
+		replica:      &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		initiator:    &fakeNVMeInitiator{endpoint: "/dev/fake"},
 		subsystemNQN: "nqn-leak",
 		log:          logrus.New(),
@@ -280,7 +281,7 @@ func (s *TestSuite) TestBackupCreateFailureRemovesMapEntryWhenClean(c *C) {
 		Name:       "backup-clean",
 		VolumeName: "vol-a",
 		State:      btypes.ProgressStateInProgress,
-		replica:    &Replica{Name: "replica-a"},
+		replica:    &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		fragmap:    &Fragmap{},
 		log:        logrus.New(),
 	}
@@ -317,7 +318,7 @@ func (s *TestSuite) TestPruneRetainedBackupsKeepsRecentTerminalStates(c *C) {
 		State:        btypes.ProgressStateComplete,
 		terminalSeen: true,
 		terminalAt:   time.Now().Add(-5 * time.Second),
-		replica:      &Replica{Name: "replica-a"},
+		replica:      &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		fragmap:      &Fragmap{},
 		executor:     &commonns.Executor{},
 	})
@@ -361,7 +362,7 @@ func (s *TestSuite) TestPruneRetainedBackupsReleasesHeavyResourcesBeforeDeletion
 		State:        btypes.ProgressStateComplete,
 		terminalSeen: true,
 		terminalAt:   time.Now(),
-		replica:      &Replica{Name: "replica-a"},
+		replica:      &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		fragmap:      &Fragmap{},
 		executor:     &commonns.Executor{},
 	}
@@ -394,7 +395,7 @@ func (s *TestSuite) TestPruneRetainedBackupsSkipsTerminalBackupsWithActiveSnapsh
 		State:        btypes.ProgressStateComplete,
 		terminalSeen: true,
 		terminalAt:   time.Now(),
-		replica:      &Replica{Name: "replica-a"},
+		replica:      &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		fragmap:      &Fragmap{},
 		executor:     &commonns.Executor{},
 		subsystemNQN: "nqn-active",
@@ -478,7 +479,7 @@ func (s *TestSuite) TestPruneRetainedBackupsSkipsTerminalBackupsBeforeCleanup(c 
 		Name:       "complete-not-cleaned",
 		State:      btypes.ProgressStateComplete,
 		terminalAt: time.Now(),
-		replica:    &Replica{Name: "replica-a"},
+		replica:    &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		fragmap:    &Fragmap{},
 		executor:   &commonns.Executor{},
 	}
