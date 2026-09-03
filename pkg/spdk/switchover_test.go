@@ -1192,3 +1192,122 @@ func (s *TestSuite) TestIsSubsystemNotFoundError(c *C) {
 	c.Assert(isSubsystemNotFoundError(fmt.Errorf("something else: unable to find subsystem with NQN abc")), Equals, true)
 	c.Assert(isSubsystemNotFoundError(fmt.Errorf("connection refused")), Equals, false)
 }
+
+// newBlockdevSwitchoverFrontend builds a running blockdev EngineFrontend at
+// 10.0.0.1:2000 with remote interactions stubbed, so a switchover can be driven
+// without SPDK or a live NVMe target.
+func newBlockdevSwitchoverFrontend(c *C, updateCh chan interface{}) *EngineFrontend {
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
+	ef.NvmeTcpFrontend.TargetPort = 2000
+	ef.NvmeTcpFrontend.Nqn = getStableVolumeNQN("vol-a")
+	ef.NvmeTcpFrontend.Nguid = getStableVolumeNGUID("vol-a")
+	ef.Endpoint = "/dev/longhorn/vol-a"
+	ef.syncCurrentNVMeTCPPathLocked()
+	ef.initiator = &initiator.Initiator{
+		Endpoint:    ef.Endpoint,
+		NVMeTCPInfo: &initiator.NVMeTCPInfo{SubsystemNQN: ef.NvmeTcpFrontend.Nqn},
+	}
+	ef.getInitiatorEndpointFn = func() string { return "/dev/longhorn/vol-a" }
+	ef.loadInitiatorNVMeDeviceInfoFn = func(transportAddress, transportServiceID, subsystemNQN string) error { return nil }
+	ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error { return nil }
+	ef.waitForNvmeTCPControllerLiveFn = func(transportAddress string, transportPort int32) error { return nil }
+	ef.connectNvmeTCPPathFn = func(transportAddress, transportServiceID string) error { return nil }
+	stubSwitchoverANASync(ef, nil)
+	return ef
+}
+
+func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevDropsSupersededPath(c *C) {
+	fmt.Println("Testing EngineFrontend.SwitchOverTarget drops the superseded NVMe-TCP path after switchover")
+
+	ef := newBlockdevSwitchoverFrontend(c, make(chan interface{}, 1))
+
+	var gotNQN, gotAddress, gotServiceID string
+	calls := 0
+	ef.disconnectStaleNvmeTCPPathFn = func(nqn, transportAddress, transportServiceID string) error {
+		calls++
+		gotNQN, gotAddress, gotServiceID = nqn, transportAddress, transportServiceID
+		return nil
+	}
+
+	err := ef.SwitchOverTarget(nil, "engine-b", "10.0.0.2:3000", "")
+	c.Assert(err, IsNil)
+
+	// Exactly the old path is dropped -- never the newly promoted one. Both
+	// share the volume-scoped NQN, so the address is what discriminates them.
+	c.Assert(calls, Equals, 1)
+	c.Assert(gotAddress, Equals, "10.0.0.1")
+	c.Assert(gotServiceID, Equals, "2000")
+	c.Assert(gotNQN, Equals, getStableVolumeNQN("vol-a"))
+
+	c.Assert(ef.NvmeTcpFrontend.TargetIP, Equals, "10.0.0.2")
+	c.Assert(ef.NvmeTcpFrontend.TargetPort, Equals, int32(3000))
+}
+
+func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevKeepsPathWhenAddressUnchanged(c *C) {
+	fmt.Println("Testing EngineFrontend.SwitchOverTarget does not drop the path when the target address is unchanged")
+
+	ef := newBlockdevSwitchoverFrontend(c, make(chan interface{}, 1))
+
+	calls := 0
+	ef.disconnectStaleNvmeTCPPathFn = func(nqn, transportAddress, transportServiceID string) error {
+		calls++
+		return nil
+	}
+
+	// Engine rename in place: dropping the only path would strand the volume.
+	err := ef.SwitchOverTarget(nil, "engine-b", "10.0.0.1:2000", "")
+	c.Assert(err, IsNil)
+	c.Assert(calls, Equals, 0)
+	c.Assert(ef.NvmeTcpFrontend.TargetIP, Equals, "10.0.0.1")
+	c.Assert(ef.NvmeTcpFrontend.TargetPort, Equals, int32(2000))
+}
+
+func (s *TestSuite) TestEngineFrontendSwitchOverTargetBlockdevDropFailureIsNonFatal(c *C) {
+	fmt.Println("Testing EngineFrontend.SwitchOverTarget survives a failure to drop the superseded path")
+
+	ef := newBlockdevSwitchoverFrontend(c, make(chan interface{}, 1))
+
+	calls := 0
+	ef.disconnectStaleNvmeTCPPathFn = func(nqn, transportAddress, transportServiceID string) error {
+		calls++
+		return fmt.Errorf("nvme disconnect failed")
+	}
+
+	// A failed cleanup must not fail the switchover.
+	err := ef.SwitchOverTarget(nil, "engine-b", "10.0.0.2:3000", "")
+	c.Assert(err, IsNil)
+	c.Assert(calls, Equals, 1)
+	c.Assert(ef.EngineName, Equals, "engine-b")
+	c.Assert(ef.NvmeTcpFrontend.TargetIP, Equals, "10.0.0.2")
+	c.Assert(ef.ErrorMsg, Equals, "")
+}
+
+func (s *TestSuite) TestDropSupersededNvmeTCPPathSkipsIncompleteInput(c *C) {
+	fmt.Println("Testing dropSupersededNvmeTCPPath skips incomplete or unchanged path input")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+
+	calls := 0
+	ef.disconnectStaleNvmeTCPPathFn = func(nqn, transportAddress, transportServiceID string) error {
+		calls++
+		return nil
+	}
+
+	nqn := getStableVolumeNQN("vol-a")
+	ef.dropSupersededNvmeTCPPath("", "10.0.0.1", 2000, "10.0.0.2", 3000)  // no NQN
+	ef.dropSupersededNvmeTCPPath(nqn, "", 2000, "10.0.0.2", 3000)         // no old IP
+	ef.dropSupersededNvmeTCPPath(nqn, "10.0.0.1", 0, "10.0.0.2", 3000)    // no old port
+	ef.dropSupersededNvmeTCPPath(nqn, "10.0.0.1", 2000, "10.0.0.1", 2000) // unchanged address
+	// A malformed new address must not be read as a superseded old path: the
+	// old path is the one still serving the volume.
+	ef.dropSupersededNvmeTCPPath(nqn, "10.0.0.1", 2000, "", 3000)      // no new IP
+	ef.dropSupersededNvmeTCPPath(nqn, "10.0.0.1", 2000, "10.0.0.1", 0) // no new port, same IP
+	ef.dropSupersededNvmeTCPPath(nqn, "10.0.0.1", 2000, "10.0.0.2", 0) // no new port
+	c.Assert(calls, Equals, 0)
+
+	// Differing only by port is still a distinct path and must be dropped.
+	ef.dropSupersededNvmeTCPPath(nqn, "10.0.0.1", 2000, "10.0.0.1", 3000)
+	c.Assert(calls, Equals, 1)
+}
