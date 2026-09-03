@@ -68,7 +68,7 @@ func (lce *linkedCloneTestEnv) setupSrcReplicaWithSnapshot(c *C) func() {
 	spdkCli := lce.spdkCli
 
 	_, err := spdkCli.ReplicaCreate(lce.srcReplicaName, defaultTestDiskName, lce.disk.Uuid,
-		defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		defaultTestLvolSize, defaultTestReplicaPortCount, "", "")
 	c.Assert(err, IsNil)
 
 	err = spdkCli.ReplicaSnapshotCreate(lce.srcReplicaName, lce.snapshotName,
@@ -89,7 +89,7 @@ func (lce *linkedCloneTestEnv) setupSrcReplicaWithSnapshot(c *C) func() {
 // createDstReplica creates the destination (clone) replica.
 func (lce *linkedCloneTestEnv) createDstReplica(c *C) {
 	_, err := lce.spdkCli.ReplicaCreate(lce.dstReplicaName, defaultTestDiskName,
-		lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", "")
 	c.Assert(err, IsNil)
 }
 
@@ -129,7 +129,7 @@ func (s *TestSuite) TestLinkedCloneReplicaReadableWritable(c *C) {
 		}
 
 		engine, err := lce.spdkCli.EngineCreate(lce.engineName, lce.volumeName,
-			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		defer func() {
@@ -139,7 +139,7 @@ func (s *TestSuite) TestLinkedCloneReplicaReadableWritable(c *C) {
 		engineFrontendName := fmt.Sprintf("%s-ef", lce.volumeName)
 		engineFrontend, err := lce.spdkCli.EngineFrontendCreate(engineFrontendName, lce.volumeName, lce.engineName,
 			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, "")
 		c.Assert(err, IsNil)
 		c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 		defer func() {
@@ -266,7 +266,7 @@ func (s *TestSuite) TestLinkedCloneSnapshotDeleteBlocked(c *C) {
 			lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcReplica.PortStart))),
 		}
 		_, err = lce.spdkCli.EngineCreate(lce.engineName, lce.volumeName,
-			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, srcAddrMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, srcAddrMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 		c.Assert(err, IsNil)
 		defer func() {
 			_ = lce.spdkCli.EngineDelete(lce.engineName)
@@ -287,7 +287,7 @@ func (s *TestSuite) TestLinkedCloneSnapshotDeleteBlocked(c *C) {
 }
 
 // ---------------------------------------------------------------------------
-// Test Case 3: syncCloneEntrypoints — tmp head and childless ep cleanup
+// Test Case 3: syncCloneEntrypoints - tmp head and childless ep cleanup
 // ---------------------------------------------------------------------------
 
 // TestLinkedCloneSyncCleanupTmpHeadOnlyEntrypoint verifies that when a clone
@@ -320,7 +320,7 @@ func (s *TestSuite) TestLinkedCloneSyncCleanupTmpHeadOnlyEntrypoint(c *C) {
 		// step 2 (snapshot the tmp-head into the ep) but crashes before step 3
 		// (deleting the tmp-head).
 		//
-		// Real state: srcSnapshot → ep(read-only) → tmpHead(writable, only child)
+		// Real state: srcSnapshot -> ep(read-only) -> tmpHead(writable, only child)
 		//
 		// We must do this atomically with retries because the monitoring loop
 		// fires every 3 s and deletes orphaned tmp-heads (loop 1), racing with
@@ -328,12 +328,12 @@ func (s *TestSuite) TestLinkedCloneSyncCleanupTmpHeadOnlyEntrypoint(c *C) {
 		err = retry.New(monitoringRetryOpts(lce.ctx, 10)...).Do(func() error {
 			_, _ = lce.rawSPDKCli.BdevLvolDelete(tmpHeadAlias)
 			_, _ = lce.rawSPDKCli.BdevLvolDelete(epAlias)
-			// Step 1: clone srcSnapshot → writable tmpHead
+			// Step 1: clone srcSnapshot -> writable tmpHead
 			tmpHeadUUID, cloneErr := lce.rawSPDKCli.BdevLvolClone(srcSnapBdev.UUID, tmpHeadName)
 			if cloneErr != nil {
 				return cloneErr
 			}
-			// Step 2: snapshot tmpHead → read-only ep (tmpHead becomes ep's child)
+			// Step 2: snapshot tmpHead -> read-only ep (tmpHead becomes ep's child)
 			if _, snapErr := lce.rawSPDKCli.BdevLvolSnapshot(tmpHeadUUID, epLvolName, nil); snapErr != nil {
 				return fmt.Errorf("monitoring may have deleted tmp-head before ep snapshot: %w", snapErr)
 			}
@@ -366,7 +366,7 @@ func (lce *linkedCloneTestEnv) createNDstReplicas(c *C, n int) []string {
 		suffix := strings.ReplaceAll(util.UUID(), "-", "")[:6]
 		name := fmt.Sprintf("%s-dst-%d-%s", lce.volumeName, i, suffix)
 		_, err := lce.spdkCli.ReplicaCreate(name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", "")
 		c.Assert(err, IsNil)
 		names[i] = name
 	}
@@ -378,7 +378,7 @@ func (lce *linkedCloneTestEnv) createNDstReplicas(c *C, n int) []string {
 // then issues a single EngineSnapshotClone call with all N dst replicas mapped
 // to the same src replica via DstReplicaSrcReplicaPairMap.
 func (lce *linkedCloneTestEnv) startNReplicaLinkedClone(c *C) {
-	// Build dst engine replica address map and the dst→src pair map.
+	// Build dst engine replica address map and the dst-to-src pair map.
 	dstReplicaAddrMap := map[string]string{}
 	pairMap := map[string]string{}
 	for _, name := range lce.dstReplicaNames {
@@ -390,7 +390,7 @@ func (lce *linkedCloneTestEnv) startNReplicaLinkedClone(c *C) {
 
 	// Create dst engine (no frontend needed for clone).
 	_, err := lce.spdkCli.EngineCreate(lce.engineName, lce.volumeName,
-		types.FrontendEmpty, defaultTestLvolSize, dstReplicaAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		types.FrontendEmpty, defaultTestLvolSize, dstReplicaAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 	c.Assert(err, IsNil)
 
 	// Create src engine (no frontend needed).
@@ -400,7 +400,7 @@ func (lce *linkedCloneTestEnv) startNReplicaLinkedClone(c *C) {
 		lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcReplica.PortStart))),
 	}
 	_, err = lce.spdkCli.EngineCreate(lce.srcEngineName, lce.volumeName,
-		types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 	c.Assert(err, IsNil)
 
 	// Execute N-replica simultaneous linked-clone.
@@ -505,7 +505,7 @@ func (lce *linkedCloneTestEnv) assertCloneReplicaEntrypoint(c *C, replicaName st
 }
 
 // ---------------------------------------------------------------------------
-// Test Case 7: Linked-clone rebuild — new replica from scratch
+// Test Case 7: Linked-clone rebuild - new replica from scratch
 // ---------------------------------------------------------------------------
 // A new blank replica is added to a running clone-volume engine.
 // EngineFrontendReplicaAdd is called with linkedCloneSrcReplicaName so the
@@ -514,7 +514,7 @@ func (lce *linkedCloneTestEnv) assertCloneReplicaEntrypoint(c *C, replicaName st
 // entrypoint, and data read through the engine must match the source.
 
 func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
-	fmt.Println("Testing linked-clone rebuild from scratch — new replica with linkedCloneSrcReplicaName")
+	fmt.Println("Testing linked-clone rebuild from scratch - new replica with linkedCloneSrcReplicaName")
 	withRuntimeMonitoringTestEnv(c, "aio", func(env *runtimeMonitoringTestEnv) {
 		lce := newLinkedCloneTestEnv(env)
 		cleanupSrc := lce.setupSrcReplicaWithSnapshot(c)
@@ -535,17 +535,17 @@ func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
 		}
 		engineName := fmt.Sprintf("%s-rebuild-e", lce.volumeName)
 		_, err = lce.spdkCli.EngineCreate(engineName, lce.volumeName,
-			types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(engineName) }()
 
 		// Create EngineFrontend to drive ReplicaAdd.
-		// For FrontendEmpty engines, engine.IP and engine.Port are empty/zero —
+		// For FrontendEmpty engines, engine.IP and engine.Port are empty/zero -
 		// use the SPDK service address directly as the targetAddress.
 		efName := fmt.Sprintf("%s-rebuild-ef", lce.volumeName)
 		ef, err := lce.spdkCli.EngineFrontendCreate(efName, lce.volumeName, engineName,
 			types.FrontendEmpty, defaultTestLvolSize,
-			net.JoinHostPort(lce.ip, strconv.Itoa(types.SPDKServicePort)), 0, 0, 0)
+			net.JoinHostPort(lce.ip, strconv.Itoa(types.SPDKServicePort)), 0, 0, 0, "")
 		c.Assert(err, IsNil)
 		c.Assert(ef.State, Equals, types.InstanceStateRunning)
 		defer func() { _ = lce.spdkCli.EngineFrontendDelete(efName) }()
@@ -557,14 +557,14 @@ func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
 			lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcReplica.PortStart))),
 		}
 		_, err = lce.spdkCli.EngineCreate(lce.srcEngineName, lce.volumeName,
-			types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(lce.srcEngineName) }()
 
 		// Create a brand-new dst replica 2 (no prior clone data).
 		dst2Name := fmt.Sprintf("%s-dst2", lce.volumeName)
 		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
 
@@ -592,11 +592,11 @@ func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
 }
 
 // ---------------------------------------------------------------------------
-// Test Case 8: Linked-clone rebuild — reusing a failed replica with intact lvols
+// Test Case 8: Linked-clone rebuild - reusing a failed replica with intact lvols
 // ---------------------------------------------------------------------------
 // Two replicas are fully linked-cloned into a running engine.  One is then
 // removed from the engine (simulating failure) WITHOUT deleting its replica
-// service or lvols — its head, clone snapshot, and entrypoint remain on disk.
+// service or lvols - its head, clone snapshot, and entrypoint remain on disk.
 // The replica is re-added via EngineFrontendReplicaAdd with
 // linkedCloneSrcReplicaName, which causes RebuildingDstStart to:
 //   - delete the old head and create a new one from the external snapshot
@@ -608,7 +608,7 @@ func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
 // shared clone entrypoint that the still-healthy replica depends on.
 
 func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
-	fmt.Println("Testing linked-clone rebuild with reused failed replica — entrypoint must survive concurrent rebuild")
+	fmt.Println("Testing linked-clone rebuild with reused failed replica - entrypoint must survive concurrent rebuild")
 	withRuntimeMonitoringTestEnv(c, "aio", func(env *runtimeMonitoringTestEnv) {
 		lce := newLinkedCloneTestEnv(env)
 		cleanupSrc := lce.setupSrcReplicaWithSnapshot(c)
@@ -628,7 +628,7 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 		dst2Suffix := strings.ReplaceAll(util.UUID(), "-", "")[:6]
 		dst2Name := fmt.Sprintf("%s-dst2-%s", lce.volumeName, dst2Suffix)
 		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
 		err = lce.spdkCli.ReplicaSnapshotCloneDstStart(
@@ -647,21 +647,21 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 		}
 		engineName := fmt.Sprintf("%s-reuse-e", lce.volumeName)
 		_, err = lce.spdkCli.EngineCreate(engineName, lce.volumeName,
-			types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(engineName) }()
 
 		efName := fmt.Sprintf("%s-reuse-ef", lce.volumeName)
 		ef, err := lce.spdkCli.EngineFrontendCreate(efName, lce.volumeName, engineName,
 			types.FrontendEmpty, defaultTestLvolSize,
-			net.JoinHostPort(lce.ip, strconv.Itoa(types.SPDKServicePort)), 0, 0, 0)
+			net.JoinHostPort(lce.ip, strconv.Itoa(types.SPDKServicePort)), 0, 0, 0, "")
 		c.Assert(err, IsNil)
 		c.Assert(ef.State, Equals, types.InstanceStateRunning)
 		defer func() { _ = lce.spdkCli.EngineFrontendDelete(efName) }()
 
 		// Simulate failure: remove dst2 from the engine but keep its replica
 		// service and all lvols intact (head + clone snapshot + entrypoint ref).
-		// This is the true "reuse" path — the replica's lvols survive the failure.
+		// This is the true "reuse" path - the replica's lvols survive the failure.
 		dstReplica2Addr := replicaAddressMap[dst2Name]
 		err = lce.spdkCli.EngineReplicaDelete(engineName, dst2Name, dstReplica2Addr)
 		c.Assert(err, IsNil)
@@ -680,7 +680,7 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 			lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcReplica.PortStart))),
 		}
 		_, err = lce.spdkCli.EngineCreate(lce.srcEngineName, lce.volumeName,
-			types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(lce.srcEngineName) }()
 
@@ -710,7 +710,7 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 //  1. Create a src engine with 2 replicas (FrontendSPDKTCPBlockdev).
 //  2. Write some data to the src device, then create a snapshot.
 //  3. Create a clone engine with 1 replica from the src snapshot.
-//  4. Expand the clone engine to 2× the initial size.
+//  4. Expand the clone engine to 2x the initial size.
 //  5. Write some data to the expanded part of the clone device, then snapshot.
 //  6. Create the 2nd replica with the expanded size for the clone engine.
 //  7. Add the 2nd replica to the clone engine via EngineFrontendReplicaAdd
@@ -726,17 +726,17 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 
 		const dataCountInMB = int64(1)
 
-		// ── Steps 1-2: src engine with 2 replicas, write data, snapshot ──────────
+		// Steps 1-2: src engine with 2 replicas, write data, snapshot
 
 		srcReplica2Name := fmt.Sprintf("%s-src-r2", lce.volumeName)
 
 		_, err = lce.spdkCli.ReplicaCreate(lce.srcReplicaName, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(lce.srcReplicaName, true) }()
 
 		_, err = lce.spdkCli.ReplicaCreate(srcReplica2Name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(srcReplica2Name, true) }()
 
@@ -751,7 +751,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 			map[string]string{
 				lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcR1.PortStart))),
 				srcReplica2Name:    net.JoinHostPort(lce.ip, strconv.Itoa(int(srcR2.PortStart))),
-			}, 2, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			}, 2, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(lce.srcEngineName) }()
 
@@ -761,7 +761,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		srcEfName := fmt.Sprintf("%s-src-ef", lce.volumeName)
 		_, err = lce.spdkCli.EngineFrontendCreate(srcEfName, srcVolumeName, lce.srcEngineName,
 			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-			net.JoinHostPort(srcEngine.IP, strconv.Itoa(int(srcEngine.Port))), 0, 0, 0)
+			net.JoinHostPort(srcEngine.IP, strconv.Itoa(int(srcEngine.Port))), 0, 0, 0, "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineFrontendDelete(srcEfName) }()
 
@@ -779,7 +779,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		// running so RebuildingDstFinish can verify the src replica is still RW.
 		_ = lce.spdkCli.EngineFrontendDelete(srcEfName)
 
-		// ── Step 3: clone engine with 1 replica ───────────────────────────────────
+		// Step 3: clone engine with 1 replica
 
 		lce.createDstReplica(c)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(lce.dstReplicaName, true) }()
@@ -793,14 +793,14 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
 			map[string]string{
 				lce.dstReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(dstReplica1.PortStart))),
-			}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(lce.engineName) }()
 
 		efName := fmt.Sprintf("%s-ef", lce.volumeName)
 		_, err = lce.spdkCli.EngineFrontendCreate(efName, lce.volumeName, lce.engineName,
 			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-			net.JoinHostPort(cloneEngine0.IP, strconv.Itoa(int(cloneEngine0.Port))), 0, 0, 0)
+			net.JoinHostPort(cloneEngine0.IP, strconv.Itoa(int(cloneEngine0.Port))), 0, 0, 0, "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineFrontendDelete(efName) }()
 
@@ -811,7 +811,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		c.Assert(err, IsNil)
 		c.Assert(cloneChecksum, Equals, srcChecksum)
 
-		// ── Step 4: expand clone engine to 2× ────────────────────────────────────
+		// Step 4: expand clone engine to 2x
 
 		expandedSize := defaultTestLvolSize * 2
 		err = lce.spdkCli.EngineFrontendExpand(context.Background(), efName, expandedSize)
@@ -827,7 +827,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		})
 		c.Assert(err, IsNil)
 
-		// ── Step 5: write to expanded region + snapshot ───────────────────────────
+		// Step 5: write to expanded region and snapshot
 
 		offsetInMB := int64(defaultTestLvolSizeInMiB)
 		err = writeDataToBlockDevice(ne, cloneEndpoint, offsetInMB, dataCountInMB)
@@ -839,11 +839,11 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		_, err = lce.spdkCli.EngineSnapshotCreate(lce.engineName, "snap-post-expand")
 		c.Assert(err, IsNil)
 
-		// ── Step 6: create 2nd replica at expanded size ───────────────────────────
+		// Step 6: create 2nd replica at expanded size
 
 		dst2Name := fmt.Sprintf("%s-expand-dst2", lce.volumeName)
 		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
-			lce.disk.Uuid, expandedSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, expandedSize, defaultTestReplicaPortCount, "", "")
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
 
@@ -851,7 +851,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		c.Assert(err, IsNil)
 		dst2Address := net.JoinHostPort(lce.ip, strconv.Itoa(int(dst2.PortStart)))
 
-		// ── Step 7: add dst2 to the clone engine ──────────────────────────────────
+		// Step 7: add dst2 to the clone engine
 		// dst1 (still RW) drives the shallow-copy sync; RebuildingDstStart creates
 		// a linked-clone EP for dst2.  At the end of the rebuild,
 		// repairCloneEntrypoint calls:
@@ -866,13 +866,13 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 			})
 		c.Assert(err, IsNil)
 
-		// ── Step 8: wait for rebuild + assert entrypoints ─────────────────────────
+		// Step 8: wait for rebuild and assert entrypoints
 
 		lce.waitForReplicaRW(c, lce.engineName, dst2Name)
 		lce.assertCloneReplicaEntrypoint(c, lce.dstReplicaName)
 		lce.assertCloneReplicaEntrypoint(c, dst2Name)
 
-		// ── Step 9: delete dst1, verify both data regions via dst2 ───────────────
+		// Step 9: delete dst1, verify both data regions via dst2
 
 		dstReplica1Updated, err := lce.spdkCli.ReplicaGet(lce.dstReplicaName)
 		c.Assert(err, IsNil)

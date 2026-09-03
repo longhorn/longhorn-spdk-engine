@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
-
-	. "gopkg.in/check.v1"
 )
 
 // newDetachableShard builds a non-exposed, port-less shard so Shard.Delete with
@@ -16,7 +16,7 @@ import (
 // allocator. A UUID is set to stand in for the on-disk lvol that detach must
 // preserve.
 func newDetachableShard(updateCh chan interface{}, state lhtypes.InstanceState) *Shard {
-	shard := NewShard("vol-a", 0, "lvs-a", "lvs-uuid-a", 100*1024*1024, updateCh)
+	shard := NewShard("vol-a", 0, "lvs-a", "lvs-uuid-a", 100*1024*1024, testIPFamily(), updateCh)
 	shard.State = state
 	shard.UUID = "uuid-a"
 	return shard
@@ -51,7 +51,7 @@ func (s *TestSuite) TestGetOrCreateShardReuseAcceptsUnalignedSize(c *C) {
 	// There is no live SPDK here, so seed shardMap directly with NewShard
 	// (which rounds the size up to MiB). The next call then only runs the
 	// reuse check.
-	first := NewShard(req.VolumeName, req.SlotIndex, req.LvsName, req.LvsUuid, req.SizeBytes, srv.updateChs[lhtypes.InstanceTypeShard])
+	first := NewShard(req.VolumeName, req.SlotIndex, req.LvsName, req.LvsUuid, req.SizeBytes, testIPFamily(), srv.updateChs[lhtypes.InstanceTypeShard])
 	srv.shardMap[first.Name] = first
 
 	// The same unaligned size must reuse the cached shard, not fail.
@@ -74,7 +74,7 @@ func (s *TestSuite) TestGetOrCreateShardReuseRejectsDifferentSize(c *C) {
 		},
 	}
 
-	first := NewShard("vol-a", 0, "lvs-a", "lvs-uuid-a", 100*1024*1024, srv.updateChs[lhtypes.InstanceTypeShard])
+	first := NewShard("vol-a", 0, "lvs-a", "lvs-uuid-a", 100*1024*1024, testIPFamily(), srv.updateChs[lhtypes.InstanceTypeShard])
 	srv.shardMap[first.Name] = first
 
 	req := &spdkrpc.ShardCreateRequest{

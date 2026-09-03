@@ -21,13 +21,11 @@ import (
 // newTestReplica creates a minimal Replica in InstanceStatePending, suitable
 // for construct()-based unit tests.
 func newTestReplica(name, lvsName string) *Replica {
-	return &Replica{
-		Name:               name,
+	return &Replica{ipFamily: testIPFamily(), Name: name,
 		LvsName:            lvsName,
 		State:              types.InstanceState(types.InstanceStatePending),
 		cloneEntrypointMap: map[string]*CloneEntrypointInfo{},
-		log:                safelog.NewSafeLogger(logrus.WithField("test", name)),
-	}
+		log:                safelog.NewSafeLogger(logrus.WithField("test", name))}
 }
 
 // newTestRunningCloneReplica creates a Running clone replica suitable for
@@ -36,6 +34,7 @@ func newTestReplica(name, lvsName string) *Replica {
 func newTestRunningCloneReplica(dstName, srcName, lvsName, epLvolName, rootSnapName string) *Replica {
 	snapshotName := GetSnapshotNameFromCloneEntrypointLvolName(srcName, epLvolName)
 	return &Replica{
+		ipFamily:                testIPFamily(),
 		Name:                    dstName,
 		LvsName:                 lvsName,
 		State:                   types.InstanceState(types.InstanceStateRunning),
@@ -49,8 +48,7 @@ func newTestRunningCloneReplica(dstName, srcName, lvsName, epLvolName, rootSnapN
 		},
 		cloneEntrypointMap: map[string]*CloneEntrypointInfo{},
 		SnapshotLvolMap:    map[string]*Lvol{},
-		log:                safelog.NewSafeLogger(logrus.WithField("test", dstName)),
-	}
+		log:                safelog.NewSafeLogger(logrus.WithField("test", dstName))}
 }
 
 // makeBdevLvol is a test helper that creates a minimal BdevInfo suitable for
@@ -136,11 +134,11 @@ func (s *TestSuite) TestCloneEntrypointNaming(c *C) {
 
 // TestConstruct verifies construct() behaviour across the three replica archetypes:
 //
-//   - Part A: dst clone replica — recognises clone entrypoint, sets metadata
-//   - Part B: replica whose root snapshot parent is a backing image — not a clone
-//   - Part C: src replica — populates cloneEntrypointMap from entrypoint lvols
+//   - Part A: dst clone replica -- recognises clone entrypoint, sets metadata
+//   - Part B: replica whose root snapshot parent is a backing image -- not a clone
+//   - Part C: src replica -- populates cloneEntrypointMap from entrypoint lvols
 func (s *TestSuite) TestConstruct(c *C) {
-	// Part A: dst clone replica — construct sets isCloneReplica, epLvol in
+	// Part A: dst clone replica -- construct sets isCloneReplica, epLvol in
 	// ActiveChain[0], Stopped state.
 	{
 		srcReplicaName := "src-r-00000001"
@@ -163,7 +161,7 @@ func (s *TestSuite) TestConstruct(c *C) {
 		c.Assert(r.ActiveChain[0].Name, Equals, epLvolName)
 	}
 
-	// Part B: replica with backing image parent — NOT treated as clone.
+	// Part B: replica with backing image parent -- NOT treated as clone.
 	{
 		replicaName := "dst-r-00000001"
 		rootSnapName := GetReplicaSnapshotLvolName(replicaName, "snap-1")
@@ -186,7 +184,7 @@ func (s *TestSuite) TestConstruct(c *C) {
 		c.Assert(r.cloneSourceReplicaName, Equals, "")
 	}
 
-	// Part C: src replica — cloneEntrypointMap populated correctly.
+	// Part C: src replica -- cloneEntrypointMap populated correctly.
 	// tmp-head children are excluded from CloneReplicas; multiple entrypoints
 	// across different snapshots are each discovered; CloneReplicas counts and
 	// SnapshotName/SnapshotLvolName fields are correct.
@@ -247,7 +245,7 @@ func (s *TestSuite) TestConstruct(c *C) {
 }
 
 // ---------------------------------------------------------------------------
-// constructActiveChainFromSnapshotLvolMap() — Clone replica filter out other lvols for EntryPoint Children
+// constructActiveChainFromSnapshotLvolMap() -- Clone replica filter out other lvols for EntryPoint Children
 // ---------------------------------------------------------------------------
 
 func (s *TestSuite) TestConstructActiveChainFiltersChildren(c *C) {
@@ -365,7 +363,7 @@ func (s *TestSuite) TestConstructActiveChainFiltersChildren(c *C) {
 }
 
 // ---------------------------------------------------------------------------
-// ServiceReplicaToProtoReplica() — clone metadata serialization
+// ServiceReplicaToProtoReplica() -- clone metadata serialization
 // ---------------------------------------------------------------------------
 
 func (s *TestSuite) TestServiceReplicaToProtoReplicaCloneMetadata(c *C) {
@@ -430,13 +428,13 @@ func (s *TestSuite) TestServiceReplicaToProtoReplicaCloneMetadata(c *C) {
 // TestSyncWithBdevLvolMap verifies the dispatch and guard logic of
 // syncWithBdevLvolMap:
 //
-//   - Part A: Pending dst clone → construct() → Stopped with clone metadata
-//   - Part B: Running src replica → syncCloneEntrypoints discovers entrypoint
-//   - Part C: Running with isSnapshotCloning=true → early return, no state change
-//   - Part D: Running clone with stale ActiveChain[0] (wrong entrypoint name) →
+//   - Part A: Pending dst clone -> construct() -> Stopped with clone metadata
+//   - Part B: Running src replica -> syncCloneEntrypoints discovers entrypoint
+//   - Part C: Running with isSnapshotCloning=true -> early return, no state change
+//   - Part D: Running clone with stale ActiveChain[0] (wrong entrypoint name) ->
 //     syncCloneReplicaInfo returns "does not match expected entrypoint" error
 func (s *TestSuite) TestSyncWithBdevLvolMap(c *C) {
-	// Part A: Pending dst clone → dispatched to construct() → Stopped state.
+	// Part A: Pending dst clone -> dispatched to construct() -> Stopped state.
 	{
 		srcReplicaName := "src-r-00000001"
 		dstReplicaName := "dst-r-00000001"
@@ -455,21 +453,19 @@ func (s *TestSuite) TestSyncWithBdevLvolMap(c *C) {
 		c.Assert(r.cloneSourceReplicaName, Equals, srcReplicaName)
 	}
 
-	// Part B: Running src replica → dispatched to syncCloneEntrypoints → entrypoint discovered.
+	// Part B: Running src replica -> dispatched to syncCloneEntrypoints -> entrypoint discovered.
 	{
 		srcReplicaName2 := "src-r-00000002"
 		snapshotName2 := "snap-2"
 		ep2LvolName := GetCloneEntrypointLvolName(srcReplicaName2, snapshotName2)
 		cloneChild := GetReplicaSnapshotLvolName("dst-r-00000002", snapshotName2)
 
-		rSrc := &Replica{
-			Name:               srcReplicaName2,
+		rSrc := &Replica{ipFamily: testIPFamily(), Name: srcReplicaName2,
 			LvsName:            "test-disk",
 			State:              types.InstanceState(types.InstanceStateRunning),
 			cloneEntrypointMap: map[string]*CloneEntrypointInfo{},
 			SnapshotLvolMap:    map[string]*Lvol{},
-			log:                safelog.NewSafeLogger(logrus.WithField("test", srcReplicaName2)),
-		}
+			log:                safelog.NewSafeLogger(logrus.WithField("test", srcReplicaName2))}
 		bdevLvolMapSrc := buildSrcOnlyBdevLvolMap("test-disk", srcReplicaName2, map[string]*spdktypes.BdevInfo{
 			ep2LvolName: {
 				DriverSpecific: &spdktypes.BdevDriverSpecific{
@@ -488,7 +484,7 @@ func (s *TestSuite) TestSyncWithBdevLvolMap(c *C) {
 		c.Assert(ep2Info.SnapshotName, Equals, snapshotName2)
 	}
 
-	// Part C: Running with isSnapshotCloning=true → early return, state unchanged.
+	// Part C: Running with isSnapshotCloning=true -> early return, state unchanged.
 	// This guards the window between SnapshotCloneDstStart setting isCloneReplica
 	// and SnapshotCloneDstFinish committing the in-memory chain update.
 	{
@@ -506,8 +502,7 @@ func (s *TestSuite) TestSyncWithBdevLvolMap(c *C) {
 			Parent:   epLvolName,
 			Children: map[string]*Lvol{},
 		}
-		r := &Replica{
-			Name:                    dstReplicaName,
+		r := &Replica{ipFamily: testIPFamily(), Name: dstReplicaName,
 			LvsName:                 lvsName,
 			State:                   types.InstanceState(types.InstanceStateRunning),
 			isCloneReplica:          true,
@@ -518,10 +513,9 @@ func (s *TestSuite) TestSyncWithBdevLvolMap(c *C) {
 			ActiveChain:             []*Lvol{nil, headSvcLvol},
 			Head:                    headSvcLvol,
 			cloneEntrypointMap:      map[string]*CloneEntrypointInfo{},
-			log:                     safelog.NewSafeLogger(logrus.WithField("test", dstReplicaName)),
-		}
+			log:                     safelog.NewSafeLogger(logrus.WithField("test", dstReplicaName))}
 
-		// bdevLvolMap shows the clone entrypoint as chain base — validateAndUpdate
+		// bdevLvolMap shows the clone entrypoint as chain base -- validateAndUpdate
 		// would error with "chain base is nil" if it ran. The isSnapshotCloning
 		// guard must prevent syncWithBdevLvolMap from reaching that point.
 		bdevLvolMap := map[string]*spdktypes.BdevInfo{
@@ -531,13 +525,13 @@ func (s *TestSuite) TestSyncWithBdevLvolMap(c *C) {
 
 		err := r.syncWithBdevLvolMap(nil, bdevLvolMap)
 		c.Assert(err, IsNil)
-		// State must be unchanged — sync was skipped entirely.
+		// State must be unchanged -- sync was skipped entirely.
 		c.Assert(r.State, Equals, types.InstanceState(types.InstanceStateRunning))
 		c.Assert(r.ActiveChain[0], IsNil)
 	}
 
 	// Part D: Running clone replica whose ActiveChain[0] has a name that differs
-	// from cloneEntrypointLvolName — syncCloneReplicaInfo detects the mismatch.
+	// from cloneEntrypointLvolName -- syncCloneReplicaInfo detects the mismatch.
 	{
 		srcReplicaName := "src-r-00000004"
 		dstReplicaName := "dst-r-00000004"
@@ -546,8 +540,7 @@ func (s *TestSuite) TestSyncWithBdevLvolMap(c *C) {
 		rootSnapName := GetReplicaSnapshotLvolName(dstReplicaName, snapshotName)
 		wrongEpLvolName := "some-stale-entrypoint"
 
-		r := &Replica{
-			Name:                    dstReplicaName,
+		r := &Replica{ipFamily: testIPFamily(), Name: dstReplicaName,
 			LvsName:                 "test-disk",
 			State:                   types.InstanceState(types.InstanceStateRunning),
 			isCloneReplica:          true,
@@ -559,8 +552,7 @@ func (s *TestSuite) TestSyncWithBdevLvolMap(c *C) {
 			},
 			cloneEntrypointMap: map[string]*CloneEntrypointInfo{},
 			SnapshotLvolMap:    map[string]*Lvol{},
-			log:                safelog.NewSafeLogger(logrus.WithField("test", dstReplicaName)),
-		}
+			log:                safelog.NewSafeLogger(logrus.WithField("test", dstReplicaName))}
 
 		err := r.syncWithBdevLvolMap(nil, map[string]*spdktypes.BdevInfo{})
 		c.Assert(err, NotNil)
@@ -570,18 +562,18 @@ func (s *TestSuite) TestSyncWithBdevLvolMap(c *C) {
 }
 
 // ---------------------------------------------------------------------------
-// syncCloneReplicaInfo() — all three cases via syncWithBdevLvolMap
+// syncCloneReplicaInfo() -- all three cases via syncWithBdevLvolMap
 // ---------------------------------------------------------------------------
 
 // TestSyncCloneReplicaInfo verifies all three branches of syncCloneReplicaInfo,
 // exercised via syncWithBdevLvolMap (nil spdkClient, Running dst clone replica):
 //
-//   - Part A (Case 1): chain root's parent is the expected entrypoint — no error
+//   - Part A (Case 1): chain root's parent is the expected entrypoint -- no error
 //   - Part B (Case 2): chain root's parent is the source snapshot directly (entrypoint
-//     was removed, SPDK reparented the child) — repair fails without SPDK client
-//   - Part C (Case 3): chain root's parent is an unrelated lvol — corruption error
+//     was removed, SPDK reparented the child) -- repair fails without SPDK client
+//   - Part C (Case 3): chain root's parent is an unrelated lvol -- corruption error
 func (s *TestSuite) TestSyncCloneReplicaInfo(c *C) {
-	// Part A — Case 1: parent matches the expected entrypoint (happy path)
+	// Part A -- Case 1: parent matches the expected entrypoint (happy path)
 	{
 		srcReplicaName := "src-r-00000001"
 		dstReplicaName := "dst-r-00000001"
@@ -601,9 +593,9 @@ func (s *TestSuite) TestSyncCloneReplicaInfo(c *C) {
 		c.Assert(r.cloneEntrypointLvolName, Equals, epLvolName)
 	}
 
-	// Part B — Case 2: chain root's parent is the source snapshot directly.
+	// Part B -- Case 2: chain root's parent is the source snapshot directly.
 	// Entrypoint was removed, SPDK reparented to source snapshot.
-	// Without an SPDK client the repair fails → replica Error state.
+	// Without an SPDK client the repair fails -> replica Error state.
 	{
 		srcReplicaName := "src-r-00000002"
 		dstReplicaName := "dst-r-00000002"
@@ -623,7 +615,7 @@ func (s *TestSuite) TestSyncCloneReplicaInfo(c *C) {
 		c.Assert(r.State, Equals, types.InstanceState(types.InstanceStateError))
 	}
 
-	// Part C — Case 3: chain root's parent is an unrelated lvol (corruption).
+	// Part C -- Case 3: chain root's parent is an unrelated lvol (corruption).
 	{
 		srcReplicaName := "src-r-00000003"
 		dstReplicaName := "dst-r-00000003"

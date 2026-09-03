@@ -9,20 +9,20 @@ import (
 
 	"github.com/cockroachdb/errors"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
 	clientpkg "github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
-
-	. "gopkg.in/check.v1"
 )
 
 func (s *TestSuite) TestEngineFinishExpansionSuccessClearsErrorState(c *C) {
 	fmt.Println("Testing Engine finish expansion success clears error state")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.State = lhtypes.InstanceStateError
 	e.ErrorMsg = "previous failure"
 
@@ -36,7 +36,7 @@ func (s *TestSuite) TestEngineFinishExpansionSuccessClearsErrorState(c *C) {
 func (s *TestSuite) TestEngineFinishExpansionFailureSetsErrorState(c *C) {
 	fmt.Println("Testing Engine finish expansion failure sets error state")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.State = lhtypes.InstanceStateRunning
 	e.ErrorMsg = ""
 	e.SpecSize = 10
@@ -53,7 +53,7 @@ func (s *TestSuite) TestEngineFinishExpansionFailureSetsErrorState(c *C) {
 func (s *TestSuite) TestEngineFinishExpansionFailureRestoresOriginalSize(c *C) {
 	fmt.Println("Testing Engine finish expansion failure restores original size when spec size was updated during expand")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.SpecSize = 20
 
 	e.finishExpansion(10, 20, errors.New("expand failed"))
@@ -64,7 +64,7 @@ func (s *TestSuite) TestEngineFinishExpansionFailureRestoresOriginalSize(c *C) {
 func (s *TestSuite) TestEngineFrontendFinishExpansionSuccessClearsErrorState(c *C) {
 	fmt.Println("Testing EngineFrontend finish expansion success clears error state")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateError
 	ef.ErrorMsg = "previous failure"
 	ef.lastExpansionError = ""
@@ -81,7 +81,7 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionSuccessClearsErrorState(c *
 func (s *TestSuite) TestEngineFrontendFinishExpansionExpandedWithError(c *C) {
 	fmt.Println("Testing EngineFrontend finish expansion with error after expansion")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 
 	ef.finishExpansion(10, true, 20, errors.New("post expansion frontend failure"), "", "", 15)
 
@@ -96,7 +96,7 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionExpandedWithError(c *C) {
 func (s *TestSuite) TestEngineFrontendFinishExpansionFailureWithoutExpansion(c *C) {
 	fmt.Println("Testing EngineFrontend finish expansion failure without expansion")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	ef.SpecSize = 10
 
 	ef.finishExpansion(10, false, 20, errors.New("expand failed before backend expansion"), "", "", 0)
@@ -111,7 +111,7 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionFailureWithoutExpansion(c *
 func (s *TestSuite) TestEngineFinishExpansionPartialFailureKeepsOriginalSize(c *C) {
 	fmt.Println("Testing Engine finish expansion partial failure keeps original size")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.lastExpansionError = "replica expand failed"
 
 	e.finishExpansion(10, 20, nil)
@@ -125,7 +125,7 @@ func (s *TestSuite) TestEngineFinishExpansionPartialFailureKeepsOriginalSize(c *
 func (s *TestSuite) TestEngineFinishExpansionPartialFailureRestoresOriginalSize(c *C) {
 	fmt.Println("Testing Engine finish expansion partial failure restores original size when spec size was updated during expand")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.SpecSize = 20
 	e.lastExpansionError = "replica expand failed"
 
@@ -137,7 +137,7 @@ func (s *TestSuite) TestEngineFinishExpansionPartialFailureRestoresOriginalSize(
 func (s *TestSuite) TestEngineFrontendFinishExpansionPartialFailureKeepsOriginalSize(c *C) {
 	fmt.Println("Testing EngineFrontend finish expansion partial failure keeps original size")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 
 	ef.finishExpansion(10, false, 20, nil, "replica expand failed", "2026-03-10T00:00:00Z", 12)
 
@@ -153,21 +153,21 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionPartialFailureKeepsOriginal
 func (s *TestSuite) TestEngineFrontendRequireExpansionGuards(c *C) {
 	fmt.Println("Testing EngineFrontend require expansion guards")
 
-	efInProgress := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1), nil)
+	efInProgress := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	efInProgress.isExpanding = true
 	_, err := efInProgress.requireExpansion(context.Background(), nil, 20)
 	c.Assert(errors.Is(err, ErrExpansionInProgress), Equals, true)
 
-	efRestoring := NewEngineFrontend("ef-b", "engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1), nil)
+	efRestoring := NewEngineFrontend("ef-b", "engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	efRestoring.IsRestoring = true
 	_, err = efRestoring.requireExpansion(context.Background(), nil, 20)
 	c.Assert(errors.Is(err, ErrRestoringInProgress), Equals, true)
 
-	efSmaller := NewEngineFrontend("ef-c", "engine-c", "vol-c", lhtypes.FrontendSPDKTCPBlockdev, 20, 0, 0, make(chan interface{}, 1), nil)
+	efSmaller := NewEngineFrontend("ef-c", "engine-c", "vol-c", lhtypes.FrontendSPDKTCPBlockdev, 20, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	_, err = efSmaller.requireExpansion(context.Background(), nil, 10)
 	c.Assert(errors.Is(err, ErrExpansionInvalidSize), Equals, true)
 
-	efUnaligned := NewEngineFrontend("ef-d", "engine-d", "vol-d", lhtypes.FrontendSPDKTCPBlockdev, 10*helpertypes.MiB, 0, 0, make(chan interface{}, 1), nil)
+	efUnaligned := NewEngineFrontend("ef-d", "engine-d", "vol-d", lhtypes.FrontendSPDKTCPBlockdev, 10*helpertypes.MiB, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	notAlignedSize := uint64((11 * helpertypes.MiB) + 1)
 	_, err = efUnaligned.requireExpansion(context.Background(), nil, notAlignedSize)
 	c.Assert(errors.Is(err, ErrExpansionInvalidSize), Equals, true)
@@ -176,12 +176,12 @@ func (s *TestSuite) TestEngineFrontendRequireExpansionGuards(c *C) {
 func (s *TestSuite) TestEngineExpandPrecheckGuards(c *C) {
 	fmt.Println("Testing Engine expand precheck guards")
 
-	eInProgress := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	eInProgress := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	eInProgress.isExpanding = true
 	_, err := eInProgress.ExpandPrecheck(nil, 20)
 	c.Assert(errors.Is(err, ErrExpansionInProgress), Equals, true)
 
-	eRestoring := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	eRestoring := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	eRestoring.IsRestoring = true
 	_, err = eRestoring.ExpandPrecheck(nil, 20)
 	c.Assert(errors.Is(err, ErrRestoringInProgress), Equals, true)
@@ -210,7 +210,7 @@ func (s *TestSuite) TestEngineExpandPrecheck(c *C) {
 	for _, tc := range cases {
 		fmt.Println("Testing ExpandPrecheck:", tc.name)
 
-		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 		ups := map[string]Backend{}
 		i := 1
 		for name, spec := range tc.backends {
@@ -241,7 +241,7 @@ func (s *TestSuite) TestEngineExpandPrecheck(c *C) {
 func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	fmt.Println("Testing Engine handle replica expand result")
 
-	eAllFailed := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	eAllFailed := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	replicaClientsAllFailed := map[string]*clientpkg.SPDKClient{
 		"r1": nil,
 		"r2": nil,
@@ -254,7 +254,7 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	c.Assert(err, NotNil)
 	c.Assert(strings.Contains(err.Error(), "all replicas failed to expand"), Equals, true)
 
-	ePartial := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	ePartial := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	ePartial.backends = map[string]Backend{
 		"r1": newTestReplicaBackend("r1", "", lhtypes.ModeRW),
 		"r2": newTestReplicaBackend("r2", "", lhtypes.ModeRW),
@@ -296,7 +296,7 @@ func (s *TestSuite) TestExpandViaBackendResetGuards(c *C) {
 		fmt.Println("Testing ExpandViaBackendReset:", tc.name)
 
 		// nil spdkClient is safe: every guard path returns before any SPDK call.
-		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 		tc.setup(e)
 		sizeBefore := e.SpecSize
 
@@ -318,7 +318,7 @@ func (s *TestSuite) TestExpandViaBackendResetGuards(c *C) {
 func (s *TestSuite) TestExpandDoesNotBlockConcurrentGet(c *C) {
 	fmt.Println("Testing Expand lock scope does not block concurrent Get calls")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	ef.State = lhtypes.InstanceStateRunning
 
 	// Simulate the Phase 1 lock pattern from Expand: acquire, read, release
@@ -327,8 +327,8 @@ func (s *TestSuite) TestExpandDoesNotBlockConcurrentGet(c *C) {
 	phase2ReadyCh := make(chan struct{})
 	allowPhase3Ch := make(chan struct{})
 
-	// Start a goroutine that simulates Phase 1 of Expand (lock → read → unlock)
-	// then holds a "long operation" before Phase 3 (re-lock → finishExpansion → unlock)
+	// Start a goroutine that simulates Phase 1 of Expand (lock -> read -> unlock)
+	// then holds a "long operation" before Phase 3 (re-lock -> finishExpansion -> unlock)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -368,7 +368,7 @@ func (s *TestSuite) TestExpandDoesNotBlockConcurrentGet(c *C) {
 		c.Assert(result, NotNil)
 		c.Assert(result.Name, Equals, "ef-a")
 	case <-time.After(2 * time.Second):
-		c.Fatal("Get() call was blocked — potential deadlock due to Expand holding lock during long operations")
+		c.Fatal("Get() call was blocked - potential deadlock due to Expand holding lock during long operations")
 	}
 
 	// Get() completed; now allow Phase 3 to proceed and verify state update.
@@ -380,7 +380,7 @@ func (s *TestSuite) TestExpandDoesNotBlockConcurrentGet(c *C) {
 func (s *TestSuite) TestExpandCapturesTargetAddressWithNilNvmeTcpFrontend(c *C) {
 	fmt.Println("Testing Expand safely computes targetAddress when NvmeTcpFrontend is nil")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendUBLK, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendUBLK, 1024, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	ef.NvmeTcpFrontend = nil // force nil, simulating UBLK-only scenario
 
 	// Test the targetAddress capture logic
@@ -399,7 +399,7 @@ func (s *TestSuite) TestEngineExpandPreservesANAState(c *C) {
 
 	// An engine with ANAState=inaccessible (e.g. a switchover target)
 	// should keep that state across Expand, not revert to optimized.
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	e.NvmeTcpTarget.ANAState = NvmeTCPANAStateInaccessible
 
 	// Verify the ANA state is preserved in the logic path that Expand uses.
@@ -413,7 +413,7 @@ func (s *TestSuite) TestEngineExpandPreservesANAState(c *C) {
 	c.Assert(err, IsNil)
 
 	// Verify that an empty ANAState defaults to optimized.
-	e2 := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e2 := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, testIPFamily(), nil)
 	c.Assert(e2.NvmeTcpTarget.ANAState, Equals, NvmeTCPANAState(""))
 	defaultState := e2.NvmeTcpTarget.ANAState
 	if defaultState == "" {
@@ -425,10 +425,10 @@ func (s *TestSuite) TestEngineExpandPreservesANAState(c *C) {
 func (s *TestSuite) TestExpandResumeGuardsNilInitiator(c *C) {
 	fmt.Println("Testing Expand resume defer guards against nil initiator")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	ef.initiator = nil
 
-	// Simulate the resume defer guard — should NOT panic.
+	// Simulate the resume defer guard - should NOT panic.
 	c.Assert(func() {
 		if ef.initiator != nil {
 			_ = ef.initiator.Resume()
@@ -439,7 +439,7 @@ func (s *TestSuite) TestExpandResumeGuardsNilInitiator(c *C) {
 func (s *TestSuite) TestGetEngineServiceAddressWithEngineIP(c *C) {
 	fmt.Println("Testing getEngineServiceAddress returns correct address when EngineIP is set")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	ef.EngineIP = "10.0.0.1"
 
 	addr := ef.getEngineServiceAddress()
@@ -449,7 +449,7 @@ func (s *TestSuite) TestGetEngineServiceAddressWithEngineIP(c *C) {
 func (s *TestSuite) TestGetEngineServiceAddressEmptyEngineIP(c *C) {
 	fmt.Println("Testing getEngineServiceAddress returns empty string when EngineIP is empty")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 
 	addr := ef.getEngineServiceAddress()
 	c.Assert(addr, Equals, "")
@@ -458,7 +458,7 @@ func (s *TestSuite) TestGetEngineServiceAddressEmptyEngineIP(c *C) {
 func (s *TestSuite) TestGetEngineServiceAddressFrontendEmpty(c *C) {
 	fmt.Println("Testing getEngineServiceAddress works for FrontendEmpty when EngineIP is set")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 	ef.EngineIP = "10.0.0.5"
 
 	addr := ef.getEngineServiceAddress()
@@ -468,7 +468,7 @@ func (s *TestSuite) TestGetEngineServiceAddressFrontendEmpty(c *C) {
 func (s *TestSuite) TestCreateSetsEngineIPForEmptyFrontend(c *C) {
 	fmt.Println("Testing Create sets EngineIP for FrontendEmpty")
 
-	ef := NewEngineFrontend("ef-empty", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1048576, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-empty", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1048576, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 
 	_, _ = ef.Create(nil, "10.0.0.3:8500")
 	c.Assert(ef.EngineIP, Equals, "10.0.0.3")
@@ -478,7 +478,7 @@ func (s *TestSuite) TestCreateSetsEngineIPForEmptyFrontend(c *C) {
 func (s *TestSuite) TestCreateSetsEngineIPForBlockdevFrontend(c *C) {
 	fmt.Println("Testing EngineIP is used for engine service address with Blockdev frontend")
 
-	ef := NewEngineFrontend("ef-block", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-block", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, testIPFamily(), make(chan interface{}, 1), nil)
 
 	// Simulate what Create does: set EngineIP from the target address.
 	ef.EngineIP = "10.0.0.4"

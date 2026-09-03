@@ -116,7 +116,7 @@ github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20260830093844-bff76489ddfd
+# github.com/longhorn/go-common-libs v0.0.0-20260902114220-f588954a78f0 => github.com/COLDTURNIP/longhorn-go-common-libs v0.0.0-20260902114220-f588954a78f0
 ## explicit; go 1.25.10
 github.com/longhorn/go-common-libs/backup
 github.com/longhorn/go-common-libs/bitmap
@@ -139,7 +139,7 @@ github.com/longhorn/go-spdk-helper/pkg/spdk/setup
 github.com/longhorn/go-spdk-helper/pkg/spdk/types
 github.com/longhorn/go-spdk-helper/pkg/types
 github.com/longhorn/go-spdk-helper/pkg/util
-# github.com/longhorn/types v0.0.0-20260831072945-0bac432e7872
+# github.com/longhorn/types v0.0.0-20260831072945-0bac432e7872 => github.com/COLDTURNIP/longhorn-types v0.0.0-20260825075141-090257bab470
 ## explicit; go 1.25.0
 github.com/longhorn/types/pkg/generated/spdkrpc
 # github.com/mitchellh/go-ps v1.0.0
@@ -454,3 +454,5 @@ sigs.k8s.io/randfill/bytesource
 # sigs.k8s.io/structured-merge-diff/v6 v6.3.3
 ## explicit; go 1.23
 sigs.k8s.io/structured-merge-diff/v6/value
+# github.com/longhorn/types => github.com/COLDTURNIP/longhorn-types v0.0.0-20260825075141-090257bab470
+# github.com/longhorn/go-common-libs => github.com/COLDTURNIP/longhorn-go-common-libs v0.0.0-20260902114220-f588954a78f0

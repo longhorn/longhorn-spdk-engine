@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"sync"
 
-	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
-
 	. "gopkg.in/check.v1"
+
+	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
 func (s *TestSuite) TestEngineFrontendResumeConcurrentWithValidateAndUpdate(c *C) {
 	fmt.Println("Testing EngineFrontend.Resume concurrent with ValidateAndUpdate")
 
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, make(chan interface{}, 4096), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1024, 0, 0, testIPFamily(), make(chan interface{}, 4096), nil)
 	ef.State = lhtypes.InstanceStateRunning
 
 	const iterations = 200

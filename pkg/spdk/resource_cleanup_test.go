@@ -13,6 +13,7 @@ import (
 	"github.com/longhorn/go-spdk-helper/pkg/initiator"
 
 	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
+	commonnet "github.com/longhorn/go-common-libs/net"
 	commonns "github.com/longhorn/go-common-libs/ns"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
@@ -104,7 +105,7 @@ func (s *TestSuite) TestBackupOpenSnapshotCleansUpOnOpenFileFailure(c *C) {
 	backup := &Backup{
 		spdkClient:     nil,
 		VolumeName:     "vol-a",
-		replica:        &Replica{Name: "replica-a", LvsName: "disk-a"},
+		replica:        &Replica{ipFamily: testIPFamily(), Name: "replica-a", LvsName: "disk-a"},
 		IP:             "10.0.0.1",
 		Port:           1000,
 		log:            logrus.New(),
@@ -157,7 +158,7 @@ func (s *TestSuite) TestRestoreOpenVolumeDevCleansUpOnOpenFileFailure(c *C) {
 		return nil
 	}
 
-	replica := &Replica{Name: "replica-a", LvsName: "disk-a", IsExposed: false}
+	replica := &Replica{ipFamily: testIPFamily(), Name: "replica-a", LvsName: "disk-a", IsExposed: false}
 	restore := &Restore{
 		spdkClient: nil,
 		replica:    replica,
@@ -207,7 +208,7 @@ func (s *TestSuite) TestRestoreOpenVolumeDevUnexposeFailureKeepsIsExposed(c *C) 
 		return fmt.Errorf("unexpose failed")
 	}
 
-	replica := &Replica{Name: "replica-a", LvsName: "disk-a", IsExposed: false}
+	replica := &Replica{ipFamily: testIPFamily(), Name: "replica-a", LvsName: "disk-a", IsExposed: false}
 	restore := &Restore{
 		spdkClient: nil,
 		replica:    replica,
@@ -244,7 +245,7 @@ func (s *TestSuite) TestBackupCloseSnapshotHandlesMissingInitiator(c *C) {
 
 	backup := &Backup{
 		spdkClient: nil,
-		replica:    &Replica{Name: "replica-a"},
+		replica:    &Replica{ipFamily: testIPFamily(), Name: "replica-a"},
 		devFh:      fh,
 		log:        logrus.New(),
 	}
@@ -275,7 +276,7 @@ func (s *TestSuite) TestRestoreCloseVolumeDevHandlesMissingInitiator(c *C) {
 	volDev, err := os.CreateTemp(c.MkDir(), "restore-close-*")
 	c.Assert(err, IsNil)
 
-	replica := &Replica{Name: "replica-a", IsExposed: true}
+	replica := &Replica{ipFamily: testIPFamily(), Name: "replica-a", IsExposed: true}
 	restore := &Restore{
 		spdkClient: nil,
 		replica:    replica,
@@ -321,7 +322,7 @@ func (s *TestSuite) TestPrepareBackingImageSnapshotOpenFileFailureStopsInitiator
 	newNVMeTCPInitiator = func(string, *initiator.NVMeTCPInfo) (nvmeInitiator, error) {
 		return fakeInitiator, nil
 	}
-	backingImageGetIPForPod = func() (string, error) {
+	backingImageGetIPForPod = func(commonnet.IPFamily) (string, error) {
 		return "10.0.0.1", nil
 	}
 	backingImageNewExecutor = func(string) (*commonns.Executor, error) {
@@ -349,13 +350,11 @@ func (s *TestSuite) TestPrepareBackingImageSnapshotOpenFileFailureStopsInitiator
 	portAllocator, err := commonbitmap.NewBitmap(1000, 1000)
 	c.Assert(err, IsNil)
 
-	bi := &BackingImage{
-		ctx:     context.Background(),
+	bi := &BackingImage{ipFamily: testIPFamily(), ctx: context.Background(),
 		Name:    "bi-a",
 		LvsName: "disk-a",
 		LvsUUID: "uuid-a",
-		log:     safelog.NewSafeLogger(logrus.New()),
-	}
+		log:     safelog.NewSafeLogger(logrus.New())}
 
 	err = bi.prepareBackingImageSnapshot(nil, portAllocator, "http://example.com/image.raw", "")
 	c.Assert(err, NotNil)
@@ -389,14 +388,12 @@ func (s *TestSuite) TestPrepareFromSyncOpenFileFailureStopsInitiatorAndUnexposes
 		return "", "", nil
 	}
 
-	bi := &BackingImage{
-		ctx:  context.Background(),
+	bi := &BackingImage{ipFamily: testIPFamily(), ctx: context.Background(),
 		Name: "bi-a",
 		log:  safelog.NewSafeLogger(logrus.New()),
 		newServiceClient: func(string) (backingImageServiceClient, error) {
 			return fakeServiceClient, nil
-		},
-	}
+		}}
 
 	err := bi.prepareFromSync(nil, "remote-address", "src-lvs-uuid")
 	c.Assert(err, NotNil)
@@ -413,15 +410,13 @@ func (s *TestSuite) TestPrepareFromSyncUsesNewServiceClientField(c *C) {
 	factoryCalled := false
 	fakeServiceClient := &fakeBackingImageServiceClient{exposedAddress: "10.0.0.1:1000"}
 
-	bi := &BackingImage{
-		ctx:  context.Background(),
+	bi := &BackingImage{ipFamily: testIPFamily(), ctx: context.Background(),
 		Name: "bi-factory-check",
 		log:  safelog.NewSafeLogger(logrus.New()),
 		newServiceClient: func(string) (backingImageServiceClient, error) {
 			factoryCalled = true
 			return fakeServiceClient, nil
-		},
-	}
+		}}
 
 	// Stub downstream hook so prepareFromSync stops after newServiceClient is called.
 	origDiscover := backingImageDiscoverAndConnectNVMeTarget
