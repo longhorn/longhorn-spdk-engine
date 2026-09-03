@@ -61,11 +61,11 @@ github.com/cockroachdb/redact/internal/rfmt/fmtsort
 # github.com/fxamacker/cbor/v2 v2.9.1
 ## explicit; go 1.20
 github.com/fxamacker/cbor/v2
-# github.com/gammazero/deque v1.2.1
-## explicit; go 1.24
+# github.com/gammazero/deque v1.2.2
+## explicit; go 1.26
 github.com/gammazero/deque
-# github.com/gammazero/workerpool v1.2.1
-## explicit; go 1.24
+# github.com/gammazero/workerpool v1.2.2
+## explicit; go 1.26
 github.com/gammazero/workerpool
 # github.com/getsentry/sentry-go v0.46.0
 ## explicit; go 1.25.0
@@ -110,7 +110,7 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20261020110232-e14d5880bb6f
+# github.com/longhorn/backupstore v0.0.0-20261020110232-e14d5880bb6f => github.com/c3y1huang/backupstore v0.0.0-20261103050637-2e36cc02a3d5
 ## explicit; go 1.26.0
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
@@ -130,7 +130,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.13.1-0.20261029031309-fbec96a41518
+# github.com/longhorn/go-spdk-helper v0.14.1-0.20261105073243-fc901c166c71
 ## explicit; go 1.26.0
 github.com/longhorn/go-spdk-helper/pkg/initiator
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
@@ -454,3 +454,4 @@ sigs.k8s.io/randfill/bytesource
 # sigs.k8s.io/structured-merge-diff/v6 v6.4.2
 ## explicit; go 1.23
 sigs.k8s.io/structured-merge-diff/v6/value
+# github.com/longhorn/backupstore => github.com/c3y1huang/backupstore v0.0.0-20261103050637-2e36cc02a3d5
