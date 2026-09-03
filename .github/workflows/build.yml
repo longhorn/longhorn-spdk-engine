@@ -11,7 +11,7 @@ on:
 jobs:
   build-amd64:
     name: Build AMD64 binaries
-    runs-on: cncf-ubuntu-16-64-x86
+    runs-on: cncf-ubuntu-8-32-x86
     steps:
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
