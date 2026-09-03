@@ -2,6 +2,10 @@ module github.com/longhorn/longhorn-spdk-engine
 
 go 1.26.0
 
+replace github.com/longhorn/go-spdk-helper => github.com/c3y1huang/go-spdk-helper v0.0.0-20261013003334-c57b28a10468
+
+replace github.com/longhorn/backupstore => github.com/c3y1huang/backupstore v0.0.0-20261013003523-e4de7b2516f1
+
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3
 	github.com/avast/retry-go/v5 v5.0.0
@@ -9,7 +13,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20260922010936-57b3845ad4ef
-	github.com/longhorn/go-common-libs v0.0.0-20260907073218-e53e6775eb8a
+	github.com/longhorn/go-common-libs v0.0.0-20260909075701-1a37e0e5083e
 	github.com/longhorn/go-spdk-helper v0.11.0
 	github.com/longhorn/types v0.0.0-20260912171147-ce65698c8b35
 	github.com/sirupsen/logrus v1.10.2
