@@ -2795,16 +2795,34 @@ func (e *Engine) RestoreStatus() (*spdkrpc.RestoreStatusResponse, error) {
 	lastRestored := e.restore.LastRestored
 	currentRestoringBackup := e.restore.CurrentRestoringBackup
 	backupURL := e.restore.BackupURL
+	errorSourceReplicaName := e.restore.ErrorSourceReplicaName
 	e.restore.RUnlock()
 
+	// The restore error is reported in exactly one place. If the replica that
+	// caused the error is still a member of this engine, the error appears
+	// only on that replica's entry, and the control plane fails only that
+	// replica. In every other case the error is engine-level and is reported
+	// through EngineError. Copying the error to every replica's entry would
+	// fail healthy replicas for a problem they did not cause.
+	if _, sourceIsMember := e.backends[errorSourceReplicaName]; !sourceIsMember {
+		errorSourceReplicaName = ""
+	}
+	if restoreError != "" && errorSourceReplicaName == "" {
+		resp.EngineError = restoreError
+	}
+
 	for replicaName, replicaStatus := range e.backends {
+		replicaError := ""
+		if replicaName == errorSourceReplicaName {
+			replicaError = restoreError
+		}
 		resp.Status[replicaStatus.Address()] = &spdkrpc.ReplicaRestoreStatusResponse{
 			ReplicaName:            replicaName,
 			ReplicaAddress:         GetBackendReplicaURL(replicaStatus.Address()),
 			IsRestoring:            e.IsRestoring,
 			LastRestored:           lastRestored,
 			Progress:               int32(restoreProgress),
-			Error:                  restoreError,
+			Error:                  replicaError,
 			State:                  string(restoreState),
 			BackupUrl:              backupURL,
 			CurrentRestoringBackup: currentRestoringBackup,
