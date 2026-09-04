@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2598,7 +2599,10 @@ func (e *Engine) backupRestore(backupURL string, concurrentLimit int32) error {
 		"concurrentLimit": concurrentLimit,
 	}).Info("Starting full backup restore")
 
-	return backupstore.RestoreDeltaBlockBackup(e.ctx, &backupstore.DeltaRestoreConfig{
+	// The restore cycle's own context, not the engine's: FinalizeRestore and
+	// signalStop cancel it, so an aborted restore also ends the backupstore
+	// block producers, not just the workers.
+	return backupstore.RestoreDeltaBlockBackup(e.restore.Context(), &backupstore.DeltaRestoreConfig{
 		BackupURL:       backupURL,
 		DeltaOps:        e.restore,
 		Filename:        "",
@@ -2615,7 +2619,8 @@ func (e *Engine) backupRestoreIncrementally(backupURL, lastRestored string, conc
 		"concurrentLimit": concurrentLimit,
 	}).Info("Starting incremental backup restore")
 
-	return backupstore.RestoreDeltaBlockBackupIncrementally(e.ctx, &backupstore.DeltaRestoreConfig{
+	// See backupRestore for why this passes the restore cycle's context.
+	return backupstore.RestoreDeltaBlockBackupIncrementally(e.restore.Context(), &backupstore.DeltaRestoreConfig{
 		BackupURL:       backupURL,
 		DeltaOps:        e.restore,
 		LastBackupName:  lastRestored,
@@ -2627,7 +2632,7 @@ func (e *Engine) backupRestoreIncrementally(backupURL, lastRestored string, conc
 func (e *Engine) completeBackupRestore(spdkClient *spdkclient.Client, backupSnapshotName string) (err error) {
 	// waitForRestoreComplete only reads e.restore fields under e.restore.RLock;
 	// no engine lock is needed (and must not be held - SnapshotCreate/Delete acquire it).
-	waitErr := e.waitForRestoreComplete()
+	waitErr := e.waitForRestoreComplete(spdkClient)
 
 	// Acquire the engine lock to mutate shared fields and tear down the temporary
 	// NVMe-TCP target. This runs regardless of success or failure so that the target
@@ -2668,7 +2673,11 @@ func (e *Engine) completeBackupRestore(spdkClient *spdkclient.Client, backupSnap
 			e.applyValidateAndUpdateErrorNoLock(raidErr, &updateRequired)
 		}
 		if e.restore != nil {
-			e.restore.UpdateRestoreStatus(e.restore.SnapshotName, 0, waitErr)
+			// The watcher gave up before the backupstore workers finished.
+			// Stop the workers that are between blocks and record the outcome
+			// before any late worker report can change it.
+			e.restore.signalStop()
+			e.restore.FinalizeRestore(waitErr)
 		}
 		e.Unlock()
 		if updateRequired {
@@ -2682,11 +2691,7 @@ func (e *Engine) completeBackupRestore(spdkClient *spdkclient.Client, backupSnap
 		e.Lock()
 		e.IsRestoring = false
 		if e.restore != nil {
-			if err != nil {
-				e.restore.UpdateRestoreStatus(e.restore.SnapshotName, 0, err)
-			} else {
-				e.restore.FinishRestore()
-			}
+			e.restore.FinalizeRestore(err)
 		}
 		e.Unlock()
 	}()
@@ -2769,21 +2774,110 @@ func (e *Engine) cleanupTemporaryNvmeTcpTargetForRestoreLocked(spdkClient *spdkc
 	}
 }
 
-func (e *Engine) waitForRestoreComplete() error {
+// restoreIdleTimeout is how long a restore may go without completing a block
+// before the engine aborts it. It also bounds the final sync and close, which
+// report no blocks: it must be long enough for a normal flush over a slow but
+// live path, and it is the only thing that ends a sync over a path that never
+// connected.
+//
+// This is a variable so tests can shorten it.
+var restoreIdleTimeout = 10 * time.Minute
+
+// idleTimer tracks how long the reported block count has gone without
+// changing, and expires once that exceeds the timeout. The caller supplies
+// the current time, which keeps tests deterministic.
+type idleTimer struct {
+	timeout        time.Duration
+	lastReported   uint64
+	lastReportedAt time.Time
+}
+
+// newIdleTimer returns a timer whose idle clock starts at now. If blocks
+// are reported before the first check, that check sees a changed count and
+// restarts the clock.
+func newIdleTimer(timeout time.Duration, now time.Time) *idleTimer {
+	return &idleTimer{
+		timeout:        timeout,
+		lastReportedAt: now,
+	}
+}
+
+// check records the report count seen at now. A changed count restarts the
+// timer. It returns how long the count has been unchanged and whether that
+// exceeds the timeout.
+func (t *idleTimer) check(reported uint64, now time.Time) (idleFor time.Duration, expired bool) {
+	if reported != t.lastReported {
+		t.lastReported = reported
+		t.lastReportedAt = now
+		return 0, false
+	}
+	idleFor = now.Sub(t.lastReportedAt)
+	return idleFor, idleFor > t.timeout
+}
+
+// findReplicaWithoutUsableIOPath returns the name of the first replica, in
+// name order, whose NVMe namespace bdev has no I/O path able to serve I/O.
+// It returns an empty name when every replica looks healthy or the inspection
+// is inconclusive, so the result can be passed to
+// EngineRestore.RecordErrorSource directly.
+func (e *Engine) findReplicaWithoutUsableIOPath(spdkClient *spdkclient.Client) string {
+	type replicaBdev struct {
+		replicaName string
+		bdevName    string
+	}
+
+	e.RLock()
+	candidates := make([]replicaBdev, 0, len(e.backends))
+	for replicaName, backend := range e.backends {
+		if backend.Mode() == types.ModeERR || backend.BdevName() == "" {
+			continue
+		}
+		candidates = append(candidates, replicaBdev{replicaName: replicaName, bdevName: backend.BdevName()})
+	}
+	e.RUnlock()
+
+	// Inspect in name order so that, with multiple broken replicas, every run
+	// attributes the idle abort to the same replica.
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].replicaName < candidates[j].replicaName })
+
+	for _, candidate := range candidates {
+		usable, detail, err := nvmeNamespaceHasUsableIOPath(spdkClient, candidate.bdevName)
+		if err != nil {
+			e.log.WithError(err).Warnf("Failed to inspect I/O paths of bdev %s for replica %s", candidate.bdevName, candidate.replicaName)
+			continue
+		}
+		if !usable {
+			e.log.Warnf("Replica %s bdev %s has no usable I/O path: %s", candidate.replicaName, candidate.bdevName, detail)
+			return candidate.replicaName
+		}
+	}
+	return ""
+}
+
+// waitForRestoreComplete blocks until the restore completes, fails, is
+// canceled, or exceeds the idle timeout. On an idle timeout, it records a
+// replica with a broken I/O path, if any, as the error source.
+func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
+	idleTimeout := restoreIdleTimeout
+
 	e.log.WithFields(logrus.Fields{
 		"interval":     restorePeriodicRefreshInterval.String(),
+		"idleTimeout":  idleTimeout.String(),
 		"snapshotName": e.RestoringSnapshotName,
 	}).Info("Waiting for restore to complete")
 
-	err := retrygo.New(
+	timer := newIdleTimer(idleTimeout, time.Now())
+
+	return retrygo.New(
 		retrygo.Delay(restorePeriodicRefreshInterval),
 		retrygo.MaxDelay(restorePeriodicRefreshInterval),
 		retrygo.DelayType(retrygo.FixedDelay),
-		retrygo.Attempts(0), // retry forever until success or unrecoverable error
+		retrygo.Attempts(0), // retry until success, error, cancellation, or the idle timeout expires
 	).Do(
 		func() error {
 			e.restore.RLock()
 			restoreProgress := e.restore.Progress
+			restoreReports := e.restore.statusReports
 			restoreError := e.restore.Error
 			restoreState := e.restore.State
 			deviceSyncErr := e.restore.deviceSyncErr
@@ -2813,15 +2907,19 @@ func (e *Engine) waitForRestoreComplete() error {
 				return retrygo.Unrecoverable(err)
 			}
 
+			if idleFor, expired := timer.check(restoreReports, time.Now()); expired {
+				err := fmt.Errorf("restore idle: no block completed for %v at %v%%, timeout %v", idleFor.Truncate(time.Second), restoreProgress, idleTimeout)
+				e.log.WithError(err).Error("Aborting idle restore")
+				// Attribute the idle abort to a replica with a broken I/O path
+				// if one can be identified; an empty name keeps the error at
+				// the engine level.
+				e.restore.RecordErrorSource(e.findReplicaWithoutUsableIOPath(spdkClient))
+				return retrygo.Unrecoverable(err)
+			}
+
 			return fmt.Errorf("restore is still in progress")
 		},
 	)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (e *Engine) RestoreStatus() (*spdkrpc.RestoreStatusResponse, error) {
