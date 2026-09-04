@@ -9,6 +9,9 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
+	btypes "github.com/longhorn/backupstore/types"
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
+
 	. "gopkg.in/check.v1"
 )
 
@@ -217,12 +220,33 @@ func (s *TestSuite) TestRestoreStatusErrorSourceLeftMembershipFallsBackToEngineE
 	c.Assert(status.Status["10.0.0.2:1234"].Error, Equals, "")
 }
 
+func (s *TestSuite) TestRestoreCycleContextEndsWithTheCycle(c *C) {
+	fmt.Println("Testing the restore cycle context is canceled when the cycle ends and replaced for the next cycle")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	c.Assert(e.restore.Context().Err(), IsNil)
+
+	// Recording the outcome ends the cycle: a block producer still blocked
+	// on the bounded channel must exit with the workers.
+	e.restore.FinalizeRestore(fmt.Errorf("restore idle"))
+	c.Assert(e.restore.Context().Err(), NotNil)
+
+	// The next cycle gets its own context.
+	e.restore.StartNewRestore("s3://backupbucket@us-east-1/backupstore?backup=backup-b&volume=vol-a", "backup-b", false)
+	c.Assert(e.restore.Context().Err(), IsNil)
+
+	// The stop signal (idle abort, engine deletion) cancels it as well.
+	e.restore.signalStop()
+	c.Assert(e.restore.Context().Err(), NotNil)
+}
+
 func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C) {
 	fmt.Println("Testing restore start errors preserve last restored backup")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-old&volume=vol-a", "backup-old", e, nil)
-	e.restore.FinishRestore()
+	e.restore.FinalizeRestore(nil)
 
 	e.Lock()
 	e.recordBackupRestoreStartErrorLocked(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-new&volume=vol-a", "", nil, fmt.Errorf("backup was deleted"))
@@ -231,6 +255,39 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C)
 	c.Assert(e.restore.LastRestored, Equals, "backup-old")
 	c.Assert(e.restore.CurrentRestoringBackup, Equals, "backup-new")
 	c.Assert(string(e.restore.State), Equals, "error")
+}
+
+func (s *TestSuite) TestFinalizeRestoreIgnoresLateWorkerReports(c *C) {
+	fmt.Println("Testing EngineRestore ignores worker status reports after the outcome is recorded")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	e.restore.UpdateRestoreStatus("", 40, nil)
+
+	idleErr := fmt.Errorf("restore idle at 40%% for 5m0s, timeout 5m0s")
+	e.restore.FinalizeRestore(idleErr)
+	c.Assert(e.restore.State, Equals, btypes.ProgressStateError)
+	c.Assert(e.restore.Error, Equals, idleErr.Error())
+
+	// A worker that was blocked in a write reports after the initiator is
+	// torn down. Its cancelled error and progress must not change the
+	// recorded outcome.
+	e.restore.UpdateRestoreStatus("", 40, fmt.Errorf("write failed: %v", btypes.ErrorMsgRestoreCancelled))
+	e.restore.UpdateRestoreStatus("", 100, nil)
+	c.Assert(e.restore.State, Equals, btypes.ProgressStateError)
+	c.Assert(e.restore.Error, Equals, idleErr.Error())
+	c.Assert(e.restore.Progress, Equals, 0)
+
+	// Engine deletion after the outcome is recorded does not rewrite it either.
+	e.restore.Stop()
+	c.Assert(e.restore.State, Equals, btypes.ProgressStateError)
+	c.Assert(e.restore.Error, Equals, idleErr.Error())
+
+	// A new cycle accepts reports again.
+	e.restore.StartNewRestore("s3://backupbucket@us-east-1/backupstore?backup=backup-b&volume=vol-a", "backup-b", false)
+	e.restore.UpdateRestoreStatus("", 10, nil)
+	c.Assert(e.restore.Progress, Equals, 10)
+	c.Assert(e.restore.State, Equals, btypes.ProgressStateInProgress)
 }
 
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesBackendView(c *C) {
@@ -315,4 +372,248 @@ func (s *TestSuite) TestResolveReplicaAncestorMarksERROnBackingImageError(c *C) 
 	_, _, _, ok := e.resolveReplicaAncestor("r1", view, u, false, false)
 	c.Assert(ok, Equals, false)
 	c.Assert(u.Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
+}
+
+func (s *TestSuite) TestRestoreIdleTimeout(c *C) {
+	fmt.Println("Testing restoreIdleTimeout scales with volume size above the floor")
+
+	const gib = uint64(1 << 30)
+
+	type testCase struct {
+		specSize uint64
+		expected time.Duration
+	}
+	testCases := map[string]testCase{
+		"zero size uses the floor": {
+			specSize: 0,
+			expected: 10 * time.Minute,
+		},
+		"small volume uses the floor": {
+			specSize: 1 * gib,
+			expected: 10 * time.Minute,
+		},
+		"partial GiB rounds up": {
+			specSize: 1,
+			expected: 10 * time.Minute,
+		},
+		"600 GiB matches the floor exactly": {
+			specSize: 600 * gib,
+			expected: 10 * time.Minute,
+		},
+		"601 GiB exceeds the floor": {
+			specSize: 601 * gib,
+			expected: 601 * time.Second,
+		},
+		"4 TiB scales linearly": {
+			specSize: 4096 * gib,
+			expected: 4096 * time.Second,
+		},
+	}
+	for testName, tc := range testCases {
+		c.Logf("testing restoreIdleTimeout.%v", testName)
+		c.Assert(restoreIdleTimeout(tc.specSize), Equals, tc.expected)
+	}
+}
+
+func (s *TestSuite) TestNvmeIOPathIsUsable(c *C) {
+	fmt.Println("Testing nvmeIOPathIsUsable path state interpretation")
+
+	type testCase struct {
+		connected  bool
+		accessible bool
+		state      spdktypes.BdevNvmeQpairState
+		expected   bool
+	}
+	testCases := map[string]testCase{
+		"connected with enabled qpair is usable": {
+			connected:  true,
+			accessible: true,
+			state:      spdktypes.BdevNvmeQpairStateEnabled,
+			expected:   true,
+		},
+		"connected with connected qpair is usable": {
+			connected:  true,
+			accessible: true,
+			state:      spdktypes.BdevNvmeQpairStateConnected,
+			expected:   true,
+		},
+		"connected without reported qpair state falls back to the connected and accessible flags": {
+			connected:  true,
+			accessible: true,
+			state:      "",
+			expected:   true,
+		},
+		"qpair stuck in connecting is not usable": {
+			connected:  true,
+			accessible: true,
+			state:      spdktypes.BdevNvmeQpairStateConnecting,
+			expected:   false,
+		},
+		"disconnected qpair is not usable": {
+			connected:  true,
+			accessible: true,
+			state:      spdktypes.BdevNvmeQpairStateDisconnected,
+			expected:   false,
+		},
+		"not connected is never usable": {
+			connected:  false,
+			accessible: true,
+			state:      spdktypes.BdevNvmeQpairStateEnabled,
+			expected:   false,
+		},
+		"inaccessible namespace is not usable": {
+			connected:  true,
+			accessible: false,
+			state:      spdktypes.BdevNvmeQpairStateEnabled,
+			expected:   false,
+		},
+	}
+	for testName, tc := range testCases {
+		c.Logf("testing nvmeIOPathIsUsable.%v", testName)
+		ioPath := spdktypes.BdevNvmeIoPath{Connected: tc.connected, Accessible: tc.accessible, State: tc.state}
+		c.Assert(nvmeIOPathIsUsable(ioPath), Equals, tc.expected)
+	}
+}
+
+func (s *TestSuite) TestNvmeEveryPollGroupHasUsableIOPath(c *C) {
+	fmt.Println("Testing nvmeEveryPollGroupHasUsableIOPath requires a usable path on every reactor")
+
+	usablePath := spdktypes.BdevNvmeIoPath{Connected: true, Accessible: true, State: spdktypes.BdevNvmeQpairStateEnabled}
+	unusablePath := spdktypes.BdevNvmeIoPath{Connected: false, Accessible: true, State: spdktypes.BdevNvmeQpairStateDisconnected}
+
+	type testCase struct {
+		pollGroups     []spdktypes.BdevNvmePollGroupIoPaths
+		expectedUsable bool
+		expectedDetail string
+	}
+	testCases := map[string]testCase{
+		"every reactor has a usable path": {
+			pollGroups: []spdktypes.BdevNvmePollGroupIoPaths{
+				{Thread: "nvmf_tgt_poll_group_0", IoPaths: []spdktypes.BdevNvmeIoPath{usablePath}},
+				{Thread: "nvmf_tgt_poll_group_1", IoPaths: []spdktypes.BdevNvmeIoPath{usablePath}},
+			},
+			expectedUsable: true,
+		},
+		"one usable reactor does not mask an unusable one": {
+			pollGroups: []spdktypes.BdevNvmePollGroupIoPaths{
+				{Thread: "nvmf_tgt_poll_group_0", IoPaths: []spdktypes.BdevNvmeIoPath{usablePath}},
+				{Thread: "nvmf_tgt_poll_group_1", IoPaths: []spdktypes.BdevNvmeIoPath{unusablePath}},
+			},
+			expectedUsable: false,
+			expectedDetail: `thread=nvmf_tgt_poll_group_1: connected=false accessible=true qpair_state="DISCONNECTED"`,
+		},
+		"a reactor with one unusable and one usable path is usable": {
+			pollGroups: []spdktypes.BdevNvmePollGroupIoPaths{
+				{Thread: "nvmf_tgt_poll_group_0", IoPaths: []spdktypes.BdevNvmeIoPath{unusablePath, usablePath}},
+			},
+			expectedUsable: true,
+		},
+		"a reactor without paths for the bdev is skipped": {
+			pollGroups: []spdktypes.BdevNvmePollGroupIoPaths{
+				{Thread: "nvmf_tgt_poll_group_0", IoPaths: []spdktypes.BdevNvmeIoPath{usablePath}},
+				{Thread: "app_thread"},
+			},
+			expectedUsable: true,
+		},
+		"no reactor has paths for the bdev": {
+			pollGroups: []spdktypes.BdevNvmePollGroupIoPaths{
+				{Thread: "app_thread"},
+			},
+			expectedUsable: false,
+			expectedDetail: "no I/O paths",
+		},
+		"no poll groups": {
+			expectedUsable: false,
+			expectedDetail: "no I/O paths",
+		},
+	}
+	for testName, tc := range testCases {
+		c.Logf("testing nvmeEveryPollGroupHasUsableIOPath.%v", testName)
+		usable, detail := nvmeEveryPollGroupHasUsableIOPath(tc.pollGroups)
+		c.Assert(usable, Equals, tc.expectedUsable)
+		c.Assert(detail, Equals, tc.expectedDetail)
+	}
+}
+
+func (s *TestSuite) TestIdleTimerExpiresAfterTimeout(c *C) {
+	fmt.Println("Testing idleTimer expires only after the timeout passes without a progress change")
+
+	base := time.Date(2026, time.September, 4, 0, 0, 0, 0, time.UTC)
+	timeout := 10 * time.Minute
+	timer := newIdleTimer(timeout, base)
+
+	// The first check starts the timer; it never expires.
+	idleFor, expired := timer.check(0, base)
+	c.Assert(expired, Equals, false)
+	c.Assert(idleFor, Equals, time.Duration(0))
+
+	// Sitting at the same progress exactly at the timeout has not expired.
+	idleFor, expired = timer.check(0, base.Add(timeout))
+	c.Assert(expired, Equals, false)
+	c.Assert(idleFor, Equals, timeout)
+
+	// One tick past the timeout has expired.
+	idleFor, expired = timer.check(0, base.Add(timeout+time.Nanosecond))
+	c.Assert(expired, Equals, true)
+	c.Assert(idleFor, Equals, timeout+time.Nanosecond)
+
+	// A progress change restarts the timer.
+	_, expired = timer.check(1, base.Add(timeout+time.Minute))
+	c.Assert(expired, Equals, false)
+	idleFor, expired = timer.check(1, base.Add(timeout+2*time.Minute))
+	c.Assert(expired, Equals, false)
+	c.Assert(idleFor, Equals, time.Minute)
+}
+
+func (s *TestSuite) TestWaitForRestoreCompleteAbortsIdleRestore(c *C) {
+	fmt.Println("Testing waitForRestoreComplete aborts a restore whose progress stays unchanged")
+
+	originalInterval := restorePeriodicRefreshInterval
+	originalFloor := restoreIdleTimeoutFloor
+	originalPerGiB := restoreIdleTimeoutPerGiB
+	defer func() {
+		restorePeriodicRefreshInterval = originalInterval
+		restoreIdleTimeoutFloor = originalFloor
+		restoreIdleTimeoutPerGiB = originalPerGiB
+	}()
+	restorePeriodicRefreshInterval = 5 * time.Millisecond
+	restoreIdleTimeoutFloor = 30 * time.Millisecond
+	restoreIdleTimeoutPerGiB = time.Millisecond
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	// Attribution must skip ERR backends and backends without an attached
+	// bdev, so the nil SPDK client is never dialed.
+	erroredBackend := newFakeBackend("replica-err", "10.0.0.1:1234")
+	erroredBackend.SetMode(lhtypes.ModeERR)
+	unattachedBackend := newFakeBackend("replica-no-bdev", "10.0.0.2:1234")
+	unattachedBackend.SetMode(lhtypes.ModeRW)
+	e.backends = map[string]Backend{
+		"replica-err":     erroredBackend,
+		"replica-no-bdev": unattachedBackend,
+	}
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+
+	err := e.waitForRestoreComplete(nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "idle at"), Equals, true)
+	// The idle abort could not be attributed to a replica, so the error stays
+	// at the engine level.
+	c.Assert(e.restore.ErrorSourceReplicaName, Equals, "")
+}
+
+func (s *TestSuite) TestWaitForRestoreCompleteReturnsOnFullProgress(c *C) {
+	fmt.Println("Testing waitForRestoreComplete returns nil once progress reaches 100")
+
+	originalInterval := restorePeriodicRefreshInterval
+	defer func() {
+		restorePeriodicRefreshInterval = originalInterval
+	}()
+	restorePeriodicRefreshInterval = 5 * time.Millisecond
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	e.restore.UpdateRestoreStatus("", 100, nil)
+
+	c.Assert(e.waitForRestoreComplete(nil), IsNil)
 }
