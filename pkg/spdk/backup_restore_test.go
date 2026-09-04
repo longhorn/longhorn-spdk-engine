@@ -12,6 +12,7 @@ import (
 	"github.com/longhorn/go-spdk-helper/pkg/initiator"
 
 	btypes "github.com/longhorn/backupstore/types"
+	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 
 	. "gopkg.in/check.v1"
@@ -803,4 +804,104 @@ func (s *TestSuite) TestWaitForRestoreCompleteReturnsOnFullProgress(c *C) {
 	e.restore.UpdateRestoreStatus("", 100, nil)
 
 	c.Assert(e.waitForRestoreComplete(nil), IsNil)
+}
+
+func (s *TestSuite) TestPreflightReplicaIOPathsForRestorePassesWithoutCandidates(c *C) {
+	fmt.Println("Testing preflightReplicaIOPathsForRestore passes when no replica bdev is eligible for inspection")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	// The preflight must skip ERR backends and backends without an attached
+	// bdev, so the nil SPDK client is never dialed.
+	erroredBackend := newFakeBackend("replica-err", "10.0.0.1:1234")
+	erroredBackend.SetMode(lhtypes.ModeERR)
+	unattachedBackend := newFakeBackend("replica-no-bdev", "10.0.0.2:1234")
+	unattachedBackend.SetMode(lhtypes.ModeRW)
+	e.backends = map[string]Backend{
+		"replica-err":     erroredBackend,
+		"replica-no-bdev": unattachedBackend,
+	}
+
+	replicaName, err := e.preflightReplicaIOPathsForRestore(nil)
+
+	c.Assert(err, IsNil)
+	c.Assert(replicaName, Equals, "")
+}
+
+// newPreflightTestEngine returns an engine with two RW replicas whose bdevs
+// are "bdev-a" and "bdev-b", and shortens the preflight retry loop. The
+// returned function restores the package-level settings it changed.
+func newPreflightTestEngine() (*Engine, func()) {
+	originalBdevHasUsableIOPathFn := bdevHasUsableIOPathFn
+	originalInterval := restorePreflightRetryInterval
+	originalTimeout := restorePreflightTimeout
+	restorePreflightRetryInterval = time.Millisecond
+	restorePreflightTimeout = 5 * time.Millisecond
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{}
+	for _, name := range []string{"a", "b"} {
+		backend := newFakeBackend("replica-"+name, "10.0.0.1:1234")
+		backend.SetMode(lhtypes.ModeRW)
+		backend.SetBdevName("bdev-" + name)
+		e.backends["replica-"+name] = backend
+	}
+
+	return e, func() {
+		bdevHasUsableIOPathFn = originalBdevHasUsableIOPathFn
+		restorePreflightRetryInterval = originalInterval
+		restorePreflightTimeout = originalTimeout
+	}
+}
+
+func (s *TestSuite) TestPreflightReplicaIOPathsForRestorePassesWhenAllPathsUsable(c *C) {
+	fmt.Println("Testing preflightReplicaIOPathsForRestore passes when every replica has a usable I/O path")
+
+	e, restore := newPreflightTestEngine()
+	defer restore()
+	bdevHasUsableIOPathFn = func(*spdkclient.Client, string) (bool, string, error) {
+		return true, "", nil
+	}
+
+	replicaName, err := e.preflightReplicaIOPathsForRestore(nil)
+
+	c.Assert(err, IsNil)
+	c.Assert(replicaName, Equals, "")
+}
+
+func (s *TestSuite) TestPreflightReplicaIOPathsForRestoreFailsClosedOnInspectionError(c *C) {
+	fmt.Println("Testing preflightReplicaIOPathsForRestore fails without a replica attribution when no I/O path state can be read")
+
+	e, restore := newPreflightTestEngine()
+	defer restore()
+	bdevHasUsableIOPathFn = func(_ *spdkclient.Client, bdevName string) (bool, string, error) {
+		return false, "", fmt.Errorf("rpc failed for %s", bdevName)
+	}
+
+	replicaName, err := e.preflightReplicaIOPathsForRestore(nil)
+
+	// The path state is unknown, so the restore must not start. No replica is
+	// known to be broken, so the error stays at the engine level.
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "cannot verify the replica NVMe I/O paths"), Equals, true)
+	c.Assert(strings.Contains(err.Error(), "bdev-b"), Equals, true)
+	c.Assert(replicaName, Equals, "")
+}
+
+func (s *TestSuite) TestPreflightReplicaIOPathsForRestoreAttributesBrokenReplica(c *C) {
+	fmt.Println("Testing preflightReplicaIOPathsForRestore attributes the failure to the broken replica even when another replica cannot be inspected")
+
+	e, restore := newPreflightTestEngine()
+	defer restore()
+	bdevHasUsableIOPathFn = func(_ *spdkclient.Client, bdevName string) (bool, string, error) {
+		if bdevName == "bdev-a" {
+			return false, "", fmt.Errorf("rpc failed for %s", bdevName)
+		}
+		return false, "poll group 1 has no usable path", nil
+	}
+
+	replicaName, err := e.preflightReplicaIOPathsForRestore(nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "replica-b has no usable NVMe I/O path"), Equals, true)
+	c.Assert(replicaName, Equals, "replica-b")
 }
