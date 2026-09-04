@@ -153,14 +153,68 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorExposedInRestoreStatus(c *C
 	c.Assert(err, IsNil)
 	c.Assert(status.Status, HasLen, 2)
 
+	// The start error is not attributed to any replica, so it must surface as
+	// an engine-level error and must not be fanned out to replica entries.
+	c.Assert(status.EngineError, Equals, restoreErr.Error())
 	for _, replicaStatus := range status.Status {
 		c.Assert(replicaStatus.IsRestoring, Equals, false)
 		c.Assert(replicaStatus.LastRestored, Equals, "")
 		c.Assert(replicaStatus.CurrentRestoringBackup, Equals, "backup-a")
 		c.Assert(replicaStatus.BackupUrl, Equals, backupURL)
 		c.Assert(replicaStatus.State, Equals, "error")
-		c.Assert(replicaStatus.Error, Equals, restoreErr.Error())
+		c.Assert(replicaStatus.Error, Equals, "")
 	}
+}
+
+func (s *TestSuite) TestRestoreStatusReportsErrorOnlyOnErrorSourceReplica(c *C) {
+	fmt.Println("Testing RestoreStatus reports the restore error only on the error source replica")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
+	}
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	e.restore.UpdateRestoreStatus("", 40, fmt.Errorf("qpair wedged"))
+	e.restore.RecordErrorSource("replica-1")
+
+	status, err := e.RestoreStatus()
+	c.Assert(err, IsNil)
+	c.Assert(status.EngineError, Equals, "")
+	c.Assert(status.Status["10.0.0.1:1234"].Error, Equals, "qpair wedged")
+	c.Assert(status.Status["10.0.0.2:1234"].Error, Equals, "")
+}
+
+func (s *TestSuite) TestRecordErrorSourceKeepsFirstRecordedName(c *C) {
+	fmt.Println("Testing EngineRestore.RecordErrorSource keeps the first recorded error source")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+
+	e.restore.RecordErrorSource("replica-1")
+	e.restore.RecordErrorSource("replica-2")
+	c.Assert(e.restore.ErrorSourceReplicaName, Equals, "replica-1")
+
+	// A new restore cycle clears the attribution.
+	e.restore.StartNewRestore("s3://backupbucket@us-east-1/backupstore?backup=backup-b&volume=vol-a", "backup-b", true)
+	c.Assert(e.restore.ErrorSourceReplicaName, Equals, "")
+}
+
+func (s *TestSuite) TestRestoreStatusErrorSourceLeftMembershipFallsBackToEngineError(c *C) {
+	fmt.Println("Testing RestoreStatus reports engine-level error when the error source is no longer a member")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
+	}
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	e.restore.UpdateRestoreStatus("", 40, fmt.Errorf("qpair wedged"))
+	e.restore.RecordErrorSource("replica-1") // not in e.backends anymore
+
+	status, err := e.RestoreStatus()
+	c.Assert(err, IsNil)
+	c.Assert(status.EngineError, Equals, "qpair wedged")
+	c.Assert(status.Status["10.0.0.2:1234"].Error, Equals, "")
 }
 
 func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C) {
