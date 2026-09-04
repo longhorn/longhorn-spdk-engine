@@ -9,6 +9,8 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
+	"github.com/longhorn/go-spdk-helper/pkg/initiator"
+
 	btypes "github.com/longhorn/backupstore/types"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 
@@ -113,7 +115,7 @@ func (s *TestSuite) TestEngineFrontendTeardownRestoreInitiatorMarksStopped(c *C)
 	ef.NvmeTcpFrontend.Nqn = getStableVolumeNQN("vol-a")
 	ef.NvmeTcpFrontend.Nguid = getStableVolumeNGUID("vol-a")
 
-	ef.teardownRestoreInitiator(nil)
+	c.Assert(ef.teardownRestoreInitiator(), IsNil)
 
 	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateStopped))
 	c.Assert(ef.Frontend, Equals, "")
@@ -122,6 +124,191 @@ func (s *TestSuite) TestEngineFrontendTeardownRestoreInitiatorMarksStopped(c *C)
 	c.Assert(ef.NvmeTcpFrontend.TargetPort, Equals, int32(0))
 	c.Assert(ef.NvmeTcpFrontend.Nqn, Equals, "")
 	c.Assert(ef.NvmeTcpFrontend.Nguid, Equals, "")
+}
+
+func (s *TestSuite) TestEngineFrontendTeardownRestoreInitiatorKeepsTerminating(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreInitiator does not overwrite the terminating state")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.State = lhtypes.InstanceStateTerminating
+	ef.IsRestoring = true
+
+	c.Assert(ef.teardownRestoreInitiator(), IsNil)
+
+	// No current caller reaches teardownRestoreInitiator with a terminating
+	// frontend. This checks the guard itself, not a real flow: a terminating
+	// frontend is never marked stopped.
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateTerminating))
+}
+
+func (s *TestSuite) TestEngineFrontendTeardownRestoreInitiatorReleasesLockDuringDisconnect(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreInitiator does not hold the frontend lock while the disconnect is blocked")
+
+	originalStop := stopRestoreInitiator
+	defer func() { stopRestoreInitiator = originalStop }()
+
+	disconnectEntered := make(chan struct{})
+	releaseDisconnect := make(chan struct{})
+	stopRestoreInitiator = func(*initiator.Initiator) error {
+		close(disconnectEntered)
+		<-releaseDisconnect
+		return nil
+	}
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.initiator = &initiator.Initiator{}
+
+	done := make(chan error, 1)
+	go func() { done <- ef.teardownRestoreInitiator() }()
+
+	select {
+	case <-disconnectEntered:
+	case <-time.After(5 * time.Second):
+		c.Fatal("the disconnect was never entered")
+	}
+
+	// The server reads the restore frontend under its own lock while
+	// rejecting a create or a restore; that read must not wait for the
+	// disconnect.
+	c.Assert(ef.TryRLock(), Equals, true)
+	ef.RUnlock()
+
+	close(releaseDisconnect)
+	select {
+	case err := <-done:
+		c.Assert(err, IsNil)
+	case <-time.After(5 * time.Second):
+		c.Fatal("teardownRestoreInitiator did not return after the disconnect was released")
+	}
+	c.Assert(ef.initiator, IsNil)
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateStopped))
+}
+
+func (s *TestSuite) TestTeardownRestoreFrontendSuccessStopsAndUnregisters(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreFrontend stops the frontend and unregisters it after a successful teardown")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.IsRestoring = true
+	unregistered := false
+	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
+
+	ef.teardownRestoreFrontend()
+
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateStopped))
+	c.Assert(ef.ErrorMsg, Equals, "")
+	c.Assert(ef.IsRestoring, Equals, false)
+	// The data path is gone, so the engine can accept a new restore.
+	c.Assert(unregistered, Equals, true)
+}
+
+func (s *TestSuite) TestTeardownRestoreFrontendExhaustionMarksErrorAndStaysRegistered(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreFrontend marks the frontend error, keeps the initiator handle and stays registered when retries are exhausted")
+
+	originalInterval := restoreInitiatorTeardownRetryInterval
+	originalTimeout := restoreInitiatorTeardownTimeout
+	defer func() {
+		restoreInitiatorTeardownRetryInterval = originalInterval
+		restoreInitiatorTeardownTimeout = originalTimeout
+	}()
+	restoreInitiatorTeardownRetryInterval = time.Millisecond
+	restoreInitiatorTeardownTimeout = 5 * time.Millisecond
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.IsRestoring = true
+	// An initiator without NVMe-TCP info makes StopDisconnectFirst fail
+	// deterministically without touching the host.
+	failingInitiator, err := initiator.NewInitiator("vol-a", "", nil, &initiator.UblkInfo{BdevName: "bdev-a"})
+	c.Assert(err, IsNil)
+	ef.initiator = failingInitiator
+	unregistered := false
+	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
+
+	ef.teardownRestoreFrontend()
+
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateError))
+	c.Assert(strings.Contains(ef.ErrorMsg, "failed to tear down the restore initiator"), Equals, true)
+	// The handle stays with the errored frontend; the error message is the
+	// only record that the kernel controller may still be connected.
+	c.Assert(ef.initiator, NotNil)
+	c.Assert(ef.IsRestoring, Equals, false)
+	// The data path is still up, so the engine must keep rejecting new
+	// restores.
+	c.Assert(unregistered, Equals, false)
+}
+
+func (s *TestSuite) TestTeardownRestoreFrontendDeletionStopsRetriesAndUnregisters(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreFrontend stops retrying, leaves the state alone and unregisters the frontend when the engine is being deleted")
+
+	originalInterval := restoreInitiatorTeardownRetryInterval
+	originalTimeout := restoreInitiatorTeardownTimeout
+	defer func() {
+		restoreInitiatorTeardownRetryInterval = originalInterval
+		restoreInitiatorTeardownTimeout = originalTimeout
+	}()
+	// A long timeout proves the early return comes from the closed stop
+	// channel, not from retry exhaustion.
+	restoreInitiatorTeardownRetryInterval = 10 * time.Second
+	restoreInitiatorTeardownTimeout = time.Hour
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.IsRestoring = true
+	// An initiator without NVMe-TCP info makes StopDisconnectFirst fail
+	// deterministically without touching the host.
+	failingInitiator, err := initiator.NewInitiator("vol-a", "", nil, &initiator.UblkInfo{BdevName: "bdev-a"})
+	c.Assert(err, IsNil)
+	ef.initiator = failingInitiator
+	unregistered := false
+	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
+
+	done := make(chan struct{})
+	go func() {
+		ef.teardownRestoreFrontend()
+		close(done)
+	}()
+	// Signal the deletion after the first attempt has failed and the loop is
+	// waiting for the next retry.
+	time.Sleep(100 * time.Millisecond)
+	ef.signalStop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		c.Fatal("teardownRestoreFrontend did not return after the stop channel was closed")
+	}
+
+	// The frontend state is left as is, so a late disconnect cannot hit a
+	// recreated engine on the same NQN.
+	c.Assert(ef.initiator, NotNil)
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateRunning))
+	c.Assert(ef.IsRestoring, Equals, true)
+	// The deletion must not leave the engine rejecting new restores forever.
+	c.Assert(unregistered, Equals, true)
+}
+
+func (s *TestSuite) TestTeardownRestoreFrontendSkipsFirstAttemptOnDeletion(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreFrontend makes no teardown attempt when the engine was deleted before it started")
+
+	updateCh := make(chan interface{}, 1)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.IsRestoring = true
+	// With no initiator handle, an attempt would succeed and clear the
+	// endpoint. The endpoint staying set proves no attempt was made.
+	ef.Endpoint = "/dev/longhorn/vol-a"
+	unregistered := false
+	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
+	ef.signalStop()
+
+	ef.teardownRestoreFrontend()
+
+	c.Assert(ef.Endpoint, Equals, "/dev/longhorn/vol-a")
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateRunning))
+	c.Assert(ef.IsRestoring, Equals, true)
+	c.Assert(len(updateCh), Equals, 0)
+	c.Assert(unregistered, Equals, true)
 }
 
 func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {

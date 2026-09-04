@@ -101,6 +101,18 @@ func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequ
 		if err == nil {
 			s.Lock()
 			delete(s.engineMap, req.Name)
+			// Deleting the engine also deletes the SPDK target that the stale
+			// restore data path pointed at, so there is nothing left to protect.
+			// Two things follow:
+			//   - Stop the teardown retries, so a late disconnect cannot hit a
+			//     recreated engine on the same NQN (see teardownRestoreFrontend).
+			//   - Drop the entry so a recreated engine can restore again after
+			//     a teardown gave up. The temporary restore frontend has no
+			//     delete path of its own.
+			if restoreEF := s.restoreFrontendMap[req.Name]; restoreEF != nil {
+				restoreEF.signalStop()
+			}
+			delete(s.restoreFrontendMap, req.Name)
 			s.Unlock()
 		}
 	}()
@@ -659,6 +671,41 @@ func (s *Server) EngineBackupStatus(ctx context.Context, req *spdkrpc.BackupStat
 	return e.BackupStatus(req.Backup, req.ReplicaAddress)
 }
 
+// validateEngineReadyForRestoreLocked returns a FailedPrecondition error when
+// engineName cannot start a backup restore. Two conditions block a restore:
+// the engine already has a non-empty frontend, or a previous restore's
+// frontend has not finished tearing down its data path.
+//
+// Both checks match by engine name, unlike validateVolumeReadyForFrontendLocked
+// which matches by volume name. This check protects the engine's raid bdev
+// that the restore is about to overwrite; validateVolumeReadyForFrontendLocked
+// protects the volume NQN that the leftover restore initiator disconnects from.
+//
+// The caller must hold the server write lock.
+func (s *Server) validateEngineReadyForRestoreLocked(engineName string) error {
+	// Backup restore is only supported when the engine has no frontend (empty EngineFrontend).
+	// Reject requests if any frontend is configured.
+	for _, frontend := range s.engineFrontendMap {
+		frontend.RLock()
+		frontendEngineName := frontend.EngineName
+		frontendType := frontend.Frontend
+		frontendName := frontend.Name
+		frontend.RUnlock()
+
+		if frontendEngineName == engineName && frontendType != types.FrontendEmpty {
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "cannot restore backup: engine %v has a non-empty frontend %v", engineName, frontendName)
+		}
+	}
+
+	// A registered restore frontend means the previous restore's data path
+	// may still exist and could break the new restore's NVMe connection.
+	if prev, registered := s.restoreFrontendMap[engineName]; registered {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "cannot restore backup to engine %v: %s", engineName, prev.restoreTeardownBlockReason())
+	}
+
+	return nil
+}
+
 func (s *Server) EngineBackupRestore(ctx context.Context, req *spdkrpc.EngineBackupRestoreRequest) (ret *spdkrpc.EngineBackupRestoreResponse, err error) {
 	logrus.WithFields(logrus.Fields{
 		"backup":     req.BackupUrl,
@@ -668,45 +715,77 @@ func (s *Server) EngineBackupRestore(ctx context.Context, req *spdkrpc.EngineBac
 
 	s.RLock()
 	e, exist := s.engineMap[req.EngineName]
+	s.RUnlock()
 	if !exist {
-		s.RUnlock()
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for restoring backup", req.EngineName)
 	}
 
-	// Backup restore is only supported when the engine has no frontend (empty EngineFrontend).
-	// Reject requests if any frontend is configured.
-	for _, frontend := range s.engineFrontendMap {
-		frontend.RLock()
-		engineName := frontend.EngineName
-		frontendType := frontend.Frontend
-		frontendName := frontend.Name
-		frontend.RUnlock()
+	e.RLock()
+	volumeName := e.VolumeName
+	specSize := e.SpecSize
+	replicaCount := len(e.backends)
+	e.RUnlock()
 
-		if engineName == req.EngineName && frontendType != types.FrontendEmpty {
-			s.RUnlock()
-			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "cannot restore backup: engine %v has a non-empty frontend %v", req.EngineName, frontendName)
-		}
+	// EngineFrontendCreate checks restoreFrontendMap while holding the volume
+	// host lock and keeps holding it until its frontend is in
+	// engineFrontendMap. Registering under the same lock means the two
+	// requests always see each other: either the create finds our restore
+	// frontend, or we find its engine frontend.
+	unlockVolumeHost := s.acquireVolumeHostLock(volumeName)
+	tempEF, err := s.registerRestoreFrontend(e, volumeName, specSize)
+	unlockVolumeHost()
+	if err != nil {
+		return nil, err
 	}
 
+	s.RLock()
 	spdkClient := s.spdkClient
 	portAllocator := s.portAllocator
 	s.RUnlock()
 
-	// Create a temporary EngineFrontend for the duration of this restore.
-	// It is NOT registered in engineFrontendMap and is discarded on return.
-	//
-	// FrontendSPDKTCPBlockdev causes BackupRestore to create an NVMe-TCP initiator
-	// and expose a block device that EngineRestore.OpenVolumeDev can open.
-	//
-	// The channel must be buffered with capacity 2: EngineFrontend.BackupRestore sends
-	// once on the success path (via defer) and the teardown goroutine sends once on
-	// completion. There is no reader, so an unbuffered channel would block both senders
-	// permanently. The buffer absorbs both sends and the channel is GC'd with tempEF.
-	e.RLock()
-	volumeName := e.VolumeName
-	specSize := e.SpecSize
-	e.RUnlock()
+	logrus.WithFields(logrus.Fields{
+		"enginefrontend": tempEF.Name,
+		"engine":         tempEF.EngineName,
+		"volume":         tempEF.VolumeName,
+		"frontend":       tempEF.Frontend,
+		"replicas":       replicaCount,
+		"specSize":       specSize,
+	}).Info("Creating temporary engine frontend for backup restore request")
 
+	return tempEF.BackupRestore(e, spdkClient, req.BackupUrl, req.Credential, req.ConcurrentLimit, portAllocator)
+}
+
+// registerRestoreFrontend checks that engine e can start a backup restore and
+// registers a temporary engine frontend for it in restoreFrontendMap. The
+// check and the registration happen under one server write lock so that no
+// other restore of the same engine can register in between.
+//
+// The caller must hold the volume host lock of the engine's volume.
+func (s *Server) registerRestoreFrontend(e *Engine, volumeName string, specSize uint64) (*EngineFrontend, error) {
+	s.Lock()
+	defer s.Unlock()
+
+	if s.engineMap[e.Name] != e {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for restoring backup", e.Name)
+	}
+
+	if err := s.validateEngineReadyForRestoreLocked(e.Name); err != nil {
+		return nil, err
+	}
+
+	// The temporary frontend is NOT registered in engineFrontendMap; it is
+	// tracked only in restoreFrontendMap until its data-path teardown
+	// completes.
+	//
+	// FrontendSPDKTCPBlockdev causes BackupRestore to create an NVMe-TCP
+	// initiator and expose a block device that EngineRestore.OpenVolumeDev
+	// can open.
+	//
+	// The channel must be buffered with capacity 2: EngineFrontend.BackupRestore
+	// sends once on the success path (via defer) and the teardown goroutine
+	// sends once on completion. There is no reader, so an unbuffered channel
+	// would block both senders permanently. The buffer absorbs both sends and
+	// the channel is GC'd with tempEF.
 	throwawayUpdateCh := make(chan interface{}, 2)
 	tempEF := NewEngineFrontend(
 		e.Name+"-restore",
@@ -719,17 +798,19 @@ func (s *Server) EngineBackupRestore(ctx context.Context, req *spdkrpc.EngineBac
 		throwawayUpdateCh,
 		s.newServiceClient,
 	)
+	tempEF.unregisterRestoreFrontendFn = func() {
+		s.Lock()
+		// Only remove our own entry: if this ever fires late, after the
+		// engine was deleted and a newer restore registered its own
+		// frontend, it must not unregister the newer restore's frontend.
+		if s.restoreFrontendMap[e.Name] == tempEF {
+			delete(s.restoreFrontendMap, e.Name)
+		}
+		s.Unlock()
+	}
+	s.restoreFrontendMap[e.Name] = tempEF
 
-	logrus.WithFields(logrus.Fields{
-		"enginefrontend": tempEF.Name,
-		"engine":         tempEF.EngineName,
-		"volume":         tempEF.VolumeName,
-		"frontend":       tempEF.Frontend,
-		"replicas":       len(e.backends),
-		"specSize":       e.SpecSize,
-	}).Info("Creating temporary engine frontend for backup restore request")
-
-	return tempEF.BackupRestore(e, spdkClient, req.BackupUrl, req.Credential, req.ConcurrentLimit, portAllocator)
+	return tempEF, nil
 }
 
 func (s *Server) EngineRestoreStatus(ctx context.Context, req *spdkrpc.RestoreStatusRequest) (*spdkrpc.RestoreStatusResponse, error) {

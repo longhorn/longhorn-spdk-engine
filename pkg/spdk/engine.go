@@ -2704,6 +2704,12 @@ func (e *Engine) cleanupTemporaryNvmeTcpTargetForRestore(spdkClient *spdkclient.
 	e.cleanupTemporaryNvmeTcpTargetForRestoreLocked(spdkClient, superiorPortAllocator, reason)
 }
 
+// cleanupTemporaryNvmeTcpTargetForRestoreLocked removes the temporary
+// NVMe-TCP target and releases its port. A StopExposeBdev failure is not
+// returned. Both the next restore and the engine deletion call StopExposeBdev
+// on the volume NQN before anything else, so a subsystem left behind here is
+// removed then. Reusing the port is safe because SPDK shares a TCP listener
+// across subsystems and hosts connect by NQN.
 func (e *Engine) cleanupTemporaryNvmeTcpTargetForRestoreLocked(spdkClient *spdkclient.Client, superiorPortAllocator *commonbitmap.Bitmap, reason string) {
 	if e.Frontend != types.FrontendEmpty || e.NvmeTcpTarget == nil {
 		return
