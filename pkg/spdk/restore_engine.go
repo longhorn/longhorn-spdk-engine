@@ -29,6 +29,11 @@ type EngineRestore struct {
 	BackupURL string
 	State     btypes.ProgressState
 
+	// ErrorSourceReplicaName is the name of the replica responsible for the
+	// current restore error. Empty means the error, if any, is not attributed
+	// to a specific replica.
+	ErrorSourceReplicaName string
+
 	// The snapshot file that stores the restored data in the end.
 	SnapshotName string
 
@@ -70,6 +75,7 @@ func (r *EngineRestore) StartNewRestore(backupURL string, currentRestoringBackup
 
 	r.Progress = 0
 	r.Error = ""
+	r.ErrorSourceReplicaName = ""
 	r.BackupURL = backupURL
 	r.State = btypes.ProgressStateInProgress
 
@@ -92,8 +98,34 @@ func (r *EngineRestore) DeepCopy() *EngineRestore {
 		superiorPortAllocator:  r.superiorPortAllocator,
 		State:                  r.State,
 		Error:                  r.Error,
+		ErrorSourceReplicaName: r.ErrorSourceReplicaName,
 		Progress:               r.Progress,
 	}
+}
+
+// RecordErrorSource records the name of the replica responsible for the
+// current restore error. Only the first name recorded in a restore cycle is
+// kept, because follow-up errors are usually consequences of the original
+// failure. StartNewRestore clears it.
+func (r *EngineRestore) RecordErrorSource(replicaName string) {
+	// An empty name means the caller cannot attribute the error to a replica;
+	// the error stays unattributed (engine-level).
+	if replicaName == "" {
+		return
+	}
+
+	r.Lock()
+	defer r.Unlock()
+
+	if r.ErrorSourceReplicaName != "" {
+		if r.ErrorSourceReplicaName != replicaName {
+			r.log.Infof("Keeping existing restore error source %v; ignoring later error source %v", r.ErrorSourceReplicaName, replicaName)
+		}
+		return
+	}
+
+	r.log.Infof("Recording restore error source %v", replicaName)
+	r.ErrorSourceReplicaName = replicaName
 }
 
 func (r *EngineRestore) OpenVolumeDev(_ string) (*os.File, string, error) {
