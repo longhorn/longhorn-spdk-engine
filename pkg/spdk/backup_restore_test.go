@@ -15,6 +15,7 @@ import (
 	"github.com/longhorn/go-spdk-helper/pkg/initiator"
 
 	btypes "github.com/longhorn/backupstore/types"
+	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 
 	. "gopkg.in/check.v1"
@@ -903,4 +904,149 @@ func (s *TestSuite) TestWaitForRestoreCompleteReturnsOnFullProgress(c *C) {
 	e.restore.UpdateRestoreStatus("", 100, nil)
 
 	c.Assert(e.waitForRestoreComplete(nil), IsNil)
+}
+
+func (s *TestSuite) TestPreflightReplicaIOPathsForRestorePassesWithoutCandidates(c *C) {
+	fmt.Println("Testing preflightReplicaIOPathsForRestore passes when no replica bdev is eligible for inspection")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	// The preflight must skip ERR backends and backends without an attached
+	// bdev, so the nil SPDK client is never dialed.
+	erroredBackend := newFakeBackend("replica-err", "10.0.0.1:1234")
+	erroredBackend.SetMode(lhtypes.ModeERR)
+	unattachedBackend := newFakeBackend("replica-no-bdev", "10.0.0.2:1234")
+	unattachedBackend.SetMode(lhtypes.ModeRW)
+	e.backends = map[string]Backend{
+		"replica-err":     erroredBackend,
+		"replica-no-bdev": unattachedBackend,
+	}
+
+	replicaName, err := e.preflightReplicaIOPathsForRestore(nil)
+
+	c.Assert(err, IsNil)
+	c.Assert(replicaName, Equals, "")
+}
+
+// newTestPollGroupIOPaths builds a bdev_nvme_get_io_paths response with one
+// poll group that holds one path per bdev. The map value says whether the
+// bdev's path is usable.
+func newTestPollGroupIOPaths(usableByBdev map[string]bool) []spdktypes.BdevNvmePollGroupIoPaths {
+	pollGroup := spdktypes.BdevNvmePollGroupIoPaths{Thread: "nvmf_tgt_poll_group_0"}
+	for bdevName, usable := range usableByBdev {
+		state := spdktypes.BdevNvmeQpairStateEnabled
+		if !usable {
+			state = spdktypes.BdevNvmeQpairStateDisconnected
+		}
+		pollGroup.IoPaths = append(pollGroup.IoPaths, spdktypes.BdevNvmeIoPath{
+			BdevName:   bdevName,
+			Connected:  usable,
+			Accessible: true,
+			State:      state,
+		})
+	}
+	return []spdktypes.BdevNvmePollGroupIoPaths{pollGroup}
+}
+
+// newPreflightTestEngine returns an engine with two RW replicas whose bdevs
+// are "bdev-a" and "bdev-b", and shortens the preflight retry loop. The
+// returned function restores the package-level settings it changed.
+func newPreflightTestEngine() (*Engine, func()) {
+	originalListNvmeIOPathsFn := listNvmeIOPathsFn
+	originalInterval := restorePreflightRetryInterval
+	originalTimeout := restorePreflightTimeout
+	restorePreflightRetryInterval = time.Millisecond
+	restorePreflightTimeout = 5 * time.Millisecond
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{}
+	for _, name := range []string{"a", "b"} {
+		backend := newFakeBackend("replica-"+name, "10.0.0.1:1234")
+		backend.SetMode(lhtypes.ModeRW)
+		backend.SetBdevName("bdev-" + name)
+		e.backends["replica-"+name] = backend
+	}
+
+	return e, func() {
+		listNvmeIOPathsFn = originalListNvmeIOPathsFn
+		restorePreflightRetryInterval = originalInterval
+		restorePreflightTimeout = originalTimeout
+	}
+}
+
+func (s *TestSuite) TestPreflightReplicaIOPathsForRestorePassesWhenAllPathsUsable(c *C) {
+	fmt.Println("Testing preflightReplicaIOPathsForRestore passes when every replica has a usable I/O path")
+
+	e, restore := newPreflightTestEngine()
+	defer restore()
+	listNvmeIOPathsFn = func(*spdkclient.Client) ([]spdktypes.BdevNvmePollGroupIoPaths, error) {
+		return newTestPollGroupIOPaths(map[string]bool{"bdev-a": true, "bdev-b": true}), nil
+	}
+
+	replicaName, err := e.preflightReplicaIOPathsForRestore(nil)
+
+	c.Assert(err, IsNil)
+	c.Assert(replicaName, Equals, "")
+}
+
+func (s *TestSuite) TestPreflightReplicaIOPathsForRestoreFailsClosedOnInspectionError(c *C) {
+	fmt.Println("Testing preflightReplicaIOPathsForRestore fails without a replica attribution when no I/O path state can be read")
+
+	e, restore := newPreflightTestEngine()
+	defer restore()
+	listNvmeIOPathsFn = func(*spdkclient.Client) ([]spdktypes.BdevNvmePollGroupIoPaths, error) {
+		return nil, fmt.Errorf("rpc failed")
+	}
+
+	replicaName, err := e.preflightReplicaIOPathsForRestore(nil)
+
+	// The path state is unknown, so the restore must not start. No replica is
+	// known to be broken, so the error stays at the engine level.
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "cannot verify the replica NVMe I/O paths"), Equals, true)
+	c.Assert(strings.Contains(err.Error(), "failed to query NVMe I/O paths"), Equals, true)
+	c.Assert(replicaName, Equals, "")
+}
+
+func (s *TestSuite) TestPreflightReplicaIOPathsForRestoreAttributesBrokenReplica(c *C) {
+	fmt.Println("Testing preflightReplicaIOPathsForRestore attributes the failure to the replica without a usable I/O path")
+
+	e, restore := newPreflightTestEngine()
+	defer restore()
+	listNvmeIOPathsFn = func(*spdkclient.Client) ([]spdktypes.BdevNvmePollGroupIoPaths, error) {
+		return newTestPollGroupIOPaths(map[string]bool{"bdev-a": true, "bdev-b": false}), nil
+	}
+
+	replicaName, err := e.preflightReplicaIOPathsForRestore(nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "replica-b has no usable NVMe I/O path"), Equals, true)
+	c.Assert(replicaName, Equals, "replica-b")
+}
+
+func (s *TestSuite) TestNvmeIOPathsOfBdev(c *C) {
+	fmt.Println("Testing nvmeIOPathsOfBdev keeps only the paths of the given bdev in every poll group")
+
+	pathA := spdktypes.BdevNvmeIoPath{BdevName: "bdev-a", Connected: true}
+	pathB := spdktypes.BdevNvmeIoPath{BdevName: "bdev-b", Connected: false}
+	pollGroups := []spdktypes.BdevNvmePollGroupIoPaths{
+		{Thread: "nvmf_tgt_poll_group_0", IoPaths: []spdktypes.BdevNvmeIoPath{pathA, pathB}},
+		{Thread: "nvmf_tgt_poll_group_1", IoPaths: []spdktypes.BdevNvmeIoPath{pathB}},
+		{Thread: "app_thread"},
+	}
+
+	c.Assert(nvmeIOPathsOfBdev(pollGroups, "bdev-a"), DeepEquals, []spdktypes.BdevNvmePollGroupIoPaths{
+		{Thread: "nvmf_tgt_poll_group_0", IoPaths: []spdktypes.BdevNvmeIoPath{pathA}},
+		{Thread: "nvmf_tgt_poll_group_1"},
+		{Thread: "app_thread"},
+	})
+	c.Assert(nvmeIOPathsOfBdev(pollGroups, "bdev-b"), DeepEquals, []spdktypes.BdevNvmePollGroupIoPaths{
+		{Thread: "nvmf_tgt_poll_group_0", IoPaths: []spdktypes.BdevNvmeIoPath{pathB}},
+		{Thread: "nvmf_tgt_poll_group_1", IoPaths: []spdktypes.BdevNvmeIoPath{pathB}},
+		{Thread: "app_thread"},
+	})
+	// A bdev without paths yields poll groups without paths, which
+	// nvmeEveryPollGroupHasUsableIOPath reports as "no I/O paths".
+	usable, detail := nvmeEveryPollGroupHasUsableIOPath(nvmeIOPathsOfBdev(pollGroups, "bdev-c"))
+	c.Assert(usable, Equals, false)
+	c.Assert(detail, Equals, "no I/O paths")
 }

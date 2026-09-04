@@ -258,17 +258,21 @@ func waitForNVMfBdevDetached(spdkClient *spdkclient.Client, bdevName, controller
 	)
 }
 
-// nvmeNamespaceHasUsableIOPath reports whether the NVMe namespace bdev can
-// serve I/O from every reactor. The returned detail lists the paths that are
-// not usable and is meant for logging. It is meaningful only when usable is
-// false.
-func nvmeNamespaceHasUsableIOPath(spdkClient *spdkclient.Client, bdevName string) (usable bool, detail string, err error) {
-	pollGroups, err := spdkClient.BdevNvmeGetIoPaths(bdevName)
-	if err != nil {
-		return false, "", err
+// nvmeIOPathsOfBdev keeps only the paths of bdevName in each poll group. The
+// result has the shape of a bdev_nvme_get_io_paths response for that one
+// bdev, so it can be fed to nvmeEveryPollGroupHasUsableIOPath.
+func nvmeIOPathsOfBdev(pollGroups []spdktypes.BdevNvmePollGroupIoPaths, bdevName string) []spdktypes.BdevNvmePollGroupIoPaths {
+	filtered := make([]spdktypes.BdevNvmePollGroupIoPaths, 0, len(pollGroups))
+	for _, pollGroup := range pollGroups {
+		var ioPaths []spdktypes.BdevNvmeIoPath
+		for _, ioPath := range pollGroup.IoPaths {
+			if ioPath.BdevName == bdevName {
+				ioPaths = append(ioPaths, ioPath)
+			}
+		}
+		filtered = append(filtered, spdktypes.BdevNvmePollGroupIoPaths{Thread: pollGroup.Thread, IoPaths: ioPaths})
 	}
-	usable, detail = nvmeEveryPollGroupHasUsableIOPath(pollGroups)
-	return usable, detail, nil
+	return filtered
 }
 
 // nvmeEveryPollGroupHasUsableIOPath reports whether every poll group that
