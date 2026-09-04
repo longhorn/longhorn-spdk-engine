@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	cockroacherrors "github.com/cockroachdb/errors"
@@ -617,6 +619,136 @@ func (s *TestSuite) TestEngineFrontendCreateDoesNotRegisterFailedFrontend(c *C) 
 	srv.RUnlock()
 	c.Assert(exists, Equals, true)
 	c.Assert(ef, NotNil)
+}
+
+func (s *TestSuite) TestEngineFrontendCreateRejectedWhileRestoreFrontendRegistered(c *C) {
+	fmt.Println("Testing EngineFrontendCreate is rejected while a restore frontend of the same volume is still tearing down")
+
+	// Every successful Create sends one update on this channel and nothing
+	// drains it here, so the buffer must hold both successful creates below.
+	updateCh := make(chan interface{}, 2)
+
+	restoreEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
+
+	srv := &Server{
+		engineFrontendMap:  map[string]*EngineFrontend{},
+		restoreFrontendMap: map[string]*EngineFrontend{"engine-a": restoreEF},
+		volumeHostLocks:    map[string]*volumeHostLockEntry{},
+		updateChs: map[lhtypes.InstanceType]chan interface{}{
+			lhtypes.InstanceTypeEngineFrontend: updateCh,
+		},
+	}
+
+	sameVolumeReq := &spdkrpc.EngineFrontendCreateRequest{
+		Name:       "ef-test",
+		EngineName: "engine-a",
+		VolumeName: "vol-a",
+		Frontend:   lhtypes.FrontendSPDKTCPNvmf,
+		SpecSize:   1024,
+	}
+
+	_, err := srv.EngineFrontendCreate(context.Background(), sameVolumeReq)
+	c.Assert(err, NotNil)
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+	c.Assert(strings.Contains(err.Error(), "has not finished tearing down"), Equals, true)
+
+	srv.RLock()
+	_, exists := srv.engineFrontendMap["ef-test"]
+	srv.RUnlock()
+	c.Assert(exists, Equals, false)
+
+	// A different volume uses a different NQN, so it is not affected.
+	_, err = srv.EngineFrontendCreate(context.Background(), &spdkrpc.EngineFrontendCreateRequest{
+		Name:       "ef-other",
+		EngineName: "engine-b",
+		VolumeName: "vol-b",
+		Frontend:   lhtypes.FrontendSPDKTCPNvmf,
+		SpecSize:   1024,
+	})
+	c.Assert(err, IsNil)
+
+	// Once the restore frontend is unregistered, the same request succeeds.
+	srv.Lock()
+	delete(srv.restoreFrontendMap, "engine-a")
+	srv.Unlock()
+
+	_, err = srv.EngineFrontendCreate(context.Background(), sameVolumeReq)
+	c.Assert(err, IsNil)
+
+	srv.RLock()
+	_, exists = srv.engineFrontendMap["ef-test"]
+	srv.RUnlock()
+	c.Assert(exists, Equals, true)
+}
+
+func (s *TestSuite) TestEngineFrontendCreateRejectedWhenRestoreFrontendRegistersDuringCreate(c *C) {
+	fmt.Println("Testing EngineFrontendCreate is rejected when a restore frontend registers after the create passed its first lock section")
+
+	updateCh := make(chan interface{}, 1)
+	srv := &Server{
+		engineFrontendMap:  map[string]*EngineFrontend{},
+		restoreFrontendMap: map[string]*EngineFrontend{},
+		volumeHostLocks:    map[string]*volumeHostLockEntry{},
+		updateChs: map[lhtypes.InstanceType]chan interface{}{
+			lhtypes.InstanceTypeEngineFrontend: updateCh,
+		},
+	}
+
+	// Hold the volume host lock so the create blocks after its first
+	// write-lock section and before its restore frontend check.
+	unlockVolumeHost := srv.acquireVolumeHostLock("vol-a")
+
+	createErrCh := make(chan error, 1)
+	go func() {
+		_, err := srv.EngineFrontendCreate(context.Background(), &spdkrpc.EngineFrontendCreateRequest{
+			Name:       "ef-test",
+			EngineName: "engine-a",
+			VolumeName: "vol-a",
+			Frontend:   lhtypes.FrontendSPDKTCPNvmf,
+			SpecSize:   1024,
+		})
+		createErrCh <- err
+	}()
+
+	// Wait until the create is queued on the host lock: the test holds one
+	// reference and the waiting create holds the second.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		srv.volumeHostLocksMu.Lock()
+		entry := srv.volumeHostLocks["vol-a"]
+		srv.volumeHostLocksMu.Unlock()
+		if entry != nil && atomic.LoadInt32(&entry.refCount) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			c.Fatal("EngineFrontendCreate did not reach the volume host lock in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Register a restore frontend for the same volume, as EngineBackupRestore
+	// does while it holds the host lock.
+	restoreEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
+	srv.Lock()
+	srv.restoreFrontendMap["engine-a"] = restoreEF
+	srv.Unlock()
+
+	unlockVolumeHost()
+
+	var err error
+	select {
+	case err = <-createErrCh:
+	case <-time.After(5 * time.Second):
+		c.Fatal("EngineFrontendCreate did not return after the volume host lock was released")
+	}
+	c.Assert(err, NotNil)
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+	c.Assert(strings.Contains(err.Error(), "has not finished tearing down"), Equals, true)
+
+	srv.RLock()
+	_, exists := srv.engineFrontendMap["ef-test"]
+	srv.RUnlock()
+	c.Assert(exists, Equals, false)
 }
 
 func (s *TestSuite) TestToEngineFrontendCreateGRPCErrorMapsKnownErrors(c *C) {
