@@ -2369,6 +2369,18 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, endpoin
 		return resp, nil, err
 	}
 
+	// Fail fast on a persistently broken replica I/O path before the restore
+	// starts, instead of waiting for the idle timeout. This runs without the
+	// engine lock, so the re-checks do not block other engine RPCs.
+	if replicaName, preflightErr := e.preflightReplicaIOPathsForRestore(spdkClient); preflightErr != nil {
+		e.Lock()
+		if e.recordBackupRestoreStartErrorLocked(spdkClient, backupUrl, "", superiorPortAllocator, preflightErr) {
+			e.restore.RecordErrorSource(replicaName)
+		}
+		e.Unlock()
+		return resp, nil, preflightErr
+	}
+
 	e.Lock()
 	defer e.Unlock()
 
@@ -2445,9 +2457,13 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, endpoin
 	return resp, ch, nil
 }
 
-func (e *Engine) recordBackupRestoreStartErrorLocked(spdkClient *spdkclient.Client, backupURL, backupName string, superiorPortAllocator *commonbitmap.Bitmap, restoreErr error) {
+// recordBackupRestoreStartErrorLocked publishes a restore start error in
+// e.restore so the control plane can observe it. It reports whether the error
+// was recorded; it declines when another restore is already in progress,
+// because e.restore then belongs to that restore.
+func (e *Engine) recordBackupRestoreStartErrorLocked(spdkClient *spdkclient.Client, backupURL, backupName string, superiorPortAllocator *commonbitmap.Bitmap, restoreErr error) (recorded bool) {
 	if restoreErr == nil {
-		return
+		return false
 	}
 
 	// If another restore is already in progress, don't overwrite its state.
@@ -2456,7 +2472,7 @@ func (e *Engine) recordBackupRestoreStartErrorLocked(spdkClient *spdkclient.Clie
 	// recording (which re-acquired it).
 	if e.IsRestoring {
 		e.log.Warnf("Skipping restore error recording for %v: another restore is already in progress", backupURL)
-		return
+		return false
 	}
 
 	if backupName == "" {
@@ -2474,6 +2490,7 @@ func (e *Engine) recordBackupRestoreStartErrorLocked(spdkClient *spdkclient.Clie
 		e.restore.StartNewRestore(backupURL, backupName, true)
 	}
 	e.restore.UpdateRestoreStatus("", 0, restoreErr)
+	return true
 }
 
 func (e *Engine) precheckBackupRestore(backupURL string) error {
@@ -2785,12 +2802,17 @@ func (t *idleTimer) check(progress int, now time.Time) (idleFor time.Duration, e
 	return idleFor, idleFor > t.timeout
 }
 
-// findReplicaWithoutUsableIOPath returns the name of the first replica, in
-// name order, whose NVMe namespace bdev has no I/O path able to serve I/O.
-// It returns an empty name when every replica looks healthy or the inspection
-// is inconclusive, so the result can be passed to
-// EngineRestore.RecordErrorSource directly.
-func (e *Engine) findReplicaWithoutUsableIOPath(spdkClient *spdkclient.Client) string {
+// bdevHasUsableIOPathFn reports whether a bdev has a usable NVMe I/O path on
+// every reactor. It is a variable so tests can replace it.
+var bdevHasUsableIOPathFn = nvmeNamespaceHasUsableIOPath
+
+// findReplicaWithoutUsableIOPath returns the first replica, in name order,
+// that has no usable I/O path on some reactor, and a description of the
+// unusable paths. It returns empty strings when every replica is healthy.
+//
+// If the SPDK query fails for a replica, the check continues with the next
+// one. When no broken replica is found, the last query error is returned.
+func (e *Engine) findReplicaWithoutUsableIOPath(spdkClient *spdkclient.Client) (string, string, error) {
 	type replicaBdev struct {
 		replicaName string
 		bdevName    string
@@ -2806,22 +2828,64 @@ func (e *Engine) findReplicaWithoutUsableIOPath(spdkClient *spdkclient.Client) s
 	}
 	e.RUnlock()
 
-	// Inspect in name order so that, with multiple broken replicas, every run
-	// attributes the idle abort to the same replica.
+	// Name order makes the result stable when more than one replica is broken.
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].replicaName < candidates[j].replicaName })
 
+	var queryErr error
 	for _, candidate := range candidates {
-		usable, detail, err := nvmeNamespaceHasUsableIOPath(spdkClient, candidate.bdevName)
+		usable, detail, err := bdevHasUsableIOPathFn(spdkClient, candidate.bdevName)
 		if err != nil {
-			e.log.WithError(err).Warnf("Failed to inspect I/O paths of bdev %s for replica %s", candidate.bdevName, candidate.replicaName)
+			queryErr = errors.Wrapf(err, "failed to query I/O paths of bdev %s for replica %s", candidate.bdevName, candidate.replicaName)
 			continue
 		}
 		if !usable {
-			e.log.Warnf("Replica %s bdev %s has no usable I/O path: %s", candidate.replicaName, candidate.bdevName, detail)
-			return candidate.replicaName
+			e.log.Warnf("Replica %s bdev %s has a reactor without a usable I/O path: %s", candidate.replicaName, candidate.bdevName, detail)
+			return candidate.replicaName, detail, nil
 		}
 	}
-	return ""
+	return "", "", queryErr
+}
+
+// restorePreflightRetryInterval and restorePreflightTimeout control how often
+// and for how long the restore preflight re-checks a broken replica I/O path
+// before giving up. The timeout must exceed replicaCtrlrLossTimeoutSec,
+// because SPDK can still reconnect the controller within that time. They are
+// package-level variables so tests can adjust them.
+var (
+	restorePreflightRetryInterval = 5 * time.Second
+	restorePreflightTimeout       = 2 * replicaCtrlrLossTimeoutSec * time.Second
+)
+
+// preflightReplicaIOPathsForRestore verifies that every replica has a usable
+// NVMe I/O path before a restore starts. A broken path is re-checked until
+// the preflight timeout, so a transient reconnect does not fail the restore.
+// On failure it returns the name of the broken replica so the caller can
+// record it as the restore error source.
+//
+// If the SPDK query keeps failing until the timeout, the restore does not
+// start and the returned name is empty.
+//
+// It sleeps between re-checks. Do not call it with the engine lock held.
+func (e *Engine) preflightReplicaIOPathsForRestore(spdkClient *spdkclient.Client) (string, error) {
+	deadline := time.Now().Add(restorePreflightTimeout)
+	for {
+		replicaName, detail, queryErr := e.findReplicaWithoutUsableIOPath(spdkClient)
+		if replicaName == "" && queryErr == nil {
+			return "", nil
+		}
+
+		var reason error
+		if replicaName != "" {
+			reason = fmt.Errorf("replica %s has no usable NVMe I/O path (%s)", replicaName, detail)
+		} else {
+			reason = errors.Wrap(queryErr, "cannot verify the replica NVMe I/O paths")
+		}
+		if time.Now().After(deadline) {
+			return replicaName, errors.Wrapf(reason, "restore preflight failed after re-checking for %v", restorePreflightTimeout)
+		}
+		e.log.WithError(reason).Warnf("Restore preflight check did not pass, re-checking in %v; giving up in %v", restorePreflightRetryInterval, time.Until(deadline).Truncate(time.Second))
+		time.Sleep(restorePreflightRetryInterval)
+	}
 }
 
 // waitForRestoreComplete polls the restore status until it finishes.
@@ -2880,8 +2944,10 @@ func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 				e.log.WithError(err).Error("Aborting idle restore")
 				// Attribute the idle abort to a replica with a broken I/O path
 				// if one can be identified; an empty name keeps the error at
-				// the engine level.
-				e.restore.RecordErrorSource(e.findReplicaWithoutUsableIOPath(spdkClient))
+				// the engine level. An inspection failure is not fatal here,
+				// the restore is aborted either way.
+				unreachableReplica, _, _ := e.findReplicaWithoutUsableIOPath(spdkClient)
+				e.restore.RecordErrorSource(unreachableReplica)
 				return retrygo.Unrecoverable(err)
 			}
 
