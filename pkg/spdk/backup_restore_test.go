@@ -22,54 +22,49 @@ func newTestReplicaBackend(name, address string, mode lhtypes.Mode) *replicaBack
 }
 
 // Tests for ensureReplicaModeForInfoUpdate, which is called by
-// checkAndUpdateInfoFromReplicasNoLock — a function now invoked at the end of
+// checkAndUpdateInfoFromReplicasNoLock - a function now invoked at the end of
 // BackupRestoreFinish to refresh engine state from replica info.
-func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateRWQualifies(c *C) {
-	fmt.Println("Testing ensureReplicaModeForInfoUpdate: RW mode qualifies for info update")
+func (s *TestSuite) TestEnsureReplicaModeForInfoUpdate(c *C) {
+	fmt.Println("Testing ensureReplicaModeForInfoUpdate with various replica modes")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW)
+	type testCase struct {
+		mode         lhtypes.Mode
+		expectedOK   bool
+		expectedMode lhtypes.Mode
+	}
+	testCases := map[string]testCase{
+		"RW qualifies": {
+			mode:         lhtypes.ModeRW,
+			expectedOK:   true,
+			expectedMode: lhtypes.ModeRW,
+		},
+		"WO qualifies": {
+			mode:         lhtypes.ModeWO,
+			expectedOK:   true,
+			expectedMode: lhtypes.ModeWO,
+		},
+		"ERR does not qualify": {
+			mode:         lhtypes.ModeERR,
+			expectedOK:   false,
+			expectedMode: lhtypes.ModeERR,
+		},
+		"unexpected mode downgrades to ERR": {
+			mode:         lhtypes.Mode("UNKNOWN"),
+			expectedOK:   false,
+			expectedMode: lhtypes.ModeERR,
+		},
+	}
+	for testName, tc := range testCases {
+		c.Logf("testing ensureReplicaModeForInfoUpdate.%v", testName)
 
-	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", tc.mode)
 
-	c.Assert(ok, Equals, true)
-	c.Assert(rs.Mode(), Equals, lhtypes.Mode(lhtypes.ModeRW))
-}
+		ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
 
-func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateWOQualifies(c *C) {
-	fmt.Println("Testing ensureReplicaModeForInfoUpdate: WO mode qualifies for info update")
-
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeWO)
-
-	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
-
-	c.Assert(ok, Equals, true)
-	c.Assert(rs.Mode(), Equals, lhtypes.Mode(lhtypes.ModeWO))
-}
-
-func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateERRDoesNotQualify(c *C) {
-	fmt.Println("Testing ensureReplicaModeForInfoUpdate: ERR mode does not qualify")
-
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeERR)
-
-	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
-
-	c.Assert(ok, Equals, false)
-	c.Assert(rs.Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
-}
-
-func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateUnexpectedModeDowngradesToERR(c *C) {
-	fmt.Println("Testing ensureReplicaModeForInfoUpdate: unexpected mode is downgraded to ERR")
-
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.Mode("UNKNOWN"))
-
-	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
-
-	c.Assert(ok, Equals, false)
-	c.Assert(rs.Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
+		c.Assert(ok, Equals, tc.expectedOK)
+		c.Assert(rs.Mode(), Equals, tc.expectedMode)
+	}
 }
 
 // Tests for checkAndUpdateInfoFromReplicasNoLock with edge-case replica maps.
