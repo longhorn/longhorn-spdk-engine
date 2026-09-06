@@ -22,6 +22,7 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	. "gopkg.in/check.v1"
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
@@ -39,8 +40,6 @@ import (
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 
 	server "github.com/longhorn/longhorn-spdk-engine/pkg/spdk"
-
-	. "gopkg.in/check.v1"
 )
 
 var (
@@ -195,7 +194,7 @@ func LaunchTestSPDKTargetDaemon(c *C, execute func(envs []string, name string, a
 func launchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error), wg *sync.WaitGroup) *server.Server {
 
 	LaunchTestSPDKTargetDaemon(c, execute)
-	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort, nil)
+	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort, commonnet.IPFamilyUnspecified, nil)
 	c.Assert(err, IsNil)
 
 	spdkGRPCListener, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
@@ -883,7 +882,7 @@ func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
 
 	// Start a slow background write using direct IO + dsync.
 	// This ensures IO is still in progress when we call Suspend.
-	// We write ~10MB (2500 × 4K) which is slow enough with dsync to still be in-flight
+	// We write ~10MB (2500 x 4K) which is slow enough with dsync to still be in-flight
 	// after 1 second, but fast enough to complete shortly after resume.
 	ddDone := make(chan error, 1)
 	go func() {
@@ -901,7 +900,7 @@ func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
 	// Give dd time to start writing before suspending
 	time.Sleep(1 * time.Second)
 
-	// Suspend engine frontend — this freezes the dm-device, queuing all in-flight and new IO
+	// Suspend engine frontend - this freezes the dm-device, queuing all in-flight and new IO
 	err = spdkCli.EngineFrontendSuspend(engineFrontend.Name)
 	c.Assert(err, IsNil)
 
@@ -920,7 +919,7 @@ func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
 	)
 	c.Assert(err, NotNil)
 
-	// Resume engine frontend — this unblocks the queued IO
+	// Resume engine frontend - this unblocks the queued IO
 	err = spdkCli.EngineFrontendResume(engineFrontend.Name)
 	c.Assert(err, IsNil)
 
@@ -3383,8 +3382,8 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 	concurrentCount := 5
 	dataCountInMB := int64(100)
 
-	// Pre-create all resources concurrently — each goroutine creates the
-	// full stack (replicas → engine → engine frontend) for one volume.
+	// Pre-create all resources concurrently - each goroutine creates the
+	// full stack (replicas -> engine -> engine frontend) for one volume.
 	type volumeTestData struct {
 		volumeName         string
 		engineName         string
@@ -4695,11 +4694,11 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 		// This hook runs inside Phase 2 of replicaAddFinish, where the Engine lock
 		// should be released. Verify by trying to acquire the lock.
 		if internalEngine.TryLock() {
-			// Lock was free — 3-phase pattern is working correctly
+			// Lock was free - 3-phase pattern is working correctly
 			internalEngine.Unlock()
 			phase2LockReleased <- true
 		} else {
-			// Lock was held — 3-phase pattern is NOT working (old behavior)
+			// Lock was held - 3-phase pattern is NOT working (old behavior)
 			phase2LockReleased <- false
 		}
 	})
