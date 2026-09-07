@@ -2960,6 +2960,11 @@ func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 			if restoreState == btypes.ProgressStateCanceled {
 				return retrygo.Unrecoverable(fmt.Errorf("%v", btypes.ErrorMsgRestoreCancelled))
 			}
+			if restoreError != "" {
+				err := fmt.Errorf("%v", restoreError)
+				e.log.WithError(err).Error("Found backup restoration error")
+				return retrygo.Unrecoverable(err)
+			}
 			if restoreProgress == 100 {
 				if deviceSyncErr != nil {
 					e.log.WithError(deviceSyncErr).Error("Backup restore wrote all blocks but failed to persist them")
@@ -2974,12 +2979,6 @@ func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 				"state":        restoreState,
 				"snapshotName": e.RestoringSnapshotName,
 			}).Debug("Restore is still in progress")
-
-			if restoreError != "" {
-				err := fmt.Errorf("%v", restoreError)
-				e.log.WithError(err).Error("Found backup restoration error")
-				return retrygo.Unrecoverable(err)
-			}
 
 			if idleFor, expired := timer.check(restoreReports, time.Now()); expired {
 				err := fmt.Errorf("restore idle: no block completed for %v at %v%%, timeout %v", idleFor.Truncate(time.Second), restoreProgress, idleTimeout)
