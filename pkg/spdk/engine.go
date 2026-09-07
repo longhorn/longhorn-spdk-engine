@@ -2889,12 +2889,16 @@ func (e *Engine) preflightReplicaIOPathsForRestore(spdkClient *spdkclient.Client
 }
 
 // waitForRestoreComplete polls the restore status until it finishes.
-// It returns nil when progress reaches 100%. It returns an error when the
-// restore reports an error, is canceled, or stays idle. Idle means the
-// progress percentage is unchanged for longer than the idle timeout. On an
-// idle abort, the engine tries to find the replica whose broken I/O path
-// caused it and reports the error on that replica; if none is found, the
-// error stays at the engine level.
+// It returns nil when progress reaches 100% without an error. It returns an
+// error when the restore reports an error, is canceled, or stays idle. Idle
+// means the progress percentage is unchanged for longer than the idle
+// timeout. On an idle abort, the engine tries to find the replica whose
+// broken I/O path caused it and reports the error on that replica; if none
+// is found, the error stays at the engine level.
+//
+// The error is checked before the progress because backupstore reports a
+// failure to sync or close the volume device together with progress 100.
+// Such a restore has not finished, even though all blocks were written.
 func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 	idleTimeout := restoreIdleTimeout(e.SpecSize)
 
@@ -2922,6 +2926,11 @@ func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 			if restoreState == btypes.ProgressStateCanceled {
 				return retrygo.Unrecoverable(fmt.Errorf("%v", btypes.ErrorMsgRestoreCancelled))
 			}
+			if restoreError != "" {
+				err := fmt.Errorf("%v", restoreError)
+				e.log.WithError(err).Error("Found backup restoration error")
+				return retrygo.Unrecoverable(err)
+			}
 			if restoreProgress == 100 {
 				e.log.Infof("Backup restore is done: %v%%", restoreProgress)
 				return nil
@@ -2932,12 +2941,6 @@ func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 				"state":        restoreState,
 				"snapshotName": e.RestoringSnapshotName,
 			}).Debug("Restore is still in progress")
-
-			if restoreError != "" {
-				err := fmt.Errorf("%v", restoreError)
-				e.log.WithError(err).Error("Found backup restoration error")
-				return retrygo.Unrecoverable(err)
-			}
 
 			if idleFor, expired := timer.check(restoreProgress, time.Now()); expired {
 				err := fmt.Errorf("restore idle at %v%% for %v, timeout %v", restoreProgress, idleFor.Truncate(time.Second), idleTimeout)

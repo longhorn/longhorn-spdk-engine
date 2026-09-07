@@ -3,6 +3,7 @@ package spdk
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -804,6 +805,76 @@ func (s *TestSuite) TestWaitForRestoreCompleteReturnsOnFullProgress(c *C) {
 	e.restore.UpdateRestoreStatus("", 100, nil)
 
 	c.Assert(e.waitForRestoreComplete(nil), IsNil)
+}
+
+func (s *TestSuite) TestWaitForRestoreCompleteFailsOnErrorAtFullProgress(c *C) {
+	fmt.Println("Testing waitForRestoreComplete returns the error when progress reaches 100 with an error")
+
+	originalInterval := restorePeriodicRefreshInterval
+	defer func() {
+		restorePeriodicRefreshInterval = originalInterval
+	}()
+	restorePeriodicRefreshInterval = 5 * time.Millisecond
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	// backupstore reports a failed device sync or close together with
+	// progress 100 once all blocks were written.
+	e.restore.UpdateRestoreStatus("", 100, errors.New("failed to sync NVMe device"))
+
+	err := e.waitForRestoreComplete(nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "failed to sync NVMe device"), Equals, true)
+}
+
+func (s *TestSuite) TestEngineRestoreCloseVolumeDevReturnsSyncError(c *C) {
+	fmt.Println("Testing EngineRestore.CloseVolumeDev returns the sync error and still closes the device")
+
+	// A pipe cannot be synced, so Sync fails with EINVAL while Close succeeds.
+	readEnd, writeEnd, err := os.Pipe()
+	c.Assert(err, IsNil)
+	defer func() { _ = readEnd.Close() }()
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	r := NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+
+	err = r.CloseVolumeDev(writeEnd)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "failed to sync"), Equals, true)
+	// The device was closed despite the sync failure.
+	c.Assert(errors.Is(writeEnd.Close(), os.ErrClosed), Equals, true)
+}
+
+func (s *TestSuite) TestEngineRestoreCloseVolumeDevReturnsCloseError(c *C) {
+	fmt.Println("Testing EngineRestore.CloseVolumeDev reports both the sync and the close error")
+
+	f, err := os.CreateTemp(c.MkDir(), "voldev")
+	c.Assert(err, IsNil)
+	c.Assert(f.Close(), IsNil)
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	r := NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+
+	err = r.CloseVolumeDev(f)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "failed to sync"), Equals, true)
+	c.Assert(strings.Contains(err.Error(), "failed to close"), Equals, true)
+}
+
+func (s *TestSuite) TestEngineRestoreCloseVolumeDevSucceeds(c *C) {
+	fmt.Println("Testing EngineRestore.CloseVolumeDev returns nil when sync and close succeed")
+
+	f, err := os.CreateTemp(c.MkDir(), "voldev")
+	c.Assert(err, IsNil)
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	r := NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+
+	c.Assert(r.CloseVolumeDev(f), IsNil)
+	c.Assert(errors.Is(f.Close(), os.ErrClosed), Equals, true)
 }
 
 func (s *TestSuite) TestPreflightReplicaIOPathsForRestorePassesWithoutCandidates(c *C) {
