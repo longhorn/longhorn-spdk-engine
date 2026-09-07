@@ -203,7 +203,7 @@ github.com/rogpeppe/go-internal/fmtsort
 github.com/shirou/gopsutil/v3/common
 github.com/shirou/gopsutil/v3/disk
 github.com/shirou/gopsutil/v3/internal/common
-# github.com/sirupsen/logrus v1.10.0
+# github.com/sirupsen/logrus v1.10.1
 ## explicit; go 1.23
 github.com/sirupsen/logrus
 # github.com/slok/goresilience v0.2.0
@@ -212,7 +212,7 @@ github.com/slok/goresilience
 github.com/slok/goresilience/errors
 github.com/slok/goresilience/metrics
 github.com/slok/goresilience/timeout
-# github.com/stretchr/testify v1.12.0
+# github.com/stretchr/testify v1.12.1
 ## explicit; go 1.17
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/assert/yaml
@@ -231,7 +231,10 @@ go.uber.org/multierr
 # go.yaml.in/yaml/v2 v2.4.3
 ## explicit; go 1.15
 go.yaml.in/yaml/v2
-# golang.org/x/net v0.55.0
+# go.yaml.in/yaml/v3 v3.0.5
+## explicit; go 1.16
+go.yaml.in/yaml/v3
+# golang.org/x/net v0.56.0
 ## explicit; go 1.25.0
 golang.org/x/net/http/httpguts
 golang.org/x/net/http2
@@ -241,7 +244,7 @@ golang.org/x/net/internal/httpcommon
 golang.org/x/net/internal/httpsfv
 golang.org/x/net/internal/timeseries
 golang.org/x/net/trace
-# golang.org/x/sys v0.45.0
+# golang.org/x/sys v0.46.0
 ## explicit; go 1.25.0
 golang.org/x/sys/execabs
 golang.org/x/sys/unix
@@ -379,10 +382,7 @@ gopkg.in/check.v1
 # gopkg.in/inf.v0 v0.9.1
 ## explicit
 gopkg.in/inf.v0
-# gopkg.in/yaml.v3 v3.0.1
-## explicit
-gopkg.in/yaml.v3
-# k8s.io/apimachinery v0.36.3
+# k8s.io/apimachinery v0.36.4
 ## explicit; go 1.26.0
 k8s.io/apimachinery/pkg/api/errors
 k8s.io/apimachinery/pkg/api/operation
@@ -414,7 +414,7 @@ k8s.io/apimachinery/pkg/util/wait
 k8s.io/apimachinery/pkg/version
 k8s.io/apimachinery/pkg/watch
 k8s.io/apimachinery/third_party/forked/golang/reflect
-# k8s.io/client-go v0.36.3
+# k8s.io/client-go v0.36.4
 ## explicit; go 1.26.0
 k8s.io/client-go/util/retry
 # k8s.io/klog/v2 v2.140.0
