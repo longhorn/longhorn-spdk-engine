@@ -165,15 +165,24 @@ func (r *EngineRestore) OpenVolumeDev(_ string) (*os.File, string, error) {
 	return fh, endpoint, nil
 }
 
+// CloseVolumeDev flushes the restored data to the NVMe device and closes it.
+// A sync failure means the last writes may not have reached the device, so
+// it is returned as an error and backupstore records it in the restore
+// status; the restore is then reported as failed instead of complete. The
+// device is closed even when the sync fails.
 func (r *EngineRestore) CloseVolumeDev(volDev *os.File) error {
+	var syncErr error
 	if err := volDev.Sync(); err != nil {
+		syncErr = errors.Wrapf(err, "failed to sync NVMe device %v before close", volDev.Name())
 		r.log.WithError(err).Errorf("Failed to sync NVMe device %v before close", volDev.Name())
 	}
 
 	r.log.Infof("Closing NVMe device %v", volDev.Name())
-	closeErr := volDev.Close()
+	if err := volDev.Close(); err != nil {
+		return errors.Join(syncErr, errors.Wrapf(err, "failed to close NVMe device %v", volDev.Name()))
+	}
 
-	return closeErr
+	return syncErr
 }
 
 // UpdateRestoreStatus is called by backupstore workers to report progress
