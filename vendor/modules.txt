@@ -119,7 +119,7 @@ github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20260730002911-add09e6eb92c
+# github.com/longhorn/go-common-libs v0.0.0-20260907073218-e53e6775eb8a
 ## explicit; go 1.25.10
 github.com/longhorn/go-common-libs/backup
 github.com/longhorn/go-common-libs/bitmap
@@ -132,7 +132,7 @@ github.com/longhorn/go-common-libs/sync
 github.com/longhorn/go-common-libs/sys
 github.com/longhorn/go-common-libs/types
 github.com/longhorn/go-common-libs/utils
-# github.com/longhorn/go-spdk-helper v0.9.1-0.20260828012436-4ec507083142
+# github.com/longhorn/go-spdk-helper v0.9.1-0.20260907084552-730dfff4eda5
 ## explicit; go 1.25.10
 github.com/longhorn/go-spdk-helper/pkg/initiator
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
