@@ -285,8 +285,8 @@ func (s *TestSuite) TestTeardownRestoreFrontendDeletionStopsRetriesAndUnregister
 		c.Fatal("teardownRestoreFrontend did not return after the stop channel was closed")
 	}
 
-	// The frontend state is left as is, so a late disconnect cannot hit a
-	// recreated engine on the same NQN.
+	// The frontend state is left as is: the last attempt just failed and
+	// another one right away would only extend the delete.
 	c.Assert(ef.initiator, NotNil)
 	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateRunning))
 	c.Assert(ef.IsRestoring, Equals, true)
@@ -294,27 +294,78 @@ func (s *TestSuite) TestTeardownRestoreFrontendDeletionStopsRetriesAndUnregister
 	c.Assert(unregistered, Equals, true)
 }
 
-func (s *TestSuite) TestTeardownRestoreFrontendSkipsFirstAttemptOnDeletion(c *C) {
-	fmt.Println("Testing EngineFrontend.teardownRestoreFrontend makes no teardown attempt when the engine was deleted before it started")
+func (s *TestSuite) TestTeardownRestoreFrontendDeletionBeforeFirstAttemptMakesFinalAttempt(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreFrontend makes one final teardown attempt and unregisters when the engine was deleted before the first attempt")
+
+	originalStop := stopRestoreInitiator
+	defer func() { stopRestoreInitiator = originalStop }()
+	stopCalls := 0
+	stopRestoreInitiator = func(*initiator.Initiator) error {
+		stopCalls++
+		return nil
+	}
 
 	updateCh := make(chan interface{}, 1)
 	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.IsRestoring = true
-	// With no initiator handle, an attempt would succeed and clear the
-	// endpoint. The endpoint staying set proves no attempt was made.
 	ef.Endpoint = "/dev/longhorn/vol-a"
+	ef.initiator = &initiator.Initiator{}
 	unregistered := false
 	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
 	ef.signalStop()
 
 	ef.teardownRestoreFrontend()
 
-	c.Assert(ef.Endpoint, Equals, "/dev/longhorn/vol-a")
-	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateRunning))
-	c.Assert(ef.IsRestoring, Equals, true)
+	// Exactly one attempt: the host-side data path is torn down, but the
+	// loop does not retry for a deleted engine.
+	c.Assert(stopCalls, Equals, 1)
+	c.Assert(ef.initiator, IsNil)
+	c.Assert(ef.Endpoint, Equals, "")
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateStopped))
+	c.Assert(ef.IsRestoring, Equals, false)
+	// The engine is gone; nothing consumes an update for its frontend.
 	c.Assert(len(updateCh), Equals, 0)
 	c.Assert(unregistered, Equals, true)
+	c.Assert(isClosed(ef.restoreTeardownDone), Equals, true)
+}
+
+func (s *TestSuite) TestTeardownRestoreFrontendDeletionBeforeFirstAttemptFailedFinalAttemptUnregisters(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreFrontend unregisters without marking the frontend error when the final teardown attempt for a deleted engine fails")
+
+	originalStop := stopRestoreInitiator
+	defer func() { stopRestoreInitiator = originalStop }()
+	stopCalls := 0
+	stopRestoreInitiator = func(*initiator.Initiator) error {
+		stopCalls++
+		return fmt.Errorf("controller busy")
+	}
+
+	updateCh := make(chan interface{}, 1)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, updateCh, nil)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.IsRestoring = true
+	ef.Endpoint = "/dev/longhorn/vol-a"
+	ef.initiator = &initiator.Initiator{}
+	unregistered := false
+	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
+	ef.signalStop()
+
+	ef.teardownRestoreFrontend()
+
+	// One attempt and no retry. The failure is logged, not stored: the
+	// frontend belongs to a deleted engine and nothing reads its state.
+	c.Assert(stopCalls, Equals, 1)
+	c.Assert(ef.initiator, NotNil)
+	c.Assert(ef.Endpoint, Equals, "/dev/longhorn/vol-a")
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateRunning))
+	c.Assert(ef.ErrorMsg, Equals, "")
+	c.Assert(ef.IsRestoring, Equals, false)
+	c.Assert(len(updateCh), Equals, 0)
+	// The engine the entry protected is gone, so the entry is dropped even
+	// though the attempt failed.
+	c.Assert(unregistered, Equals, true)
+	c.Assert(isClosed(ef.restoreTeardownDone), Equals, true)
 }
 
 func (s *TestSuite) TestTeardownRestoreFrontendDeletionDuringFailedAttemptUnregisters(c *C) {

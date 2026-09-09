@@ -105,10 +105,9 @@ func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequ
 			restoreEF := s.restoreFrontendMap[req.Name]
 			if restoreEF != nil {
 				// Deleting the engine also deletes the SPDK target that the
-				// stale restore data path pointed at. Stop the teardown
-				// retries: a recreated engine reuses the volume NQN, and a
-				// late NQN-wide disconnect would break its connection (see
-				// teardownRestoreFrontend).
+				// stale restore data path pointed at. Signal the teardown so
+				// it finishes and drops the entry; see teardownRestoreFrontend
+				// for what it still attempts after the stop.
 				restoreEF.signalStop()
 			}
 			s.Unlock()
