@@ -3067,9 +3067,9 @@ var (
 )
 
 // restoreTeardownWaitTimeout bounds how long EngineDelete waits for the
-// deleted engine's restore data path teardown to end. After signalStop the
-// teardown makes no further attempts, so the wait covers at most the
-// operation running when the stop arrives.
+// deleted engine's restore data path teardown to end. The wait covers the
+// operation running when the stop arrives, plus at most one final
+// disconnect.
 //
 // 150s is the go-spdk-helper lock-file wait (120s) with 30s to spare, and
 // keeps the delete RPC under the manager's 3 minute deadline. It does not
@@ -3081,26 +3081,19 @@ var restoreTeardownWaitTimeout = 150 * time.Second
 
 // teardownRestoreFrontend tears down the temporary restore data path, retrying
 // failures until the teardown timeout, and then publishes the final frontend
-// state. The outcome decides what happens next:
+// state. The restore frontend entry is what gates new restores and frontend
+// creates for the volume, so the outcome decides when it is dropped:
 //
-//   - Success: the frontend is unregistered from the server's
-//     restoreFrontendMap, so the engine can accept a new restore.
+//   - Success: the entry is unregistered; the engine can restore again.
 //   - Retries exhausted: the frontend moves to the error state and stays
 //     registered, because a stale data path must not accept a new restore.
-//     The error message names the NQN whose kernel controller may still be
-//     connected. Nothing reads this frontend's status directly; the error
-//     reaches the caller through restoreTeardownBlockReason, in the
-//     rejection of the next restore or engine frontend create for the same
-//     volume. Deleting the engine unregisters the frontend. Nothing
-//     re-attempts the disconnect, because the restore frontend has no delete
-//     path of its own.
-//   - Engine deleted: no further attempt is made and the frontend state is
-//     left untouched. A recreated engine reuses the volume NQN, and a late
-//     NQN-wide disconnect would break its restore connection. The frontend
-//     is unregistered so the engine does not reject restores forever. An
-//     attempt already inside the disconnect runs to its end and the frontend
-//     is unregistered afterwards whatever the outcome. EngineDelete waits for
-//     that on restoreTeardownDone, bounded by restoreTeardownWaitTimeout.
+//     Only deleting the engine clears it.
+//   - Engine deleted: the entry is unregistered once the running attempt
+//     ends, so the engine does not reject restores forever. If the stop
+//     arrives before an attempt, one final attempt runs first to clear the
+//     kernel controller, dm device and endpoint from the host. The entry
+//     stays registered during it so the disconnect cannot reach a recreated
+//     engine's connection.
 //
 // It blocks between retries and must run in its own goroutine.
 func (ef *EngineFrontend) teardownRestoreFrontend() {
@@ -3110,11 +3103,22 @@ func (ef *EngineFrontend) teardownRestoreFrontend() {
 	var teardownErr error
 	for {
 		// Check before every attempt, including the first. The engine may
-		// already be deleted by the time this goroutine starts, and the
-		// target it would disconnect from is already gone.
+		// already be deleted by the time this goroutine starts. The target is
+		// gone with the engine, but the kernel controller, the dm device and
+		// the endpoint are still on the host, so make one final attempt and
+		// then unregister whatever the outcome. The frontend is still
+		// registered here, so the attempt cannot reach a recreated engine.
 		select {
 		case <-ef.stopCh:
-			ef.log.Info("Skipping the restore initiator teardown because the engine is being deleted")
+			ef.log.Info("Making one final restore initiator teardown attempt because the engine is being deleted")
+			finalErr := ef.teardownRestoreInitiator()
+			ef.Lock()
+			ef.IsRestoring = false
+			endpoint := ef.Endpoint
+			ef.Unlock()
+			if finalErr != nil {
+				ef.log.WithError(finalErr).Warnf("Failed the final restore initiator teardown attempt for the deleted engine; the kernel controller for %v, the dm device and the endpoint %v may remain on the host until the next initiator start for the volume", ef.VolumeNQN, endpoint)
+			}
 			ef.unregisterRestoreFrontend()
 			return
 		default:
@@ -3148,8 +3152,8 @@ func (ef *EngineFrontend) teardownRestoreFrontend() {
 		case <-time.After(restoreInitiatorTeardownRetryInterval):
 		case <-ef.stopCh:
 			// The engine is being deleted. Stop retrying without touching
-			// the frontend state, so a late disconnect cannot hit the
-			// recreated engine's connection on the same NQN. Unregister the
+			// the frontend state: the last attempt just failed, and another
+			// one right away would only extend the delete. Unregister the
 			// restore frontend; otherwise the entry outlives the frontend and
 			// blocks the engine's restores forever.
 			ef.log.Info("Stopping the restore initiator teardown retries because the engine is being deleted")
