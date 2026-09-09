@@ -2846,6 +2846,19 @@ func (e *Engine) findReplicaWithoutUsableIOPath(spdkClient *spdkclient.Client) (
 	return "", "", queryErr
 }
 
+// recordBrokenReplicaAsRestoreErrorSource records the first replica without a
+// usable I/O path as the restore error source, so the manager fails only that
+// replica. This is best effort: the broken path may not be the cause of the
+// failure. When no broken replica is found, or the I/O path query fails, the
+// error stays at the engine level.
+func (e *Engine) recordBrokenReplicaAsRestoreErrorSource(spdkClient *spdkclient.Client) {
+	replicaName, _, queryErr := e.findReplicaWithoutUsableIOPath(spdkClient)
+	if queryErr != nil {
+		e.log.WithError(queryErr).Warn("Cannot check replica I/O paths, so no replica is recorded as the restore error source")
+	}
+	e.restore.RecordErrorSource(replicaName)
+}
+
 // restorePreflightRetryInterval and restorePreflightTimeout control how often
 // and for how long the restore preflight re-checks a broken replica I/O path
 // before giving up. The timeout must exceed replicaCtrlrLossTimeoutSec,
@@ -2892,9 +2905,9 @@ func (e *Engine) preflightReplicaIOPathsForRestore(spdkClient *spdkclient.Client
 // It returns nil when progress reaches 100% without an error. It returns an
 // error when the restore reports an error, is canceled, or stays idle. Idle
 // means the progress percentage is unchanged for longer than the idle
-// timeout. On an idle abort, the engine tries to find the replica whose
-// broken I/O path caused it and reports the error on that replica; if none
-// is found, the error stays at the engine level.
+// timeout. On a restore error or an idle abort, the engine tries to find the
+// replica whose broken I/O path caused it and reports the error on that
+// replica; if none is found, the error stays at the engine level.
 //
 // The error is checked before the progress because backupstore reports a
 // failure to sync or close the volume device together with progress 100.
@@ -2929,6 +2942,9 @@ func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 			if restoreError != "" {
 				err := fmt.Errorf("%v", restoreError)
 				e.log.WithError(err).Error("Found backup restoration error")
+				// A replica I/O path that breaks mid-restore surfaces as a
+				// write error from backupstore, not as an idle restore.
+				e.recordBrokenReplicaAsRestoreErrorSource(spdkClient)
 				return retrygo.Unrecoverable(err)
 			}
 			if restoreProgress == 100 {
@@ -2945,12 +2961,7 @@ func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 			if idleFor, expired := timer.check(restoreProgress, time.Now()); expired {
 				err := fmt.Errorf("restore idle at %v%% for %v, timeout %v", restoreProgress, idleFor.Truncate(time.Second), idleTimeout)
 				e.log.WithError(err).Error("Aborting idle restore")
-				// Attribute the idle abort to a replica with a broken I/O path
-				// if one can be identified; an empty name keeps the error at
-				// the engine level. An inspection failure is not fatal here,
-				// the restore is aborted either way.
-				unreachableReplica, _, _ := e.findReplicaWithoutUsableIOPath(spdkClient)
-				e.restore.RecordErrorSource(unreachableReplica)
+				e.recordBrokenReplicaAsRestoreErrorSource(spdkClient)
 				return retrygo.Unrecoverable(err)
 			}
 
@@ -2997,7 +3008,15 @@ func (e *Engine) RestoreStatus() (*spdkrpc.RestoreStatusResponse, error) {
 	if _, sourceIsMember := e.backends[errorSourceReplicaName]; !sourceIsMember {
 		errorSourceReplicaName = ""
 	}
-	if restoreError != "" && errorSourceReplicaName == "" {
+	// An error without a source replica is not final while the restore is
+	// still running: a backupstore worker publishes its error first, and the
+	// restore watcher needs up to one poll interval to inspect the replica
+	// I/O paths and record the source. Reporting the error in that window
+	// would make the control plane treat a replica failure as an engine
+	// failure. Hold the error back until the restore has ended; the next
+	// status poll then reports it, attributed or not.
+	engineErrorIsFinal := !e.IsRestoring
+	if restoreError != "" && errorSourceReplicaName == "" && engineErrorIsFinal {
 		resp.EngineError = restoreError
 	}
 
