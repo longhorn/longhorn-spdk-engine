@@ -2541,8 +2541,15 @@ func (ef *EngineFrontend) validateAndUpdateNvmeTcpFrontend() (err error) {
 		if err := ef.loadInitiatorNVMeDeviceInfo(ef.initiator.NVMeTCPInfo.TransportAddress, ef.initiator.NVMeTCPInfo.TransportServiceID, ef.initiator.NVMeTCPInfo.SubsystemNQN); err != nil {
 			if strings.Contains(err.Error(), "connecting state") ||
 				strings.Contains(err.Error(), "resetting state") ||
-				strings.Contains(err.Error(), "live state") {
+				strings.Contains(err.Error(), "live state") ||
+				strings.Contains(err.Error(), "deleting state") {
 				ef.log.WithError(err).Warn("Ignored to validate and update engine frontend, because the device is still in a transient state")
+				return nil
+			}
+			// Losing the race for the per-volume initiator lock says nothing about the
+			// health of the frontend, so leave the state to the next validation round.
+			if strings.Contains(err.Error(), helpertypes.ErrorMessageFailedToGetInitiatorLock) {
+				ef.log.WithError(err).Warn("Ignored to validate and update engine frontend, because another operation holds the initiator lock")
 				return nil
 			}
 			return err
