@@ -3,6 +3,7 @@ package spdk
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
@@ -101,19 +102,20 @@ func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequ
 		if err == nil {
 			s.Lock()
 			delete(s.engineMap, req.Name)
-			// Deleting the engine also deletes the SPDK target that the stale
-			// restore data path pointed at, so there is nothing left to protect.
-			// Two things follow:
-			//   - Stop the teardown retries, so a late disconnect cannot hit a
-			//     recreated engine on the same NQN (see teardownRestoreFrontend).
-			//   - Drop the entry so a recreated engine can restore again after
-			//     a teardown gave up. The temporary restore frontend has no
-			//     delete path of its own.
-			if restoreEF := s.restoreFrontendMap[req.Name]; restoreEF != nil {
+			restoreEF := s.restoreFrontendMap[req.Name]
+			if restoreEF != nil {
+				// Deleting the engine also deletes the SPDK target that the
+				// stale restore data path pointed at. Stop the teardown
+				// retries: a recreated engine reuses the volume NQN, and a
+				// late NQN-wide disconnect would break its connection (see
+				// teardownRestoreFrontend).
 				restoreEF.signalStop()
 			}
-			delete(s.restoreFrontendMap, req.Name)
 			s.Unlock()
+
+			if restoreEF != nil {
+				s.waitForRestoreTeardown(req.Name, restoreEF)
+			}
 		}
 	}()
 
@@ -124,6 +126,50 @@ func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequ
 	}
 
 	return &emptypb.Empty{}, nil
+}
+
+// waitForRestoreTeardown waits, bounded by restoreTeardownWaitTimeout, for
+// the restore data path teardown of a deleted engine to end, then drops the
+// restore frontend entry so a recreated engine can restore again.
+//
+// The wait is needed because signalStop cannot interrupt an attempt that is
+// already inside the disconnect. That disconnect targets the volume NQN and
+// the dm device named after the volume, both of which a recreated engine's
+// restore or frontend would reuse. The restore frontend entry must therefore
+// stay registered, blocking new restores and frontend creates for the volume,
+// until the attempt has ended.
+//
+// If the wait expires, the entry is left registered on purpose. The teardown
+// goroutine unregisters it when its running operation ends (see the engine
+// deleted bullet of teardownRestoreFrontend's doc), so the entry blocks new
+// restores and frontend creates for exactly as long as the stale disconnect
+// can still reach them. Removing it here on expiry would reopen the window in
+// the one case this wait exists for, a disconnect stuck in the kernel.
+//
+// The caller must not hold the server lock: unregisterRestoreFrontend takes
+// it before restoreTeardownDone is closed.
+func (s *Server) waitForRestoreTeardown(engineName string, restoreEF *EngineFrontend) {
+	select {
+	case <-restoreEF.restoreTeardownDone:
+	case <-time.After(restoreTeardownWaitTimeout):
+		logrus.WithFields(logrus.Fields{
+			"engine":         engineName,
+			"volume":         restoreEF.VolumeName,
+			"nqn":            restoreEF.VolumeNQN,
+			"enginefrontend": restoreEF.Name,
+		}).Warnf("Restore data path teardown is still in progress %v after the engine deletion; the volume keeps rejecting restores and frontend creates until it ends", restoreTeardownWaitTimeout)
+		return
+	}
+
+	s.Lock()
+	// The teardown goroutine has already unregistered itself on every
+	// engine-deleted exit. The entry is still here only if the teardown gave
+	// up before the deletion; drop it so the recreated engine can restore.
+	// Identity check: a newer restore may have registered in between.
+	if s.restoreFrontendMap[engineName] == restoreEF {
+		delete(s.restoreFrontendMap, engineName)
+	}
+	s.Unlock()
 }
 
 // EngineGet returns a specific engine
