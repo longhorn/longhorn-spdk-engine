@@ -203,6 +203,7 @@ func (s *TestSuite) TestTeardownRestoreFrontendSuccessStopsAndUnregisters(c *C) 
 	c.Assert(ef.IsRestoring, Equals, false)
 	// The data path is gone, so the engine can accept a new restore.
 	c.Assert(unregistered, Equals, true)
+	c.Assert(isClosed(ef.restoreTeardownDone), Equals, true)
 }
 
 func (s *TestSuite) TestTeardownRestoreFrontendExhaustionMarksErrorAndStaysRegistered(c *C) {
@@ -239,6 +240,9 @@ func (s *TestSuite) TestTeardownRestoreFrontendExhaustionMarksErrorAndStaysRegis
 	// The data path is still up, so the engine must keep rejecting new
 	// restores.
 	c.Assert(unregistered, Equals, false)
+	// The goroutine has exited, so an engine deletion has nothing to wait
+	// for and drops the entry itself.
+	c.Assert(isClosed(ef.restoreTeardownDone), Equals, true)
 }
 
 func (s *TestSuite) TestTeardownRestoreFrontendDeletionStopsRetriesAndUnregisters(c *C) {
@@ -311,6 +315,121 @@ func (s *TestSuite) TestTeardownRestoreFrontendSkipsFirstAttemptOnDeletion(c *C)
 	c.Assert(ef.IsRestoring, Equals, true)
 	c.Assert(len(updateCh), Equals, 0)
 	c.Assert(unregistered, Equals, true)
+}
+
+func (s *TestSuite) TestTeardownRestoreFrontendDeletionDuringFailedAttemptUnregisters(c *C) {
+	fmt.Println("Testing EngineFrontend.teardownRestoreFrontend unregisters the frontend without marking it error when the engine is deleted while an attempt is still running and that attempt fails")
+
+	originalStop := stopRestoreInitiator
+	originalInterval := restoreInitiatorTeardownRetryInterval
+	originalTimeout := restoreInitiatorTeardownTimeout
+	defer func() {
+		stopRestoreInitiator = originalStop
+		restoreInitiatorTeardownRetryInterval = originalInterval
+		restoreInitiatorTeardownTimeout = originalTimeout
+	}()
+	// A deadline already in the past when the attempt returns: without the
+	// stop check after the attempt, the loop would mark the frontend error.
+	restoreInitiatorTeardownRetryInterval = time.Millisecond
+	restoreInitiatorTeardownTimeout = 0
+
+	disconnectEntered := make(chan struct{})
+	releaseDisconnect := make(chan struct{})
+	stopRestoreInitiator = func(*initiator.Initiator) error {
+		close(disconnectEntered)
+		<-releaseDisconnect
+		return fmt.Errorf("controller busy")
+	}
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.IsRestoring = true
+	ef.initiator = &initiator.Initiator{}
+	unregistered := false
+	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
+
+	done := make(chan struct{})
+	go func() {
+		ef.teardownRestoreFrontend()
+		close(done)
+	}()
+	select {
+	case <-disconnectEntered:
+	case <-time.After(5 * time.Second):
+		c.Fatal("the disconnect was never entered")
+	}
+
+	// The engine is deleted while the disconnect is blocked. Nothing can
+	// interrupt the attempt; the goroutine must still be running.
+	ef.signalStop()
+	c.Assert(isClosed(ef.restoreTeardownDone), Equals, false)
+
+	close(releaseDisconnect)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		c.Fatal("teardownRestoreFrontend did not return after the disconnect was released")
+	}
+
+	// The engine the entry protected is gone, so the entry is dropped even
+	// though the attempt failed, and the frontend is not marked error.
+	c.Assert(unregistered, Equals, true)
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateRunning))
+	c.Assert(ef.ErrorMsg, Equals, "")
+	c.Assert(ef.initiator, NotNil)
+	c.Assert(isClosed(ef.restoreTeardownDone), Equals, true)
+}
+
+func (s *TestSuite) TestEngineFrontendBackupRestoreAbortsWhenEngineIsDeleted(c *C) {
+	fmt.Println("Testing EngineFrontend.BackupRestore aborts the setup when the engine is being deleted")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	ef := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
+	unregistered := false
+	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
+
+	// The engine was deleted right after the restore frontend was registered.
+	ef.signalStop()
+
+	// The nil SPDK client proves no setup stage ran: creating the target or
+	// the initiator with it would panic.
+	_, err := ef.BackupRestore(e, nil, "backup://target?backup=backup-1&volume=vol-a", nil, 0, nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "is being deleted"), Equals, true)
+	c.Assert(ef.IsRestoring, Equals, false)
+	// Nothing was created, so the engine can accept a new restore and an
+	// engine deletion has nothing to wait for.
+	c.Assert(unregistered, Equals, true)
+	c.Assert(isClosed(ef.restoreTeardownDone), Equals, true)
+}
+
+func (s *TestSuite) TestEngineFrontendBackupRestoreFailureBeforeInitiatorMarksTeardownDone(c *C) {
+	fmt.Println("Testing EngineFrontend.BackupRestore unregisters the frontend and marks the teardown done when it fails before an initiator is attached")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	// An existing endpoint makes BackupRestore fail before any host state is
+	// touched, so no teardown goroutine is ever started.
+	ef.Endpoint = "/dev/longhorn/vol-a"
+	unregistered := false
+	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
+
+	_, err := ef.BackupRestore(nil, nil, "backup://target?backup=backup-1&volume=vol-a", nil, 0, nil)
+	c.Assert(err, NotNil)
+
+	// There is nothing to tear down, so an engine deletion must not wait.
+	c.Assert(unregistered, Equals, true)
+	c.Assert(isClosed(ef.restoreTeardownDone), Equals, true)
+}
+
+// isClosed reports whether ch is closed without blocking.
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {

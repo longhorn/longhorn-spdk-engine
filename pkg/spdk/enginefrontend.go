@@ -89,6 +89,15 @@ type EngineFrontend struct {
 	unregisterRestoreFrontendFn   func()
 	unregisterRestoreFrontendOnce sync.Once
 
+	// restoreTeardownDone is closed once the restore data path teardown of
+	// this restore frontend can no longer touch the host: either the teardown
+	// goroutine has returned, or BackupRestore failed before an initiator was
+	// attached and there is nothing to tear down. EngineDelete waits on it so
+	// a recreated engine does not race a disconnect that is still running.
+	// Close it only through markRestoreTeardownDone.
+	restoreTeardownDone     chan struct{}
+	restoreTeardownDoneOnce sync.Once
+
 	// Test hook for switchover target engine name resolution.
 	resolveEngineNameByTargetAddressFn func(targetAddress string) (string, error)
 	// Test hook for native multipath path connect during blockdev switchover.
@@ -253,9 +262,10 @@ func NewEngineFrontend(engineFrontendName, engineName, volumeName, frontend stri
 		State:    types.InstanceStatePending,
 		ErrorMsg: "",
 
-		UpdateCh: engineFrontendUpdateCh,
-		stopCh:   make(chan struct{}),
-		log:      safelog.NewSafeLogger(log),
+		UpdateCh:            engineFrontendUpdateCh,
+		stopCh:              make(chan struct{}),
+		restoreTeardownDone: make(chan struct{}),
+		log:                 safelog.NewSafeLogger(log),
 
 		newServiceClient: newServiceClient,
 	}
@@ -714,6 +724,29 @@ func (ef *EngineFrontend) Create(spdkClient *spdkclient.Client, targetAddress st
 // to call more than once.
 func (ef *EngineFrontend) signalStop() {
 	ef.stopOnce.Do(func() { close(ef.stopCh) })
+}
+
+// markRestoreTeardownDone closes restoreTeardownDone. It is safe to call
+// more than once.
+func (ef *EngineFrontend) markRestoreTeardownDone() {
+	ef.restoreTeardownDoneOnce.Do(func() { close(ef.restoreTeardownDone) })
+}
+
+// restoreSetupAborted reports whether the engine was deleted while the
+// restore setup was running. EngineDelete removes the engine and closes
+// stopCh before it waits for the restore teardown; a setup stage that runs
+// after that would create host resources belonging to no engine.
+// BackupRestore checks before every stage that creates host state and before
+// starting the restore. A deletion that lands between two checks is caught
+// by the next one, and the staged cleanup removes what the earlier stages
+// created.
+func (ef *EngineFrontend) restoreSetupAborted() bool {
+	select {
+	case <-ef.stopCh:
+		return true
+	default:
+		return false
+	}
 }
 
 func (ef *EngineFrontend) Delete(spdkClient *spdkclient.Client) (err error) {
@@ -2837,6 +2870,7 @@ func (ef *EngineFrontend) BackupRestore(engine *Engine, spdkClient *spdkclient.C
 				// the start of the next StartNvmeTCPInitiator. The engine can
 				// accept a new restore right away.
 				ef.unregisterRestoreFrontend()
+				ef.markRestoreTeardownDone()
 			}
 		} else {
 			ef.UpdateCh <- nil
@@ -2861,11 +2895,19 @@ func (ef *EngineFrontend) BackupRestore(engine *Engine, spdkClient *spdkclient.C
 	ef.Unlock()
 	frontendMarkedRestoring = true
 
+	if ef.restoreSetupAborted() {
+		return nil, fmt.Errorf("engine %s is being deleted; aborting the backup restore setup", engine.Name)
+	}
+
 	// Ensure the engine has a NVMe-TCP target to connect to (creates one if absent).
 	if err := engine.ensureNvmeTcpTargetForRestore(spdkClient, superiorPortAllocator); err != nil {
 		return nil, errors.Wrapf(err, "engine %s: failed to ensure NVMe-TCP target for backup restore", engine.Name)
 	}
 	targetPrepared = true
+
+	if ef.restoreSetupAborted() {
+		return nil, fmt.Errorf("engine %s is being deleted; aborting the backup restore setup", engine.Name)
+	}
 
 	engine.RLock()
 	targetAddress := net.JoinHostPort(engine.NvmeTcpTarget.IP, strconv.Itoa(int(engine.NvmeTcpTarget.Port)))
@@ -2883,6 +2925,10 @@ func (ef *EngineFrontend) BackupRestore(engine *Engine, spdkClient *spdkclient.C
 
 	if endpoint == "" {
 		return nil, fmt.Errorf("engine frontend %s has no endpoint after frontend setup for backup restore", ef.Name)
+	}
+
+	if ef.restoreSetupAborted() {
+		return nil, fmt.Errorf("engine %s is being deleted; aborting the backup restore setup", engine.Name)
 	}
 
 	ef.log.Infof("Using endpoint %s for backup restore", endpoint)
@@ -2919,6 +2965,22 @@ var (
 	restoreInitiatorTeardownTimeout       = 2 * time.Minute
 )
 
+// restoreTeardownWaitTimeout bounds how long EngineDelete waits for the
+// deleted engine's restore data path teardown to end. After signalStop the
+// teardown makes no further attempts, so the wait covers at most one
+// operation that is still running: the connect in BackupRestore, the
+// disconnect in teardownRestoreInitiator, or the restore unwinding after
+// its cancel.
+//
+// 150s covers the go-spdk-helper lock-file wait (120s) with slack and keeps
+// the delete RPC under the manager's 3 minute deadline when the engine
+// deletion itself was quick. It cannot cover the true worst case, the lock
+// wait followed by the 180s nvme command timeout, which is why expiry does
+// not remove the restore frontend entry. See Server.waitForRestoreTeardown.
+//
+// It is a package-level variable so tests can adjust it.
+var restoreTeardownWaitTimeout = 150 * time.Second
+
 // teardownRestoreFrontend tears down the temporary restore data path, retrying
 // failures until the teardown timeout, and then publishes the final frontend
 // state. The outcome decides what happens next:
@@ -2937,10 +2999,15 @@ var (
 //   - Engine deleted: no further attempt is made and the frontend state is
 //     left untouched. A recreated engine reuses the volume NQN, and a late
 //     NQN-wide disconnect would break its restore connection. The frontend
-//     is unregistered so the engine does not reject restores forever.
+//     is unregistered so the engine does not reject restores forever. An
+//     attempt already inside the disconnect runs to its end and the frontend
+//     is unregistered afterwards whatever the outcome. EngineDelete waits for
+//     that on restoreTeardownDone, bounded by restoreTeardownWaitTimeout.
 //
 // It blocks between retries and must run in its own goroutine.
 func (ef *EngineFrontend) teardownRestoreFrontend() {
+	defer ef.markRestoreTeardownDone()
+
 	deadline := time.Now().Add(restoreInitiatorTeardownTimeout)
 	var teardownErr error
 	for {
@@ -2956,7 +3023,26 @@ func (ef *EngineFrontend) teardownRestoreFrontend() {
 		}
 
 		teardownErr = ef.teardownRestoreInitiator()
-		if teardownErr == nil || time.Now().After(deadline) {
+		if teardownErr == nil {
+			break
+		}
+
+		// The engine may have been deleted while the attempt was running.
+		// The attempt has ended, so it can no longer reach a recreated
+		// engine, and the deleted engine no longer needs the restore
+		// frontend entry to block new restores: unregister even though the
+		// attempt failed, so the entry does not outlive the engine. This is
+		// the only exit that runs after a failed attempt without marking the
+		// frontend error.
+		select {
+		case <-ef.stopCh:
+			ef.log.WithError(teardownErr).Info("Stopping the restore initiator teardown after a failed attempt because the engine is being deleted")
+			ef.unregisterRestoreFrontend()
+			return
+		default:
+		}
+
+		if time.Now().After(deadline) {
 			break
 		}
 		ef.log.WithError(teardownErr).Warnf("Failed to tear down the restore initiator, retrying in %v; giving up in %v", restoreInitiatorTeardownRetryInterval, time.Until(deadline).Truncate(time.Second))
