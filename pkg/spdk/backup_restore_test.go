@@ -367,6 +367,9 @@ func (s *TestSuite) TestRestoreStatusReportsErrorOnlyOnErrorSourceReplica(c *C) 
 		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
 	}
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	// An attributed error is reported right away, even while the restore is
+	// still running.
+	e.IsRestoring = true
 	e.restore.UpdateRestoreStatus("", 40, fmt.Errorf("qpair wedged"))
 	e.restore.RecordErrorSource("replica-1")
 
@@ -375,6 +378,35 @@ func (s *TestSuite) TestRestoreStatusReportsErrorOnlyOnErrorSourceReplica(c *C) 
 	c.Assert(status.EngineError, Equals, "")
 	c.Assert(status.Status["10.0.0.1:1234"].Error, Equals, "qpair wedged")
 	c.Assert(status.Status["10.0.0.2:1234"].Error, Equals, "")
+}
+
+func (s *TestSuite) TestRestoreStatusHoldsBackUnattributedErrorWhileRestoring(c *C) {
+	fmt.Println("Testing RestoreStatus holds back an error without a source replica until the restore has ended")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+	}
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	e.IsRestoring = true
+
+	// A backupstore worker publishes its error before the restore watcher
+	// has recorded which replica caused it.
+	e.restore.UpdateRestoreStatus("", 40, fmt.Errorf("write failed"))
+
+	status, err := e.RestoreStatus()
+	c.Assert(err, IsNil)
+	c.Assert(status.EngineError, Equals, "")
+	c.Assert(status.Status["10.0.0.1:1234"].Error, Equals, "")
+
+	// The restore has ended without a source replica; the error is final and
+	// is reported at the engine level.
+	e.IsRestoring = false
+
+	status, err = e.RestoreStatus()
+	c.Assert(err, IsNil)
+	c.Assert(status.EngineError, Equals, "write failed")
+	c.Assert(status.Status["10.0.0.1:1234"].Error, Equals, "")
 }
 
 func (s *TestSuite) TestRecordErrorSourceKeepsFirstRecordedName(c *C) {
@@ -826,6 +858,42 @@ func (s *TestSuite) TestWaitForRestoreCompleteFailsOnErrorAtFullProgress(c *C) {
 
 	c.Assert(err, NotNil)
 	c.Assert(strings.Contains(err.Error(), "failed to sync NVMe device"), Equals, true)
+}
+
+func (s *TestSuite) TestWaitForRestoreCompleteAttributesErrorToBrokenReplica(c *C) {
+	fmt.Println("Testing waitForRestoreComplete attributes a restore error to the replica without a usable I/O path")
+
+	originalInterval := restorePeriodicRefreshInterval
+	originalBdevHasUsableIOPathFn := bdevHasUsableIOPathFn
+	defer func() {
+		restorePeriodicRefreshInterval = originalInterval
+		bdevHasUsableIOPathFn = originalBdevHasUsableIOPathFn
+	}()
+	restorePeriodicRefreshInterval = 5 * time.Millisecond
+	bdevHasUsableIOPathFn = func(_ *spdkclient.Client, bdevName string) (bool, string, error) {
+		if bdevName == "bdev-b" {
+			return false, "poll group 1 has no usable path", nil
+		}
+		return true, "", nil
+	}
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{}
+	for _, name := range []string{"a", "b"} {
+		backend := newFakeBackend("replica-"+name, "10.0.0.1:1234")
+		backend.SetMode(lhtypes.ModeRW)
+		backend.SetBdevName("bdev-" + name)
+		e.backends["replica-"+name] = backend
+	}
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	// A broken replica path surfaces as a write error from backupstore.
+	e.restore.UpdateRestoreStatus("", 42, errors.New("failed to write block: input/output error"))
+
+	err := e.waitForRestoreComplete(nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "input/output error"), Equals, true)
+	c.Assert(e.restore.ErrorSourceReplicaName, Equals, "replica-b")
 }
 
 func (s *TestSuite) TestEngineRestoreCloseVolumeDevReturnsSyncError(c *C) {
