@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
+
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
@@ -27,7 +29,7 @@ func newTestReplicaBackend(name, address string, mode lhtypes.Mode) *replicaBack
 func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateRWQualifies(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: RW mode qualifies for info update")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW)
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
@@ -39,7 +41,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateRWQualifies(c *C) {
 func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateWOQualifies(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: WO mode qualifies for info update")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeWO)
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
@@ -51,7 +53,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateWOQualifies(c *C) {
 func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateERRDoesNotQualify(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: ERR mode does not qualify")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeERR)
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
@@ -63,7 +65,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateERRDoesNotQualify(c *C) {
 func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateUnexpectedModeDowngradesToERR(c *C) {
 	fmt.Println("Testing ensureReplicaModeForInfoUpdate: unexpected mode is downgraded to ERR")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.Mode("UNKNOWN"))
 
 	ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
@@ -78,7 +80,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdateUnexpectedModeDowngradesTo
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockEmptyMap(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: empty backends does not panic")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{}
 
 	// Should not panic with empty map
@@ -88,7 +90,7 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockEmptyMap(c *C) {
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAllERRSkipped(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: all-ERR replicas are skipped without network calls")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeERR),
 		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeERR),
@@ -129,7 +131,7 @@ func (s *TestSuite) TestEngineFrontendTeardownRestoreInitiatorMarksStopped(c *C)
 func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {
 	fmt.Println("Testing Engine.ReplicaAdd is rejected while restore is in progress")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.State = lhtypes.InstanceStateRunning
 	e.IsRestoring = true
 
@@ -142,7 +144,7 @@ func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {
 func (s *TestSuite) TestRecordBackupRestoreStartErrorExposedInRestoreStatus(c *C) {
 	fmt.Println("Testing restore start errors are exposed through Engine.RestoreStatus")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
@@ -171,7 +173,7 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorExposedInRestoreStatus(c *C
 func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C) {
 	fmt.Println("Testing restore start errors preserve last restored backup")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-old&volume=vol-a", "backup-old", e, nil)
 	e.restore.FinishRestore()
 
@@ -187,7 +189,7 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C)
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesBackendView(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock applies SnapshotMap/Head/ActualSize from Backend.Get()")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	headLvol := &api.Lvol{Name: "vol-head", Parent: "snap-1"}
@@ -212,7 +214,7 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesBackendView(c
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockMarksERROnGetError(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock marks backend ERR when Backend.Get() returns an error")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	u.ViewErr = errors.New("backend unavailable")
@@ -226,7 +228,7 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockMarksERROnGetError(c
 func (s *TestSuite) TestResolveReplicaAncestorRoutesBackingImageThroughBackend(c *C) {
 	fmt.Println("Testing resolveReplicaAncestor calls BackingImageGet via the Backend interface")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	biSnap := &api.Lvol{Name: "bi-snap"}
@@ -252,7 +254,7 @@ func (s *TestSuite) TestResolveReplicaAncestorRoutesBackingImageThroughBackend(c
 func (s *TestSuite) TestResolveReplicaAncestorMarksERROnBackingImageError(c *C) {
 	fmt.Println("Testing resolveReplicaAncestor marks backend ERR when BackingImageGet fails")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	u.BackingImageGetErr = errors.New("backing image not found")
