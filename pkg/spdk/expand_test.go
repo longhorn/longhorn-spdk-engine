@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
@@ -149,7 +148,6 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionPartialFailureKeepsOriginal
 	c.Assert(ef.lastExpansionFailedAt, Equals, "2026-03-10T00:00:00Z")
 	c.Assert(ef.isExpanding, Equals, false)
 }
-
 func (s *TestSuite) TestEngineFrontendRequireExpansionGuards(c *C) {
 	fmt.Println("Testing EngineFrontend require expansion guards")
 
@@ -171,6 +169,18 @@ func (s *TestSuite) TestEngineFrontendRequireExpansionGuards(c *C) {
 	notAlignedSize := uint64((11 * helpertypes.MiB) + 1)
 	_, err = efUnaligned.requireExpansion(context.Background(), nil, notAlignedSize)
 	c.Assert(errors.Is(err, ErrExpansionInvalidSize), Equals, true)
+}
+
+func (s *TestSuite) TestEngineFrontendPrepareExpansionFailsWithoutInitiator(c *C) {
+	fmt.Println("Testing EngineFrontend prepare expansion fails when the initiator is missing")
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1), nil)
+	ef.Endpoint = "/dev/longhorn/vol-a"
+
+	suspended, err := ef.prepareExpansion()
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "initiator is not initialized"), Equals, true)
+	c.Assert(suspended, Equals, false)
 }
 
 func (s *TestSuite) TestEngineExpandPrecheckGuards(c *C) {

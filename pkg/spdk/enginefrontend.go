@@ -1127,8 +1127,8 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 
 	// engineErr will be set when the engine failed to do any non-recoverable operations.
 	expanded := false
-	backendExpansionError := ""
-	backendExpansionFailedAt := ""
+	expansionError := ""
+	expansionFailedAt := ""
 	var engineActualSize uint64
 
 	defer func() {
@@ -1141,7 +1141,7 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 
 		// Phase 3: Re-acquire lock to update state.
 		ef.Lock()
-		ef.finishExpansion(originalSize, expanded, size, retErr, backendExpansionError, backendExpansionFailedAt, engineActualSize)
+		ef.finishExpansion(originalSize, expanded, size, retErr, expansionError, expansionFailedAt, engineActualSize)
 		ef.Unlock()
 
 		ef.UpdateCh <- nil
@@ -1160,10 +1160,19 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 	}
 	if suspended {
 		defer func() {
-			if ef.initiator != nil {
-				if frontendErr := ef.initiator.Resume(); frontendErr != nil {
-					retErr = multierr.Append(retErr, errors.Wrapf(frontendErr, "original error; resume failed"))
+			if ef.initiator == nil {
+				return
+			}
+			if frontendErr := ef.initiator.Resume(); frontendErr != nil {
+				// The dm table was already reloaded with the new size, and a resume
+				// error is not proof that it did not go live, so the size is left as
+				// it is and only the failure is reported.
+				// finishExpansion reports retErr alone, so carry any earlier failure
+				// with it.
+				if expansionError != "" {
+					retErr = multierr.Append(retErr, errors.New(expansionError))
 				}
+				retErr = multierr.Append(retErr, errors.Wrap(frontendErr, "resume failed"))
 			}
 		}()
 	}
@@ -1178,10 +1187,10 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 	}
 	engineActualSize = engine.ActualSize
 	if engine.LastExpansionError != "" {
-		backendExpansionError = engine.LastExpansionError
-		backendExpansionFailedAt = engine.LastExpansionFailedAt
+		expansionError = engine.LastExpansionError
+		expansionFailedAt = engine.LastExpansionFailedAt
 		ef.log.Warnf("Engine %s partially failed to expand to %v; keeping engine frontend size at %v: %v",
-			engineName, size, originalSize, backendExpansionError)
+			engineName, size, originalSize, expansionError)
 		return nil
 	}
 
@@ -1193,9 +1202,18 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 
 	// It waits for the kernel to recognize the new physical NVMe capacity
 	// and then reloads the dm table to propagate the size change up to the volume.
-	if frontend != types.FrontendEmpty && ef.initiator != nil {
-		if err := ef.initiator.SyncDmDeviceSize(size); err != nil {
-			ef.log.WithError(err).Warnf("failed to sync linear dm device size during engine %s expansion", engineName)
+	if frontend != types.FrontendEmpty {
+		if ef.initiator != nil {
+			if err := ef.initiator.SyncDmDeviceSize(size); err != nil {
+				// The backend already serves the new size, but the device the volume is
+				// exposed through does not, so the expansion is not complete and must
+				// not be reported as such.
+				expansionError = errors.Wrapf(err, "failed to sync the linear dm device size for engine %s", engineName).Error()
+				expansionFailedAt = time.Now().UTC().Format(time.RFC3339Nano)
+				ef.log.WithError(err).Errorf("Engine %s expanded the backend but failed to resize the frontend device; keeping engine frontend size at %v",
+					engineName, originalSize)
+				return nil
+			}
 		}
 	}
 
@@ -1254,7 +1272,7 @@ func (ef *EngineFrontend) requireExpansion(ctx context.Context, engineSpdkClient
 	return true, nil
 }
 
-func (ef *EngineFrontend) finishExpansion(fromSize uint64, expanded bool, size uint64, err error, backendExpansionError, backendExpansionFailedAt string, engineActualSize uint64) {
+func (ef *EngineFrontend) finishExpansion(fromSize uint64, expanded bool, size uint64, err error, expansionError, expansionFailedAt string, engineActualSize uint64) {
 	// Sync ActualSize from the engine whenever we successfully queried it,
 	// regardless of whether the expansion itself succeeded or failed.
 	if engineActualSize > 0 {
@@ -1287,15 +1305,15 @@ func (ef *EngineFrontend) finishExpansion(fromSize uint64, expanded bool, size u
 
 	ef.State = types.InstanceStateRunning
 	ef.ErrorMsg = ""
-	if backendExpansionError != "" {
-		ef.lastExpansionError = backendExpansionError
-		if backendExpansionFailedAt != "" {
-			ef.lastExpansionFailedAt = backendExpansionFailedAt
+	if expansionError != "" {
+		ef.lastExpansionError = expansionError
+		if expansionFailedAt != "" {
+			ef.lastExpansionFailedAt = expansionFailedAt
 		} else {
 			ef.lastExpansionFailedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
 		ef.log.Warnf("Partially failed to expand from size %v to %v; keeping engine frontend size at %v: %v",
-			fromSize, size, fromSize, backendExpansionError)
+			fromSize, size, fromSize, expansionError)
 		ef.isExpanding = false
 		return
 	}
@@ -1311,7 +1329,7 @@ func (ef *EngineFrontend) finishExpansion(fromSize uint64, expanded bool, size u
 		ef.log.Infof("Failed to expand from size %v to %v", fromSize, size)
 	}
 
-	// Clear stale expansion error on success (err == nil && backendExpansionError == "").
+	// Clear stale expansion error on success (err == nil && expansionError == "").
 	// A previous partial failure may have left lastExpansionError set.
 	ef.lastExpansionError = ""
 	ef.lastExpansionFailedAt = ""
@@ -1326,7 +1344,7 @@ func (ef *EngineFrontend) prepareExpansion() (engineFrontendSuspended bool, err 
 	case types.FrontendSPDKTCPBlockdev:
 		if ef.Endpoint != "" {
 			ef.log.Info("Suspending engine frontend")
-			if err := ef.initiator.Suspend(false, false); err != nil {
+			if err := ef.suspend(false, false); err != nil {
 				return false, errors.Wrapf(err, "failed to suspend engine frontend %s", ef.Name)
 			}
 			return true, nil
