@@ -3,11 +3,14 @@ package spdk
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
@@ -147,6 +150,139 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionPartialFailureKeepsOriginal
 	c.Assert(ef.ActualSize, Equals, uint64(12))
 	c.Assert(ef.lastExpansionError, Equals, "replica expand failed")
 	c.Assert(ef.lastExpansionFailedAt, Equals, "2026-03-10T00:00:00Z")
+	c.Assert(ef.isExpanding, Equals, false)
+}
+
+// fakeEngineExpandService serves the handful of engine calls an engine frontend
+// expansion makes, so the expansion can be driven up to its frontend steps.
+type fakeEngineExpandService struct {
+	spdkrpc.UnimplementedSPDKServiceServer
+
+	specSize uint64
+}
+
+func (f *fakeEngineExpandService) EngineExpandPrecheck(_ context.Context, _ *spdkrpc.EngineExpandPrecheckRequest) (*spdkrpc.EngineExpandPrecheckResponse, error) {
+	return &spdkrpc.EngineExpandPrecheckResponse{ExpansionRequired: true}, nil
+}
+
+func (f *fakeEngineExpandService) EngineExpand(_ context.Context, req *spdkrpc.EngineExpandRequest) (*emptypb.Empty, error) {
+	// The backend expansion is the part that succeeds in the regression being
+	// covered here.
+	f.specSize = req.Size
+	return &emptypb.Empty{}, nil
+}
+
+func (f *fakeEngineExpandService) EngineGet(_ context.Context, req *spdkrpc.EngineGetRequest) (*spdkrpc.Engine, error) {
+	return &spdkrpc.Engine{
+		Name:       req.Name,
+		SpecSize:   f.specSize,
+		ActualSize: f.specSize,
+	}, nil
+}
+
+func startFakeEngineExpandService(c *C, specSize uint64) (ServiceClientFactory, func()) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	c.Assert(err, IsNil)
+
+	server := grpc.NewServer()
+	spdkrpc.RegisterSPDKServiceServer(server, &fakeEngineExpandService{specSize: specSize})
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	address := listener.Addr().String()
+	return func(string) (*clientpkg.SPDKClient, error) {
+		return clientpkg.NewSPDKClient(address)
+	}, server.Stop
+}
+
+func (s *TestSuite) TestEngineFrontendExpandKeepsSizeWhenDeviceResizeFails(c *C) {
+	fmt.Println("Testing EngineFrontend expansion keeps the original size when the device resize fails")
+
+	const originalSize = uint64(10 * helpertypes.MiB)
+	const newSize = uint64(20 * helpertypes.MiB)
+
+	newServiceClient, stop := startFakeEngineExpandService(c, originalSize)
+	defer stop()
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, originalSize, 0, 0, make(chan interface{}, 1), newServiceClient)
+	// Re-exposing the frontend needs a real SPDK client, and this expansion fails
+	// before reaching it.
+	ef.NvmeTcpFrontend = nil
+	syncCalled := false
+	ef.syncDmDeviceSizeFn = func(uint64) error {
+		syncCalled = true
+		return errors.New("timed out waiting for the device to reach the new size")
+	}
+
+	// The backend expansion succeeds, so this is the case where the volume would
+	// otherwise be published at the new size before the device serves it.
+	c.Assert(ef.Expand(context.Background(), nil, newSize), IsNil)
+
+	c.Assert(syncCalled, Equals, true)
+	c.Assert(ef.SpecSize, Equals, originalSize)
+	c.Assert(ef.lastExpansionError, Not(Equals), "")
+	c.Assert(ef.lastExpansionFailedAt, Not(Equals), "")
+	c.Assert(ef.isExpanding, Equals, false)
+}
+
+func (s *TestSuite) TestEngineFrontendExpandReportsResumeFailure(c *C) {
+	fmt.Println("Testing EngineFrontend expansion reports a resume failure without regressing the size")
+
+	const originalSize = uint64(10 * helpertypes.MiB)
+	const newSize = uint64(20 * helpertypes.MiB)
+
+	newServiceClient, stop := startFakeEngineExpandService(c, originalSize)
+	defer stop()
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, originalSize, 0, 0, make(chan interface{}, 1), newServiceClient)
+	ef.NvmeTcpFrontend = nil
+	// A non-empty endpoint is what makes the expansion suspend the device first.
+	ef.Endpoint = "/dev/longhorn/vol-a"
+	ef.suspendBeforeExpansionFn = func() error { return nil }
+	ef.syncDmDeviceSizeFn = func(uint64) error { return nil }
+	resumeCalled := false
+	ef.resumeAfterExpansionFn = func() error {
+		resumeCalled = true
+		return errors.New("device or resource busy")
+	}
+
+	c.Assert(ef.Expand(context.Background(), nil, newSize), NotNil)
+
+	c.Assert(resumeCalled, Equals, true)
+	// The dm table was reloaded before the resume, so the resize itself held.
+	c.Assert(ef.SpecSize, Equals, newSize)
+	c.Assert(ef.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
+	c.Assert(ef.lastExpansionError, Not(Equals), "")
+	c.Assert(ef.isExpanding, Equals, false)
+}
+
+func (s *TestSuite) TestEngineFrontendExpandReportsBothFrontendFailures(c *C) {
+	fmt.Println("Testing EngineFrontend expansion reports the device resize failure alongside the resume failure")
+
+	const originalSize = uint64(10 * helpertypes.MiB)
+	const newSize = uint64(20 * helpertypes.MiB)
+
+	newServiceClient, stop := startFakeEngineExpandService(c, originalSize)
+	defer stop()
+
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, originalSize, 0, 0, make(chan interface{}, 1), newServiceClient)
+	ef.NvmeTcpFrontend = nil
+	ef.Endpoint = "/dev/longhorn/vol-a"
+	ef.suspendBeforeExpansionFn = func() error { return nil }
+	ef.syncDmDeviceSizeFn = func(uint64) error {
+		return errors.New("timed out waiting for the device to reach the new size")
+	}
+	ef.resumeAfterExpansionFn = func() error {
+		return errors.New("device or resource busy")
+	}
+
+	c.Assert(ef.Expand(context.Background(), nil, newSize), NotNil)
+
+	c.Assert(ef.SpecSize, Equals, originalSize)
+	// The resume failure must not hide why the expansion failed in the first place.
+	c.Assert(strings.Contains(ef.lastExpansionError, "timed out waiting for the device to reach the new size"), Equals, true)
+	c.Assert(strings.Contains(ef.lastExpansionError, "device or resource busy"), Equals, true)
 	c.Assert(ef.isExpanding, Equals, false)
 }
 
