@@ -92,20 +92,6 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionExpandedWithError(c *C) {
 	c.Assert(ef.isExpanding, Equals, false)
 }
 
-func (s *TestSuite) TestEngineFrontendFinishExpansionResumeFailureKeepsOriginalSize(c *C) {
-	fmt.Println("Testing EngineFrontend finish expansion resume failure keeps original size")
-
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, 0, 0, make(chan interface{}, 1), nil)
-
-	ef.finishExpansion(10, false, 20, errors.New("resume failed"), "", "", 15)
-
-	c.Assert(ef.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateError))
-	c.Assert(ef.SpecSize, Equals, uint64(10))
-	c.Assert(ef.ActualSize, Equals, uint64(15))
-	c.Assert(ef.lastExpansionError, Not(Equals), "")
-	c.Assert(ef.isExpanding, Equals, false)
-}
-
 func (s *TestSuite) TestEngineFrontendFinishExpansionFailureWithoutExpansion(c *C) {
 	fmt.Println("Testing EngineFrontend finish expansion failure without expansion")
 

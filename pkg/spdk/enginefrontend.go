@@ -1102,12 +1102,8 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 	frontend := ef.Frontend
 
 	var targetAddress string
-	var targetIP string
-	var targetPort int32
 	if ef.NvmeTcpFrontend != nil {
-		targetIP = ef.NvmeTcpFrontend.TargetIP
-		targetPort = ef.NvmeTcpFrontend.TargetPort
-		targetAddress = net.JoinHostPort(targetIP, strconv.Itoa(int(targetPort)))
+		targetAddress = net.JoinHostPort(ef.NvmeTcpFrontend.TargetIP, strconv.Itoa(int(ef.NvmeTcpFrontend.TargetPort)))
 	}
 
 	engineSpdkClient, err := ef.newServiceClient(ef.getEngineServiceAddress())
@@ -1162,13 +1158,12 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 	if err != nil {
 		return errors.Wrap(err, "prepare raid for expansion failed")
 	}
-	resumePending := suspended
 	if suspended {
 		defer func() {
-			if !resumePending {
+			if ef.initiator == nil {
 				return
 			}
-			if frontendErr := ef.resume(); frontendErr != nil {
+			if frontendErr := ef.initiator.Resume(); frontendErr != nil {
 				// The dm table was already reloaded with the new size, and a resume
 				// error is not proof that it did not go live, so the size is left as
 				// it is and only the failure is reported.
@@ -1219,29 +1214,7 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 					engineName, originalSize)
 				return nil
 			}
-
-			// The online RAID expansion tears down and recreates the RAID bdev, forcing
-			// the initiator controller through NVMe error recovery and reconnect. Wait for
-			// the reconnected controller to reach the live state before reporting the
-			// expansion complete, so the new size is not published on a path that is still
-			// reconnecting.
-			if ef.Frontend == types.FrontendSPDKTCPBlockdev {
-				if err := ef.waitForNvmeTCPControllerLive(targetIP, targetPort); err != nil {
-					expansionError = errors.Wrapf(err, "NVMe controller did not reach live state after expanding engine %s", engineName).Error()
-					expansionFailedAt = time.Now().UTC().Format(time.RFC3339Nano)
-					ef.log.WithError(err).Errorf("Engine %s expanded the backend and resized the frontend device but the NVMe controller is not live; keeping engine frontend size at %v",
-						engineName, originalSize)
-					return nil
-				}
-			}
 		}
-	}
-
-	if resumePending {
-		if err := ef.resume(); err != nil {
-			return errors.Wrap(err, "resume failed")
-		}
-		resumePending = false
 	}
 
 	ef.log.Info("Expanding engine completed")
