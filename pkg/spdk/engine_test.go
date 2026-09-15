@@ -6,6 +6,25 @@ import (
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 )
 
+// A re-created target must not reuse the controller ID of the stale controller a host
+// may still hold for the same subsystem, or the connect is rejected with
+// "Duplicate cntlid".
+func (s *TestSuite) TestGetTargetCntlid(c *C) {
+	const oldIP, newIP = "10.42.1.21", "10.42.1.27"
+
+	c.Assert(getTargetCntlid(oldIP, 20006), Not(Equals), getTargetCntlid(oldIP, 20011))
+	c.Assert(getTargetCntlid(oldIP, 20006), Not(Equals), getTargetCntlid(newIP, 20006))
+
+	// Re-exposing the same address during an expansion must keep the session.
+	c.Assert(getTargetCntlid(newIP, 20011), Equals, getTargetCntlid(newIP, 20011))
+
+	for _, port := range []int32{1, 20006, 20011, 65535} {
+		cntlid := getTargetCntlid(newIP, port)
+		c.Assert(cntlid >= 1, Equals, true)
+		c.Assert(cntlid <= maxValidCntlid, Equals, true)
+	}
+}
+
 func (s *TestSuite) TestGetExposedPort(c *C) {
 	testCases := []struct {
 		name         string
