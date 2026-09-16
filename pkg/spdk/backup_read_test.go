@@ -18,7 +18,9 @@ import (
 func (s *TestSuite) TestReadSnapshotReturnsDataAndReadErrors(c *C) {
 	file, err := os.CreateTemp(c.MkDir(), "snapshot")
 	c.Assert(err, IsNil)
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 	payload := []byte("snapshot data")
 	_, err = file.Write(payload)
 	c.Assert(err, IsNil)
@@ -68,7 +70,9 @@ func (s *TestSuite) TestReadSnapshotConcurrentCleanup(c *C) {
 
 	file, err := os.CreateTemp(c.MkDir(), "snapshot")
 	c.Assert(err, IsNil)
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 	payload := bytes.Repeat([]byte{0x5a}, 4096)
 	_, err = file.Write(payload)
 	c.Assert(err, IsNil)
