@@ -280,10 +280,11 @@ func (b *Backup) ReadSnapshot(snapshotName, volumeName string, offset int64, dat
 	// unwinding. Keep a local reference, and drop the backup lock before taking
 	// the replica lock so the two locks are never held together here.
 	b.Lock()
+	backupName := b.Name
 	replica := b.replica
 	b.Unlock()
 	if replica == nil {
-		return fmt.Errorf("backup %s snapshot is closed", b.Name)
+		return fmt.Errorf("backup %s snapshot is closed", backupName)
 	}
 
 	replica.RLock()
@@ -299,7 +300,7 @@ func (b *Backup) ReadSnapshot(snapshotName, volumeName string, offset int64, dat
 	defer b.Unlock()
 
 	if b.devFh == nil {
-		return fmt.Errorf("backup %s snapshot is closed", b.Name)
+		return fmt.Errorf("backup %s snapshot is closed", backupName)
 	}
 
 	_, err := b.devFh.ReadAt(data, offset)
