@@ -124,6 +124,14 @@ type Engine struct {
 	ActualSize uint64
 	Frontend   string
 
+	// TransportType is the NVMe-oF transport this engine uses to connect to its
+	// replicas' exposed head bdevs. It must match the transport each replica
+	// used to expose (Replica.TransportType). Set from EngineCreateRequest.
+	// data_engine_transport; unset (empty) is treated as TCP for backward
+	// compatibility. Only the internal engine<->replica data fabric honors this;
+	// the host-facing NVMe-TCP frontend and all EC/transient paths stay TCP.
+	TransportType spdktypes.NvmeTransportType
+
 	ctrlrLossTimeout     int
 	fastIOFailTimeoutSec int
 	// backends maps each peer's name to its Backend. Each one provides a base
@@ -180,7 +188,7 @@ type Engine struct {
 	newServiceClient ServiceClientFactory
 }
 
-func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}, snapshotMaxCount int32, newServiceClient ServiceClientFactory) *Engine {
+func NewEngine(engineName, volumeName, frontend string, transportType spdktypes.NvmeTransportType, specSize uint64, engineUpdateCh chan interface{}, snapshotMaxCount int32, newServiceClient ServiceClientFactory) *Engine {
 	log := logrus.StandardLogger().WithFields(logrus.Fields{
 		"engineName": engineName,
 		"volumeName": volumeName,
@@ -206,6 +214,10 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		VolumeName: volumeName,
 		Frontend:   frontend,
 		SpecSize:   specSize,
+
+		// Empty (unset) transportType is treated as TCP by nvmeTransportFromProto,
+		// preserving historical behavior for callers that do not select a transport.
+		TransportType: transportType,
 
 		// TODO: support user-defined values
 		ctrlrLossTimeout:     replicaCtrlrLossTimeoutSec,
@@ -364,8 +376,10 @@ func (e *Engine) createNVMeTCPTarget(spdkClient *spdkclient.Client, superiorPort
 
 	e.log.Infof("Starting to expose RAID bdev for engine target %v on %v:%v with initial ANA state %v, cntlid %v, nsUUID %v",
 		e.Name, e.NvmeTcpTarget.IP, e.NvmeTcpTarget.Port, initialANAState, cntlid, nsUUID)
+	// TODO: the host-facing frontend is always exposed over NVMe-TCP for now.
+	// Adapt it to e.TransportType once the initiator/host side supports RDMA.
 	if err := spdkClient.StartExposeBdevWithANAState(e.NvmeTcpTarget.Nqn, e.Name, e.NvmeTcpTarget.Nguid, nsUUID,
-		e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)), spdkANAState, cntlid, cntlid); err != nil {
+		e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)), spdktypes.NvmeTransportTypeTCP, spdkANAState, cntlid, cntlid); err != nil {
 		// No need to release ports here. The engine will be marked as ERR by
 		// Create's deferred error handler, and Delete will release the ports
 		// when the user cleans up this engine.
@@ -387,7 +401,7 @@ func (e *Engine) connectReplicas(spdkClient *spdkclient.Client, replicaAddressMa
 	for replicaName, replicaAddr := range replicaAddressMap {
 		e.backends[replicaName] = backendFactory(replicaName, replicaAddr)
 
-		bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaAddr, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
+		bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaAddr, e.TransportType, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
 		if err != nil {
 			e.log.WithError(err).Warnf("Failed to get bdev from replica %s with address %s during engine creation, will mark the mode to ERR and continue", replicaName, replicaAddr)
 			e.backends[replicaName].SetMode(types.ModeERR)
@@ -1041,7 +1055,7 @@ func (e *Engine) replicaAddStart(spdkClient *spdkclient.Client,
 	}
 
 	// Add rebuilding replica head bdev to the base bdev list of the RAID bdev
-	dstHeadLvolBdevName, err := connectNVMfBdev(spdkClient, dstReplicaName, dstHeadLvolAddress, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
+	dstHeadLvolBdevName, err := connectNVMfBdev(spdkClient, dstReplicaName, dstHeadLvolAddress, e.TransportType, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
 	if err != nil {
 		return nil, startUpdateRequired, nil, err
 	}
@@ -1878,7 +1892,7 @@ func (e *Engine) replicaSnapshotOperation(spdkClient *spdkclient.Client, replica
 		if err := replicaStatus.SnapshotRevert(snapshotName); err != nil {
 			return err
 		}
-		bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaStatus.Address(), e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
+		bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaStatus.Address(), e.TransportType, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
 		if err != nil {
 			return err
 		}
@@ -2919,7 +2933,7 @@ func (e *Engine) Expand(spdkClient *spdkclient.Client, size uint64) (err error) 
 		e.log.Infof("Starting to expose RAID bdev for engine target %v on %v:%v with ANA state %v, cntlid %v, nsUUID %v",
 			e.Name, e.NvmeTcpTarget.IP, e.NvmeTcpTarget.Port, currentANAState, cntlid, nsUUID)
 		if err := spdkClient.StartExposeBdevWithANAState(e.NvmeTcpTarget.Nqn, e.Name, e.NvmeTcpTarget.Nguid, nsUUID,
-			e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)),
+			e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)), spdktypes.NvmeTransportTypeTCP,
 			spdkANAState, cntlid, cntlid); err != nil {
 			return errors.Wrapf(err, "failed to start exposing RAID bdev for engine target %v", e.Name)
 		}
@@ -3161,7 +3175,7 @@ func (e *Engine) expandSingleReplica(spdkClient *spdkclient.Client, replicaName 
 		return err
 	}
 
-	_, err = connectNVMfBdev(spdkClient, replicaName, replicaStatus.Address(), e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
+	_, err = connectNVMfBdev(spdkClient, replicaName, replicaStatus.Address(), e.TransportType, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
 	return err
 }
 
@@ -3829,7 +3843,10 @@ func validateAndGetSingleNvmeInfo(replicaName string, bdev *spdktypes.BdevInfo) 
 }
 
 func validateNvmeTransport(replicaName, bdevName string, nvmeInfo spdktypes.NvmeNamespaceInfo) error {
-	if !strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) {
+	// The internal engine<->replica fabric may run over TCP or RDMA (RoCEv2).
+	// Both are valid; only reject transports we never use (e.g. FC, PCIe).
+	if !strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeTCP)) &&
+		!strings.EqualFold(string(nvmeInfo.Trid.Trtype), string(spdktypes.NvmeTransportTypeRDMA)) {
 		return fmt.Errorf(
 			"found invalid transport type %s in a remote NVMe base bdev %s during replica %s mode validation",
 			nvmeInfo.Trid.Trtype, bdevName, replicaName,
