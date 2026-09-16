@@ -3627,11 +3627,6 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			offsetInMB = 2 * dataCountInMB
 
 			err = writeDataToBlockDevice(ne, endpoint, offsetInMB, dataCountInMB)
-			if err != nil {
-				fmt.Printf("Error writing data before creating snap31 for volume %s: %v\n", volumeName, err)
-				time.Sleep(60000 * time.Second)
-				fmt.Printf("After sleep, still error writing data before creating snap31 for volume %s: %v\n", volumeName, err)
-			}
 			c.Assert(err, IsNil)
 			cksumBefore31, err := util.GetFileChunkChecksum(endpoint, offsetInMB*helpertypes.MiB, dataCountInMB*helpertypes.MiB)
 			c.Assert(err, IsNil)
@@ -4960,6 +4955,8 @@ func writeDataToBlockDevice(ne *commonns.Executor, endpoint string, offsetInMB, 
 					"bs=1M",
 					fmt.Sprintf("count=%d", dataCountInMB),
 					fmt.Sprintf("seek=%d", offsetInMB),
+					"oflag=direct",
+					"conv=notrunc,fsync",
 					"status=none",
 				},
 				defaultTestExecuteTimeout,
