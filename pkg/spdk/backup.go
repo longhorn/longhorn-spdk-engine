@@ -297,13 +297,17 @@ func (b *Backup) ReadSnapshot(snapshotName, volumeName string, offset int64, dat
 	}
 
 	b.Lock()
-	defer b.Unlock()
+	devFh := b.devFh
+	b.Unlock()
 
-	if b.devFh == nil {
+	if devFh == nil {
 		return fmt.Errorf("backup %s snapshot is closed", backupName)
 	}
 
-	_, err := b.devFh.ReadAt(data, offset)
+	_, err := devFh.ReadAt(data, offset)
+	if errors.Is(err, os.ErrClosed) {
+		return fmt.Errorf("backup %s snapshot is closed", backupName)
+	}
 
 	return err
 }
