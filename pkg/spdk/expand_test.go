@@ -431,7 +431,7 @@ func (s *TestSuite) TestExpandResumeGuardsNilInitiator(c *C) {
 	// Simulate the resume defer guard — should NOT panic.
 	c.Assert(func() {
 		if ef.initiator != nil {
-			_ = ef.initiator.Resume()
+			_ = ef.initiator.Resume(helpertypes.DmsetupTimeout)
 		}
 	}, Not(PanicMatches), ".*")
 }
