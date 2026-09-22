@@ -110,7 +110,7 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20260831070834-77c184cc059a
+# github.com/longhorn/backupstore v0.0.0-20260922010936-57b3845ad4ef
 ## explicit; go 1.25.10
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
@@ -166,7 +166,7 @@ github.com/munnerz/goautoneg
 # github.com/opencontainers/runc v1.3.6
 ## explicit; go 1.23.0
 github.com/opencontainers/runc/libcontainer/userns
-# github.com/pierrec/lz4/v4 v4.1.28
+# github.com/pierrec/lz4/v4 v4.1.29
 ## explicit; go 1.17
 github.com/pierrec/lz4/v4
 github.com/pierrec/lz4/v4/internal/lz4block
