@@ -113,7 +113,7 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20260820153238-ab5179ec9ca0
+# github.com/longhorn/backupstore v0.0.0-20260922010936-57b3845ad4ef
 ## explicit; go 1.25.10
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
@@ -171,7 +171,7 @@ github.com/opencontainers/runc/libcontainer/userns
 # github.com/opencontainers/runtime-spec v1.1.0
 ## explicit
 github.com/opencontainers/runtime-spec/specs-go
-# github.com/pierrec/lz4/v4 v4.1.26
+# github.com/pierrec/lz4/v4 v4.1.29
 ## explicit; go 1.17
 github.com/pierrec/lz4/v4
 github.com/pierrec/lz4/v4/internal/lz4block
