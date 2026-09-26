@@ -11,7 +11,7 @@ Longhorn SPDK Engine is v2 data engine that integrates the performance and effic
 Please check [the main repo](https://github.com/longhorn/longhorn#community) for the contributing guide.
 
 ## License
-Copyright (c) 2021-2024 The Longhorn Authors
+Copyright (c) 2021-2026 The Longhorn Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
