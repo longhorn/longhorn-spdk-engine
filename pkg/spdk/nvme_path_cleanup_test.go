@@ -119,7 +119,7 @@ func (s *TestSuite) TestEngineFrontendCleanupFollowsPersistedHostReadyReplacemen
 			}
 		}
 		c.Assert(disconnects, Equals, 1)
-		c.Assert(ef.State, Equals, lhtypes.InstanceStateRunning)
+		c.Assert(string(ef.State), Equals, lhtypes.InstanceStateRunning)
 	}
 }
 
@@ -162,7 +162,7 @@ func assertEngineFrontendCleanupSkipsUncertainReplacement(c *C, failure string) 
 			c.Assert(readinessChecks, Equals, 1)
 		}
 		c.Assert(ef.EngineName, Equals, "engine-b")
-		c.Assert(ef.State, Equals, lhtypes.InstanceStateRunning)
+		c.Assert(string(ef.State), Equals, lhtypes.InstanceStateRunning)
 		c.Assert(ef.ErrorMsg, Equals, "")
 	}
 }
