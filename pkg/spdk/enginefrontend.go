@@ -107,6 +107,8 @@ type EngineFrontend struct {
 	waitForNvmeTCPControllerLiveFn func(transportAddress string, transportPort int32) error
 	// Test hook for dropping a superseded NVMe-TCP path after a switchover.
 	disconnectStaleNvmeTCPPathFn func(nqn, transportAddress, transportServiceID string) error
+	// Test hook for confirming the replacement path's host-side ANA state.
+	waitForNvmeTCPPathOptimizedFn func(nqn, transportAddress, transportServiceID string) error
 
 	// metadataDir is the base path for persisting engine frontend records.
 	// If empty, persistence is disabled.
@@ -1898,22 +1900,18 @@ func (ef *EngineFrontend) SwitchOverTarget(spdkClient *spdkclient.Client, newEng
 
 		// Persist updated record AFTER successful switchover.
 		ef.RLock()
-		if err := saveEngineFrontendRecord(ef.metadataDir, ef); err != nil {
-			ef.log.WithError(err).Warn("Failed to persist engine frontend record after switchover")
+		persistErr := saveEngineFrontendRecord(ef.metadataDir, ef)
+		if persistErr != nil {
+			ef.log.WithError(persistErr).Warn("Failed to persist engine frontend record after switchover; skipping stale path cleanup")
 		}
 		ef.RUnlock()
 
-		// Drop the superseded path. Removing it any earlier races with the
-		// kernel processing the ANA change on the new path, leaving a brief
-		// "no available path" window that makes ext4 go read-only; by here the
-		// new controller is live and the old path is already inaccessible.
-		// Leaving it to ctrl-loss-tmo instead keeps a controller retrying a
-		// dead target, whose partition-scan I/O errors read as a failing disk.
-		//
-		// Ordered after persistence, matching the phased path: a crash in
-		// between then leaves a correct record plus a stale path the kernel
-		// reaps, rather than a record naming a target whose path is gone.
-		ef.dropSupersededNvmeTCPPath(oldNQN, oldTargetIP, oldTargetPort, targetIP, targetPort)
+		// Only clean up after successful persistence. The cleanup also waits
+		// for the host to observe the new path as live and ANA-optimized;
+		// completing the target-side ANA RPC is not sufficient evidence.
+		if persistErr == nil {
+			ef.dropSupersededNvmeTCPPath(oldNQN, oldTargetIP, oldTargetPort, targetIP, targetPort)
+		}
 
 		return nil
 
@@ -2230,14 +2228,17 @@ func (ef *EngineFrontend) switchOverTargetBlockdevPhased(phase SwitchoverPhase, 
 		*updateRequired = true
 
 		ef.RLock()
-		if err := saveEngineFrontendRecord(ef.metadataDir, ef); err != nil {
-			ef.log.WithError(err).Warn("Failed to persist engine frontend record after promoting phase")
+		persistErr := saveEngineFrontendRecord(ef.metadataDir, ef)
+		if persistErr != nil {
+			ef.log.WithError(persistErr).Warn("Failed to persist engine frontend record after promoting phase; skipping stale path cleanup")
 		}
 		ef.RUnlock()
 
-		// New path is live and promoted, old path went inaccessible in the
-		// switching phase, so the superseded path can now be dropped.
-		ef.dropSupersededNvmeTCPPath(oldNQN, oldTargetIP, oldTargetPort, newTargetIP, newTargetPort)
+		// Retain the old path if persistence failed or the host has not yet
+		// observed the replacement path as live and ANA-optimized.
+		if persistErr == nil {
+			ef.dropSupersededNvmeTCPPath(oldNQN, oldTargetIP, oldTargetPort, newTargetIP, newTargetPort)
+		}
 
 		ef.log.WithFields(logrus.Fields{
 			"oldEngineName": oldEngineName,
@@ -2293,12 +2294,14 @@ func (ef *EngineFrontend) dropSupersededNvmeTCPPath(nqn, oldTargetIP string, old
 	// Both addresses must be well formed. A malformed new address cannot be
 	// compared against the old one, and treating that mismatch as a superseded
 	// path would drop the path still serving the volume.
-	if nqn == "" || oldTargetIP == "" || oldTargetPort == 0 || newTargetIP == "" || newTargetPort == 0 {
+	if nqn == "" || oldTargetIP == "" || oldTargetPort <= 0 || oldTargetPort > 65535 ||
+		newTargetIP == "" || newTargetPort <= 0 || newTargetPort > 65535 {
 		return
 	}
 	// Same address (e.g. an engine rename in place): no superseded path, and
-	// dropping the only path would strand the volume.
-	if oldTargetIP == newTargetIP && oldTargetPort == newTargetPort {
+	// dropping the only path would strand the volume. Use the same address
+	// comparison as DisconnectController, including equivalent IPv6 forms.
+	if helperutil.IsSameNvmeAddr(oldTargetIP, newTargetIP) && oldTargetPort == newTargetPort {
 		return
 	}
 
@@ -2307,6 +2310,10 @@ func (ef *EngineFrontend) dropSupersededNvmeTCPPath(nqn, oldTargetIP string, old
 		"oldTargetIP":   oldTargetIP,
 		"oldTargetPort": oldTargetPort,
 	})
+	if err := ef.waitForNvmeTCPPathOptimized(nqn, newTargetIP, strconv.Itoa(int(newTargetPort))); err != nil {
+		log.WithError(err).Warn("Skipping superseded NVMe-TCP path cleanup because the replacement path is not confirmed live and ANA-optimized")
+		return
+	}
 	if err := ef.disconnectStaleNvmeTCPPath(nqn, oldTargetIP, oldTargetPort); err != nil {
 		log.WithError(err).Warn("Failed to disconnect superseded NVMe-TCP path; " +
 			"leaving it for the kernel to reap via ctrl-loss-tmo")
