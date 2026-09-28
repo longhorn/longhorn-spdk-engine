@@ -18,6 +18,13 @@ import (
 )
 
 func stubSwitchoverANASync(ef *EngineFrontend, err error) {
+	// These tests do not use host NVMe devices.
+	ef.disconnectStaleNvmeTCPPathFn = func(nqn, transportAddress, transportServiceID string) error {
+		return nil
+	}
+	ef.waitForNvmeTCPPathOptimizedFn = func(nqn, transportAddress, transportServiceID string) error {
+		return nil
+	}
 	ef.syncRemoteEngineTargetANAStatesFn = func(oldTargetIP, oldEngineName, newTargetIP, newEngineName string) error {
 		return err
 	}
@@ -1288,6 +1295,7 @@ func (s *TestSuite) TestDropSupersededNvmeTCPPathSkipsIncompleteInput(c *C) {
 	fmt.Println("Testing dropSupersededNvmeTCPPath skips incomplete or unchanged path input")
 
 	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.waitForNvmeTCPPathOptimizedFn = func(nqn, transportAddress, transportServiceID string) error { return nil }
 
 	calls := 0
 	ef.disconnectStaleNvmeTCPPathFn = func(nqn, transportAddress, transportServiceID string) error {
