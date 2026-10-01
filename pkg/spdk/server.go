@@ -741,6 +741,9 @@ func (s *Server) newReplica(req *spdkrpc.ReplicaCreateRequest) (*Replica, error)
 		if req.LvsUuid != "" {
 			r.LvsUUID = req.LvsUuid
 		}
+		// Refresh the NVMe-oF transport used to expose this replica's head.
+		// Unset (TCP=0) preserves historical TCP behavior.
+		r.TransportType = nvmeTransportFromProto(req.TransportType)
 		r.Unlock()
 		return r, nil
 	}
@@ -752,7 +755,11 @@ func (s *Server) newReplica(req *spdkrpc.ReplicaCreateRequest) (*Replica, error)
 	if !exists {
 		return nil, fmt.Errorf("lvstore %v(%v) does not exist for replica %v creation", req.LvsName, req.LvsUuid, req.Name)
 	}
-	return NewReplica(s.ctx, req.Name, req.LvsName, req.LvsUuid, req.SpecSize, true, s.updateChs[types.InstanceTypeReplica], s.newServiceClient), nil
+	r = NewReplica(s.ctx, req.Name, req.LvsName, req.LvsUuid, req.SpecSize, true, s.updateChs[types.InstanceTypeReplica], s.newServiceClient)
+	// Select the NVMe-oF transport used to expose this replica's head. Unset
+	// (TCP=0) preserves historical TCP behavior; must match the engine's transport.
+	r.TransportType = nvmeTransportFromProto(req.TransportType)
+	return r, nil
 }
 
 func (s *Server) getBackingImage(backingImageName, lvsUUID string) (backingImage *BackingImage, err error) {
