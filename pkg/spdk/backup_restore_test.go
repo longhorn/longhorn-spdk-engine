@@ -67,7 +67,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdate(c *C) {
 	for testName, tc := range testCases {
 		c.Logf("testing ensureReplicaModeForInfoUpdate.%v", testName)
 
-		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 		rs := newTestReplicaBackend("replica-1", "10.0.0.1:1234", tc.mode)
 
 		ok := e.ensureReplicaModeForInfoUpdate("replica-1", rs)
@@ -83,7 +83,7 @@ func (s *TestSuite) TestEnsureReplicaModeForInfoUpdate(c *C) {
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockEmptyMap(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: empty backends does not panic")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{}
 
 	// Should not panic with empty map
@@ -93,7 +93,7 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockEmptyMap(c *C) {
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAllERRSkipped(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock: all-ERR replicas are skipped without network calls")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeERR),
 		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeERR),
@@ -437,7 +437,7 @@ func (s *TestSuite) TestTeardownRestoreFrontendDeletionDuringFailedAttemptUnregi
 func (s *TestSuite) TestEngineFrontendBackupRestoreAbortsWhenEngineIsDeleted(c *C) {
 	fmt.Println("Testing EngineFrontend.BackupRestore aborts the setup when the engine is being deleted")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	ef := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
 	unregistered := false
 	ef.unregisterRestoreFrontendFn = func() { unregistered = true }
@@ -489,7 +489,7 @@ func isClosed(ch <-chan struct{}) bool {
 func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {
 	fmt.Println("Testing Engine.ReplicaAdd is rejected while restore is in progress")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.State = lhtypes.InstanceStateRunning
 	e.IsRestoring = true
 
@@ -502,7 +502,7 @@ func (s *TestSuite) TestEngineReplicaAddRejectedDuringRestore(c *C) {
 func (s *TestSuite) TestRecordBackupRestoreStartErrorExposedInRestoreStatus(c *C) {
 	fmt.Println("Testing restore start errors are exposed through Engine.RestoreStatus")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
@@ -534,7 +534,7 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorExposedInRestoreStatus(c *C
 func (s *TestSuite) TestRestoreStatusReportsErrorOnlyOnErrorSourceReplica(c *C) {
 	fmt.Println("Testing RestoreStatus reports the restore error only on the error source replica")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
@@ -556,7 +556,7 @@ func (s *TestSuite) TestRestoreStatusReportsErrorOnlyOnErrorSourceReplica(c *C) 
 func (s *TestSuite) TestRestoreStatusHoldsBackUnattributedErrorWhileRestoring(c *C) {
 	fmt.Println("Testing RestoreStatus holds back an error without a source replica until the restore has ended")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 	}
@@ -585,7 +585,7 @@ func (s *TestSuite) TestRestoreStatusHoldsBackUnattributedErrorWhileRestoring(c 
 func (s *TestSuite) TestRecordErrorSourceKeepsFirstRecordedName(c *C) {
 	fmt.Println("Testing EngineRestore.RecordErrorSource keeps the first recorded error source")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 
 	e.restore.RecordErrorSource("replica-1")
@@ -600,7 +600,7 @@ func (s *TestSuite) TestRecordErrorSourceKeepsFirstRecordedName(c *C) {
 func (s *TestSuite) TestRestoreStatusErrorSourceLeftMembershipFallsBackToEngineError(c *C) {
 	fmt.Println("Testing RestoreStatus reports engine-level error when the error source is no longer a member")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
 	}
@@ -617,7 +617,7 @@ func (s *TestSuite) TestRestoreStatusErrorSourceLeftMembershipFallsBackToEngineE
 func (s *TestSuite) TestRestoreCycleContextEndsWithTheCycle(c *C) {
 	fmt.Println("Testing the restore cycle context is canceled when the cycle ends and replaced for the next cycle")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 	c.Assert(e.restore.Context().Err(), IsNil)
 
@@ -638,7 +638,7 @@ func (s *TestSuite) TestRestoreCycleContextEndsWithTheCycle(c *C) {
 func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C) {
 	fmt.Println("Testing restore start errors preserve last restored backup")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-old&volume=vol-a", "backup-old", e, nil)
 	e.restore.FinalizeRestore(nil)
 
@@ -659,7 +659,7 @@ func newTestRestoreLockConflictError() error {
 func (s *TestSuite) TestHandleBackupRestoreStartLockConflictOnFirstRestore(c *C) {
 	fmt.Println("Testing a lock conflict on the first restore leaves no restore error behind")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
@@ -693,7 +693,7 @@ func (s *TestSuite) TestHandleBackupRestoreStartLockConflictOnFirstRestore(c *C)
 func (s *TestSuite) TestHandleBackupRestoreStartLockConflictRevertsIncrementalRestore(c *C) {
 	fmt.Println("Testing a lock conflict on an incremental restore keeps the last restored backup")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 	}
@@ -722,7 +722,7 @@ func (s *TestSuite) TestHandleBackupRestoreStartLockConflictRevertsIncrementalRe
 func (s *TestSuite) TestHandleBackupRestoreStartErrorRecordsNonLockError(c *C) {
 	fmt.Println("Testing a non-lock restore start error is recorded and reported per replica")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 	}
@@ -743,7 +743,7 @@ func (s *TestSuite) TestHandleBackupRestoreStartErrorRecordsNonLockError(c *C) {
 func (s *TestSuite) TestRevertRestoresFinalizedGuardAndErrorSource(c *C) {
 	fmt.Println("Testing EngineRestore.Revert restores the finalized guard and the error source that StartNewRestore reset")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-old&volume=vol-a", "backup-old", e, nil)
 	e.restore.FinalizeRestore(nil)
 	c.Assert(e.restore.State, Equals, btypes.ProgressStateComplete)
@@ -775,7 +775,7 @@ func (s *TestSuite) TestRevertRestoresFinalizedGuardAndErrorSource(c *C) {
 func (s *TestSuite) TestHandleBackupRestoreStartLockConflictReleasesDroppedRestoreCycle(c *C) {
 	fmt.Println("Testing a lock conflict that drops the new restore object releases its cycle context")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 	}
@@ -797,7 +797,7 @@ func (s *TestSuite) TestHandleBackupRestoreStartLockConflictReleasesDroppedResto
 func (s *TestSuite) TestBackupRestorePrepareReleasesReplacedErroredCycle(c *C) {
 	fmt.Println("Testing the next restore releases the cycle context of the errored restore it replaces")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 	}
@@ -821,7 +821,7 @@ func (s *TestSuite) TestBackupRestorePrepareReleasesReplacedErroredCycle(c *C) {
 func (s *TestSuite) TestBackupRestorePrepareKeepsSnapshotNameAcrossReplacedErroredCycle(c *C) {
 	fmt.Println("Testing the next restore keeps the restore snapshot name of the errored cycle it replaces")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
 	}
@@ -845,7 +845,7 @@ func (s *TestSuite) TestBackupRestorePrepareKeepsSnapshotNameAcrossReplacedError
 func (s *TestSuite) TestFinalizeRestoreIgnoresLateWorkerReports(c *C) {
 	fmt.Println("Testing EngineRestore ignores worker status reports after the outcome is recorded")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 	e.restore.UpdateRestoreStatus("", 40, nil)
 
@@ -890,7 +890,7 @@ func (s *TestSuite) TestFinalizeRestoreIgnoresLateWorkerReports(c *C) {
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesBackendView(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock applies SnapshotMap/Head/ActualSize from Backend.Get()")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	headLvol := &api.Lvol{Name: "vol-head", Parent: "snap-1"}
@@ -915,7 +915,7 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesBackendView(c
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockMarksERROnGetError(c *C) {
 	fmt.Println("Testing checkAndUpdateInfoFromReplicasNoLock marks backend ERR when Backend.Get() returns an error")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	u.ViewErr = errors.New("backend unavailable")
@@ -929,7 +929,7 @@ func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockMarksERROnGetError(c
 func (s *TestSuite) TestResolveReplicaAncestorRoutesBackingImageThroughBackend(c *C) {
 	fmt.Println("Testing resolveReplicaAncestor calls BackingImageGet via the Backend interface")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	biSnap := &api.Lvol{Name: "bi-snap"}
@@ -955,7 +955,7 @@ func (s *TestSuite) TestResolveReplicaAncestorRoutesBackingImageThroughBackend(c
 func (s *TestSuite) TestResolveReplicaAncestorMarksERROnBackingImageError(c *C) {
 	fmt.Println("Testing resolveReplicaAncestor marks backend ERR when BackingImageGet fails")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	u := newFakeBackend("r1", "10.0.0.1:1234")
 	u.SetMode(lhtypes.ModeRW)
 	u.BackingImageGetErr = errors.New("backing image not found")
@@ -1133,7 +1133,7 @@ func (s *TestSuite) TestWaitForRestoreCompleteAbortsIdleRestore(c *C) {
 	restorePeriodicRefreshInterval = 5 * time.Millisecond
 	restoreIdleTimeout = 30 * time.Millisecond
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	// Attribution must skip ERR backends and backends without an attached
 	// bdev, so the nil SPDK client is never dialed.
 	erroredBackend := newFakeBackend("replica-err", "10.0.0.1:1234")
@@ -1169,7 +1169,7 @@ func (s *TestSuite) TestWaitForRestoreCompleteStaysAliveWhileBlocksComplete(c *C
 	// for goroutine scheduling delays on a loaded CI runner.
 	restoreIdleTimeout = 100 * time.Millisecond
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 
 	// An incremental restore of a large volume reports every written block at
@@ -1199,7 +1199,7 @@ func (s *TestSuite) TestWaitForRestoreCompleteReturnsOnFullProgress(c *C) {
 	}()
 	restorePeriodicRefreshInterval = 5 * time.Millisecond
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 	e.restore.UpdateRestoreStatus("", 100, nil)
 
@@ -1215,7 +1215,7 @@ func (s *TestSuite) TestWaitForRestoreCompleteFailsOnErrorAtFullProgress(c *C) {
 	}()
 	restorePeriodicRefreshInterval = 5 * time.Millisecond
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 	// backupstore reports a failed device sync or close together with
 	// progress 100 once all blocks were written.
@@ -1241,7 +1241,7 @@ func (s *TestSuite) TestWaitForRestoreCompleteAttributesErrorToBrokenReplica(c *
 		return newTestPollGroupIOPaths(map[string]bool{"bdev-a": true, "bdev-b": false}), nil
 	}
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{}
 	for _, name := range []string{"a", "b"} {
 		backend := newFakeBackend("replica-"+name, "10.0.0.1:1234")
@@ -1268,7 +1268,7 @@ func (s *TestSuite) TestEngineRestoreCloseVolumeDevReturnsSyncError(c *C) {
 	c.Assert(err, IsNil)
 	defer func() { _ = readEnd.Close() }()
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	r := NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 
 	err = r.CloseVolumeDev(writeEnd)
@@ -1286,7 +1286,7 @@ func (s *TestSuite) TestEngineRestoreCloseVolumeDevReturnsCloseError(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(f.Close(), IsNil)
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	r := NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 
 	err = r.CloseVolumeDev(f)
@@ -1302,7 +1302,7 @@ func (s *TestSuite) TestEngineRestoreCloseVolumeDevSucceeds(c *C) {
 	f, err := os.CreateTemp(c.MkDir(), "voldev")
 	c.Assert(err, IsNil)
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	r := NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 
 	c.Assert(r.CloseVolumeDev(f), IsNil)
@@ -1315,7 +1315,7 @@ func (s *TestSuite) TestEngineRestoreCloseVolumeDevSucceeds(c *C) {
 // restore device. The returned slice records every snapshot name passed to
 // the revert hook; the returned function restores the hook.
 func newRevertBaselineTestEngine(state btypes.ProgressState, snapshotName string, volumeDevOpened bool, revertErr error) (*Engine, *[]string, func()) {
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.State = lhtypes.InstanceStateRunning
 	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-b&volume=vol-a", "backup-b", e, nil)
 	e.restore.State = state
@@ -1502,7 +1502,7 @@ func (s *TestSuite) TestRevertRestoreBaselineWaitsForRunningEngine(c *C) {
 func (s *TestSuite) TestEngineRestoreStartNewRestoreResetsVolumeDevOpened(c *C) {
 	fmt.Println("Testing StartNewRestore resets volumeDevOpened for the next cycle")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	r := NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
 	r.volumeDevOpened = true
 
@@ -1514,7 +1514,7 @@ func (s *TestSuite) TestEngineRestoreStartNewRestoreResetsVolumeDevOpened(c *C) 
 func (s *TestSuite) TestPreflightReplicaIOPathsForRestorePassesWithoutCandidates(c *C) {
 	fmt.Println("Testing preflightReplicaIOPathsForRestore passes when no replica bdev is eligible for inspection")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	// The preflight must skip ERR backends and backends without an attached
 	// bdev, so the nil SPDK client is never dialed.
 	erroredBackend := newFakeBackend("replica-err", "10.0.0.1:1234")
@@ -1562,7 +1562,7 @@ func newPreflightTestEngine() (*Engine, func()) {
 	restorePreflightRetryInterval = time.Millisecond
 	restorePreflightTimeout = 5 * time.Millisecond
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{}
 	for _, name := range []string{"a", "b"} {
 		backend := newFakeBackend("replica-"+name, "10.0.0.1:1234")

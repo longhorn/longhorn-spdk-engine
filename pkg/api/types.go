@@ -31,6 +31,8 @@ type Replica struct {
 	UUID               string           `json:"uuid"`
 	LinkedCloneInfo    *LinkedCloneInfo `json:"linked_clone_info,omitempty"`
 	CloneSnapshotUsage map[string]int32 `json:"clone_snapshot_usage,omitempty"`
+
+	TransportType spdkrpc.TransportType `json:"transport_type"`
 }
 
 type LinkedCloneInfo struct {
@@ -107,6 +109,8 @@ func ProtoReplicaToReplica(r *spdkrpc.Replica) *Replica {
 		ErrorMsg:   r.ErrorMsg,
 		Rebuilding: r.Rebuilding,
 		UUID:       r.Uuid,
+
+		TransportType: r.TransportType,
 	}
 	for snapName, snapProtoLvol := range r.Snapshots {
 		res.Snapshots[snapName] = ProtoLvolToLvol(snapProtoLvol)
