@@ -68,7 +68,7 @@ func (lce *linkedCloneTestEnv) setupSrcReplicaWithSnapshot(c *C) func() {
 	spdkCli := lce.spdkCli
 
 	_, err := spdkCli.ReplicaCreate(lce.srcReplicaName, defaultTestDiskName, lce.disk.Uuid,
-		defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		defaultTestLvolSize, defaultTestReplicaPortCount, "", spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 	c.Assert(err, IsNil)
 
 	err = spdkCli.ReplicaSnapshotCreate(lce.srcReplicaName, lce.snapshotName,
@@ -89,7 +89,7 @@ func (lce *linkedCloneTestEnv) setupSrcReplicaWithSnapshot(c *C) func() {
 // createDstReplica creates the destination (clone) replica.
 func (lce *linkedCloneTestEnv) createDstReplica(c *C) {
 	_, err := lce.spdkCli.ReplicaCreate(lce.dstReplicaName, defaultTestDiskName,
-		lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 	c.Assert(err, IsNil)
 }
 
@@ -129,7 +129,7 @@ func (s *TestSuite) TestLinkedCloneReplicaReadableWritable(c *C) {
 		}
 
 		engine, err := lce.spdkCli.EngineCreate(lce.engineName, lce.volumeName,
-			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		defer func() {
@@ -266,7 +266,7 @@ func (s *TestSuite) TestLinkedCloneSnapshotDeleteBlocked(c *C) {
 			lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcReplica.PortStart))),
 		}
 		_, err = lce.spdkCli.EngineCreate(lce.engineName, lce.volumeName,
-			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, srcAddrMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, srcAddrMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() {
 			_ = lce.spdkCli.EngineDelete(lce.engineName)
@@ -366,7 +366,7 @@ func (lce *linkedCloneTestEnv) createNDstReplicas(c *C, n int) []string {
 		suffix := strings.ReplaceAll(util.UUID(), "-", "")[:6]
 		name := fmt.Sprintf("%s-dst-%d-%s", lce.volumeName, i, suffix)
 		_, err := lce.spdkCli.ReplicaCreate(name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		names[i] = name
 	}
@@ -390,7 +390,7 @@ func (lce *linkedCloneTestEnv) startNReplicaLinkedClone(c *C) {
 
 	// Create dst engine (no frontend needed for clone).
 	_, err := lce.spdkCli.EngineCreate(lce.engineName, lce.volumeName,
-		types.FrontendEmpty, defaultTestLvolSize, dstReplicaAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		types.FrontendEmpty, defaultTestLvolSize, dstReplicaAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 	c.Assert(err, IsNil)
 
 	// Create src engine (no frontend needed).
@@ -400,7 +400,7 @@ func (lce *linkedCloneTestEnv) startNReplicaLinkedClone(c *C) {
 		lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcReplica.PortStart))),
 	}
 	_, err = lce.spdkCli.EngineCreate(lce.srcEngineName, lce.volumeName,
-		types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 	c.Assert(err, IsNil)
 
 	// Execute N-replica simultaneous linked-clone.
@@ -535,7 +535,7 @@ func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
 		}
 		engineName := fmt.Sprintf("%s-rebuild-e", lce.volumeName)
 		_, err = lce.spdkCli.EngineCreate(engineName, lce.volumeName,
-			types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(engineName) }()
 
@@ -557,14 +557,14 @@ func (s *TestSuite) TestLinkedCloneRebuildNewReplica(c *C) {
 			lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcReplica.PortStart))),
 		}
 		_, err = lce.spdkCli.EngineCreate(lce.srcEngineName, lce.volumeName,
-			types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(lce.srcEngineName) }()
 
 		// Create a brand-new dst replica 2 (no prior clone data).
 		dst2Name := fmt.Sprintf("%s-dst2", lce.volumeName)
 		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
 
@@ -628,7 +628,7 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 		dst2Suffix := strings.ReplaceAll(util.UUID(), "-", "")[:6]
 		dst2Name := fmt.Sprintf("%s-dst2-%s", lce.volumeName, dst2Suffix)
 		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
 		err = lce.spdkCli.ReplicaSnapshotCloneDstStart(
@@ -647,7 +647,7 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 		}
 		engineName := fmt.Sprintf("%s-reuse-e", lce.volumeName)
 		_, err = lce.spdkCli.EngineCreate(engineName, lce.volumeName,
-			types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(engineName) }()
 
@@ -680,7 +680,7 @@ func (s *TestSuite) TestLinkedCloneRebuildReusedFailedReplica(c *C) {
 			lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcReplica.PortStart))),
 		}
 		_, err = lce.spdkCli.EngineCreate(lce.srcEngineName, lce.volumeName,
-			types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			types.FrontendEmpty, defaultTestLvolSize, srcAddrMap, 0, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(lce.srcEngineName) }()
 
@@ -731,12 +731,12 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		srcReplica2Name := fmt.Sprintf("%s-src-r2", lce.volumeName)
 
 		_, err = lce.spdkCli.ReplicaCreate(lce.srcReplicaName, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(lce.srcReplicaName, true) }()
 
 		_, err = lce.spdkCli.ReplicaCreate(srcReplica2Name, defaultTestDiskName,
-			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(srcReplica2Name, true) }()
 
@@ -751,7 +751,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 			map[string]string{
 				lce.srcReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(srcR1.PortStart))),
 				srcReplica2Name:    net.JoinHostPort(lce.ip, strconv.Itoa(int(srcR2.PortStart))),
-			}, 2, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			}, 2, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(lce.srcEngineName) }()
 
@@ -793,7 +793,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 			types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
 			map[string]string{
 				lce.dstReplicaName: net.JoinHostPort(lce.ip, strconv.Itoa(int(dstReplica1.PortStart))),
-			}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.EngineDelete(lce.engineName) }()
 
@@ -843,7 +843,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 
 		dst2Name := fmt.Sprintf("%s-expand-dst2", lce.volumeName)
 		_, err = lce.spdkCli.ReplicaCreate(dst2Name, defaultTestDiskName,
-			lce.disk.Uuid, expandedSize, defaultTestReplicaPortCount, "")
+			lce.disk.Uuid, expandedSize, defaultTestReplicaPortCount, "", spdkrpc.TransportType_TRANSPORT_TYPE_TCP)
 		c.Assert(err, IsNil)
 		defer func() { _ = lce.spdkCli.ReplicaDelete(dst2Name, true) }()
 
