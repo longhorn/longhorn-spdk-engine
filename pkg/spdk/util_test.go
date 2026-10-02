@@ -135,7 +135,7 @@ func (s *TestSuite) TestExtractBackingImageAndDiskUUID(c *C) {
 }
 
 func (s *TestSuite) TestSetReplicaAdderInjectsRealFallback(c *C) {
-	e := NewEngine("test-engine", "test-volume", types.FrontendEmpty, 1, nil, defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("test-engine", "test-volume", types.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 1, nil, defaultTestSnapshotMaxCount, nil)
 
 	firstMock := &MockReplicaAdder{}
 	e.SetReplicaAdder(firstMock)
@@ -172,4 +172,23 @@ func (s *TestSuite) TestConnectNVMfBdevAdrfamDetection(c *C) {
 		c.Assert(adrfam, Equals, tc.expectedAdrfam,
 			Commentf("Wrong adrfam for %s", tc.address))
 	}
+}
+
+func (s *TestSuite) TestNvmeTransportHelpers(c *C) {
+	fmt.Println("Testing NVMe-oF transport type mapping and comparison")
+
+	tcp := spdktypes.NvmeTransportTypeTCP
+	rdma := spdktypes.NvmeTransportTypeRDMA
+
+	for _, t := range []spdktypes.NvmeTransportType{tcp, rdma} {
+		c.Assert(nvmeTransportFromProto(nvmeTransportToProto(t)), Equals, t)
+	}
+	c.Assert(nvmeTransportToProto(""), Equals, nvmeTransportToProto(tcp))
+
+	c.Assert(isSameNvmeTransport(tcp, tcp), Equals, true)
+	c.Assert(isSameNvmeTransport(rdma, "RDMA"), Equals, true)
+	c.Assert(isSameNvmeTransport("", tcp), Equals, true)
+	c.Assert(isSameNvmeTransport(tcp, ""), Equals, true)
+	c.Assert(isSameNvmeTransport(rdma, tcp), Equals, false)
+	c.Assert(isSameNvmeTransport("", rdma), Equals, false)
 }
