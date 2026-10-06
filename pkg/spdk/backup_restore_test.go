@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/longhorn/backupstore"
+	"github.com/longhorn/types/pkg/generated/spdkrpc"
+
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
@@ -182,6 +185,95 @@ func (s *TestSuite) TestRecordBackupRestoreStartErrorPreservesLastRestored(c *C)
 	c.Assert(e.restore.LastRestored, Equals, "backup-old")
 	c.Assert(e.restore.CurrentRestoringBackup, Equals, "backup-new")
 	c.Assert(string(e.restore.State), Equals, "error")
+}
+
+func newTestRestoreLockConflictError() error {
+	return fmt.Errorf("failed to start full backup restore: %s backupstore/volumes/vol-a/locks/lock-a.lck when performing backup create/restore, %s",
+		backupstore.ErrorMessageFailedToAcquireLock, backupstore.ErrorMessagePleaseTryAgainLater)
+}
+
+func (s *TestSuite) TestHandleBackupRestoreStartLockConflictOnFirstRestore(c *C) {
+	fmt.Println("Testing a lock conflict on the first restore leaves no restore error behind")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeRW),
+	}
+	backupURL := "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a"
+	e.restore = NewEngineRestore(nil, backupURL, "backup-a", e, nil)
+	e.IsRestoring = true
+	lockErr := newTestRestoreLockConflictError()
+	resp := &spdkrpc.EngineBackupRestoreResponse{Errors: map[string]string{}}
+
+	e.Lock()
+	e.handleBackupRestoreStartErrorLocked(resp, nil, nil, lockErr)
+	e.Unlock()
+	e.IsRestoring = false
+
+	c.Assert(e.restore, IsNil)
+	c.Assert(resp.Errors, DeepEquals, map[string]string{
+		"10.0.0.1:1234": lockErr.Error(),
+		"10.0.0.2:1234": lockErr.Error(),
+	})
+
+	status, err := e.RestoreStatus()
+	c.Assert(err, IsNil)
+	c.Assert(status.Status, HasLen, 2)
+	for _, replicaStatus := range status.Status {
+		c.Assert(replicaStatus.IsRestoring, Equals, false)
+		c.Assert(replicaStatus.Error, Equals, "")
+	}
+}
+
+func (s *TestSuite) TestHandleBackupRestoreStartLockConflictRevertsIncrementalRestore(c *C) {
+	fmt.Println("Testing a lock conflict on an incremental restore keeps the last restored backup")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+	}
+	oldURL := "s3://backupbucket@us-east-1/backupstore?backup=backup-old&volume=vol-a"
+	e.restore = NewEngineRestore(nil, oldURL, "backup-old", e, nil)
+	e.restore.FinishRestore()
+
+	prevRestore := e.restore
+	prevRestoreStatus := prevRestore.DeepCopy()
+	e.restore.StartNewRestore("s3://backupbucket@us-east-1/backupstore?backup=backup-new&volume=vol-a", "backup-new", true)
+	resp := &spdkrpc.EngineBackupRestoreResponse{Errors: map[string]string{}}
+
+	e.Lock()
+	e.handleBackupRestoreStartErrorLocked(resp, prevRestore, prevRestoreStatus, newTestRestoreLockConflictError())
+	e.Unlock()
+
+	c.Assert(e.restore, Equals, prevRestore)
+	c.Assert(e.restore.LastRestored, Equals, "backup-old")
+	c.Assert(e.restore.CurrentRestoringBackup, Equals, "")
+	c.Assert(e.restore.BackupURL, Equals, oldURL)
+	c.Assert(e.restore.Error, Equals, "")
+	c.Assert(string(e.restore.State), Equals, "complete")
+	c.Assert(resp.Errors, HasLen, 1)
+}
+
+func (s *TestSuite) TestHandleBackupRestoreStartErrorRecordsNonLockError(c *C) {
+	fmt.Println("Testing a non-lock restore start error is recorded and reported per replica")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+	}
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	startErr := fmt.Errorf("failed to start full backup restore: source volume doesn't exist in backupstore")
+	resp := &spdkrpc.EngineBackupRestoreResponse{Errors: map[string]string{}}
+
+	e.Lock()
+	e.handleBackupRestoreStartErrorLocked(resp, nil, nil, startErr)
+	e.Unlock()
+
+	c.Assert(e.restore, NotNil)
+	c.Assert(e.restore.Error, Equals, startErr.Error())
+	c.Assert(string(e.restore.State), Equals, "error")
+	c.Assert(resp.Errors, DeepEquals, map[string]string{"10.0.0.1:1234": startErr.Error()})
 }
 
 func (s *TestSuite) TestCheckAndUpdateInfoFromReplicasNoLockAppliesBackendView(c *C) {
