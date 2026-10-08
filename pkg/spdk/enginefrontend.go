@@ -19,8 +19,10 @@ import (
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	commonbitmap "github.com/longhorn/go-common-libs/bitmap"
+	commontypes "github.com/longhorn/go-common-libs/types"
 	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
+	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
@@ -103,6 +105,10 @@ type EngineFrontend struct {
 	setRemoteEngineTargetANAStateFn func(targetIP, engineName string, anaState NvmeTCPANAState) error
 	// Test hook for waiting for an NVMe-TCP controller to reach live state.
 	waitForNvmeTCPControllerLiveFn func(transportAddress string, transportPort int32) error
+	// Test hook for dropping a superseded NVMe-TCP path after a switchover.
+	disconnectStaleNvmeTCPPathFn func(nqn, transportAddress, transportServiceID string) error
+	// Test hook for confirming the replacement path's host-side ANA state.
+	waitForNvmeTCPPathOptimizedFn func(nqn, transportAddress, transportServiceID string) error
 
 	// metadataDir is the base path for persisting engine frontend records.
 	// If empty, persistence is disabled.
@@ -1892,21 +1898,20 @@ func (ef *EngineFrontend) SwitchOverTarget(spdkClient *spdkclient.Client, newEng
 			"targetPort":    targetPort,
 		}).Info("Switched over engine frontend target")
 
-		// Do NOT explicitly disconnect the old controller path. Removing it
-		// immediately can race with the kernel processing the ANA state
-		// change on the new path — if the kernel hasn't fully switched to
-		// the new optimized path when the old controller is yanked, a brief
-		// "no available path" window causes I/O errors that make ext4 go
-		// read-only. Instead, let the kernel handle the stale controller
-		// through ctrl-loss-tmo. The old path's ANA is already set to
-		// "inaccessible" so no I/O will route through it.
-
 		// Persist updated record AFTER successful switchover.
 		ef.RLock()
-		if err := saveEngineFrontendRecord(ef.metadataDir, ef); err != nil {
-			ef.log.WithError(err).Warn("Failed to persist engine frontend record after switchover")
+		persistErr := saveEngineFrontendRecord(ef.metadataDir, ef)
+		if persistErr != nil {
+			ef.log.WithError(persistErr).Warn("Failed to persist engine frontend record after switchover; skipping stale path cleanup")
 		}
 		ef.RUnlock()
+
+		// Only clean up after successful persistence. The cleanup also waits
+		// for the host to observe the new path as live and ANA-optimized;
+		// completing the target-side ANA RPC is not sufficient evidence.
+		if persistErr == nil {
+			ef.dropSupersededNvmeTCPPath(oldNQN, oldTargetIP, oldTargetPort, targetIP, targetPort)
+		}
 
 		return nil
 
@@ -2223,10 +2228,17 @@ func (ef *EngineFrontend) switchOverTargetBlockdevPhased(phase SwitchoverPhase, 
 		*updateRequired = true
 
 		ef.RLock()
-		if err := saveEngineFrontendRecord(ef.metadataDir, ef); err != nil {
-			ef.log.WithError(err).Warn("Failed to persist engine frontend record after promoting phase")
+		persistErr := saveEngineFrontendRecord(ef.metadataDir, ef)
+		if persistErr != nil {
+			ef.log.WithError(persistErr).Warn("Failed to persist engine frontend record after promoting phase; skipping stale path cleanup")
 		}
 		ef.RUnlock()
+
+		// Retain the old path if persistence failed or the host has not yet
+		// observed the replacement path as live and ANA-optimized.
+		if persistErr == nil {
+			ef.dropSupersededNvmeTCPPath(oldNQN, oldTargetIP, oldTargetPort, newTargetIP, newTargetPort)
+		}
 
 		ef.log.WithFields(logrus.Fields{
 			"oldEngineName": oldEngineName,
@@ -2250,6 +2262,64 @@ func (ef *EngineFrontend) connectNvmeTCPPath(transportAddress string, transportP
 		return errors.Wrapf(ErrSwitchOverTargetInternal, "initiator is nil for engine frontend %s", ef.Name)
 	}
 	return ef.initiator.ConnectNVMeTCPPath(transportAddress, transportServiceID)
+}
+
+// disconnectStaleNvmeTCPPath removes one superseded NVMe-TCP path.
+//
+// The NQN is volume-scoped (see getVolumeTargetIdentity), so old and new
+// targets are paths of the SAME subsystem: DisconnectTarget would tear down
+// both, while DisconnectController matches on NQN + address and removes only
+// this one. It is a no-op if no controller matches.
+//
+// Callers MUST invoke this only after the new path is live and promoted, so no
+// I/O can route through the path being removed.
+func (ef *EngineFrontend) disconnectStaleNvmeTCPPath(nqn, transportAddress string, transportPort int32) error {
+	transportServiceID := strconv.Itoa(int(transportPort))
+	if ef.disconnectStaleNvmeTCPPathFn != nil {
+		return ef.disconnectStaleNvmeTCPPathFn(nqn, transportAddress, transportServiceID)
+	}
+
+	executor, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	if err != nil {
+		return errors.Wrap(err, "failed to create executor for stale NVMe-TCP path disconnect")
+	}
+
+	return initiator.DisconnectController(nqn, transportAddress, transportServiceID, executor)
+}
+
+// dropSupersededNvmeTCPPath best-effort removes the old path after a completed
+// switchover. Failure is swallowed: the volume is already served by the new
+// path, and the kernel still reaps the stale controller via ctrl-loss-tmo.
+func (ef *EngineFrontend) dropSupersededNvmeTCPPath(nqn, oldTargetIP string, oldTargetPort int32, newTargetIP string, newTargetPort int32) {
+	// Both addresses must be well formed. A malformed new address cannot be
+	// compared against the old one, and treating that mismatch as a superseded
+	// path would drop the path still serving the volume.
+	if nqn == "" || oldTargetIP == "" || oldTargetPort <= 0 || oldTargetPort > 65535 ||
+		newTargetIP == "" || newTargetPort <= 0 || newTargetPort > 65535 {
+		return
+	}
+	// Same address (e.g. an engine rename in place): no superseded path, and
+	// dropping the only path would strand the volume. Use the same address
+	// comparison as DisconnectController, including equivalent IPv6 forms.
+	if helperutil.IsSameNvmeAddr(oldTargetIP, newTargetIP) && oldTargetPort == newTargetPort {
+		return
+	}
+
+	log := ef.log.WithFields(logrus.Fields{
+		"nqn":           nqn,
+		"oldTargetIP":   oldTargetIP,
+		"oldTargetPort": oldTargetPort,
+	})
+	if err := ef.waitForNvmeTCPPathOptimized(nqn, newTargetIP, strconv.Itoa(int(newTargetPort))); err != nil {
+		log.WithError(err).Warn("Skipping superseded NVMe-TCP path cleanup because the replacement path is not confirmed live and ANA-optimized")
+		return
+	}
+	if err := ef.disconnectStaleNvmeTCPPath(nqn, oldTargetIP, oldTargetPort); err != nil {
+		log.WithError(err).Warn("Failed to disconnect superseded NVMe-TCP path; " +
+			"leaving it for the kernel to reap via ctrl-loss-tmo")
+		return
+	}
+	log.Info("Disconnected superseded NVMe-TCP path after switchover")
 }
 
 func (ef *EngineFrontend) reconnectNvmeTCPPath(transportAddress string, transportPort int32) error {
