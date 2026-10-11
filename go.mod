@@ -10,12 +10,12 @@ require (
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20260922010936-57b3845ad4ef
 	github.com/longhorn/go-common-libs v0.0.0-20260907073218-e53e6775eb8a
-	github.com/longhorn/go-spdk-helper v0.10.1-0.20260921021616-6102449746a0
+	github.com/longhorn/go-spdk-helper v0.11.0
 	github.com/longhorn/types v0.0.0-20260912171147-ce65698c8b35
 	github.com/sirupsen/logrus v1.10.2
 	github.com/stretchr/testify v1.12.1
 	go.uber.org/multierr v1.11.0
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	k8s.io/apimachinery v0.37.0
@@ -74,7 +74,7 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect; sindirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/mount-utils v0.31.3 // indirect
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect
