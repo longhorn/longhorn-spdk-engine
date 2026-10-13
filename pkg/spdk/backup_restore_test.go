@@ -740,6 +740,84 @@ func (s *TestSuite) TestHandleBackupRestoreStartErrorRecordsNonLockError(c *C) {
 	c.Assert(resp.Errors, DeepEquals, map[string]string{"10.0.0.1:1234": startErr.Error()})
 }
 
+func (s *TestSuite) TestRevertRestoresFinalizedGuardAndErrorSource(c *C) {
+	fmt.Println("Testing EngineRestore.Revert restores the finalized guard and the error source that StartNewRestore reset")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-old&volume=vol-a", "backup-old", e, nil)
+	e.restore.FinalizeRestore(nil)
+	c.Assert(e.restore.State, Equals, btypes.ProgressStateComplete)
+
+	prevRestoreStatus := e.restore.DeepCopy()
+	e.restore.StartNewRestore("s3://backupbucket@us-east-1/backupstore?backup=backup-new&volume=vol-a", "backup-new", true)
+	e.restore.RecordErrorSource("replica-1")
+	newCycleCtx := e.restore.Context()
+
+	e.restore.Revert(prevRestoreStatus)
+
+	c.Assert(e.restore.State, Equals, btypes.ProgressStateComplete)
+	c.Assert(e.restore.LastRestored, Equals, "backup-old")
+	c.Assert(e.restore.ErrorSourceReplicaName, Equals, "")
+	c.Assert(newCycleCtx.Err(), NotNil)
+
+	// The reverted restore is finished; a late status report must not touch it.
+	e.restore.UpdateRestoreStatus("", 0, fmt.Errorf("late report"))
+	c.Assert(e.restore.State, Equals, btypes.ProgressStateComplete)
+	c.Assert(e.restore.Error, Equals, "")
+
+	// The next restore still gets a fresh cycle.
+	e.restore.StartNewRestore("s3://backupbucket@us-east-1/backupstore?backup=backup-new&volume=vol-a", "backup-new", true)
+	c.Assert(e.restore.Context().Err(), IsNil)
+	e.restore.UpdateRestoreStatus("", 10, nil)
+	c.Assert(e.restore.Progress, Equals, 10)
+}
+
+func (s *TestSuite) TestHandleBackupRestoreStartLockConflictReleasesDroppedRestoreCycle(c *C) {
+	fmt.Println("Testing a lock conflict that drops the new restore object releases its cycle context")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+	}
+	dropped := NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	e.restore = dropped
+	droppedCtx := dropped.Context()
+	resp := &spdkrpc.EngineBackupRestoreResponse{Errors: map[string]string{}}
+
+	e.Lock()
+	e.handleBackupRestoreStartErrorLocked(resp, nil, nil, newTestRestoreLockConflictError())
+	e.Unlock()
+
+	c.Assert(e.restore, IsNil)
+	c.Assert(droppedCtx.Err(), NotNil)
+	// The engine context is not affected.
+	c.Assert(e.ctx.Err(), IsNil)
+}
+
+func (s *TestSuite) TestBackupRestorePrepareReleasesReplacedErroredCycle(c *C) {
+	fmt.Println("Testing the next restore releases the cycle context of the errored restore it replaces")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+	}
+
+	e.Lock()
+	e.recordBackupRestoreStartErrorLocked(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", nil, fmt.Errorf("start failed"))
+	errored := e.restore
+	erroredCtx := errored.Context()
+	c.Assert(erroredCtx.Err(), IsNil)
+
+	_, err := e.backupRestorePrepare(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-b&volume=vol-a", nil, nil)
+	e.Unlock()
+	c.Assert(err, IsNil)
+
+	c.Assert(e.restore, Not(Equals), errored)
+	c.Assert(erroredCtx.Err(), NotNil)
+	c.Assert(e.restore.Context().Err(), IsNil)
+	c.Assert(e.ctx.Err(), IsNil)
+}
+
 func (s *TestSuite) TestFinalizeRestoreIgnoresLateWorkerReports(c *C) {
 	fmt.Println("Testing EngineRestore ignores worker status reports after the outcome is recorded")
 

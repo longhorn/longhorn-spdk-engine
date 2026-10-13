@@ -112,6 +112,8 @@ func (r *EngineRestore) StartNewRestore(backupURL string, currentRestoringBackup
 	r.CurrentRestoringBackup = currentRestoringBackup
 }
 
+// DeepCopy returns a status snapshot for Revert. The copy has no lock,
+// context, or stop channel of its own and must not be used to run a restore.
 func (r *EngineRestore) DeepCopy() *EngineRestore {
 	r.RLock()
 	defer r.RUnlock()
@@ -126,20 +128,34 @@ func (r *EngineRestore) DeepCopy() *EngineRestore {
 		Error:                  r.Error,
 		ErrorSourceReplicaName: r.ErrorSourceReplicaName,
 		Progress:               r.Progress,
+		finalized:              r.finalized,
 	}
 }
 
-// Revert restores the status fields that StartNewRestore resets.
+// Revert restores the status fields that StartNewRestore resets and
+// releases the cycle StartNewRestore began.
 func (r *EngineRestore) Revert(prev *EngineRestore) {
 	r.Lock()
 	defer r.Unlock()
 
 	r.Progress = prev.Progress
 	r.Error = prev.Error
+	r.ErrorSourceReplicaName = prev.ErrorSourceReplicaName
 	r.BackupURL = prev.BackupURL
 	r.State = prev.State
 	r.LastRestored = prev.LastRestored
 	r.CurrentRestoringBackup = prev.CurrentRestoringBackup
+	r.finalized = prev.finalized
+	r.cancelCtx()
+}
+
+// ReleaseCycle cancels the cycle context of a restore that is being dropped,
+// so the context does not stay registered under the engine context until
+// engine deletion. The restore status is left unchanged.
+func (r *EngineRestore) ReleaseCycle() {
+	r.Lock()
+	defer r.Unlock()
+	r.cancelCtx()
 }
 
 // RecordErrorSource records the name of the replica responsible for the

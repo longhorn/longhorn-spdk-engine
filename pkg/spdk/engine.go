@@ -2475,6 +2475,9 @@ func (e *Engine) handleBackupRestoreStartErrorLocked(resp *spdkrpc.EngineBackupR
 	if backupstore.IsLockConflictError(startErr) {
 		e.log.WithError(startErr).Warn("Reverting the restore status since the backupstore lock is held by another operation")
 		if prevRestore == nil || e.restore != prevRestore {
+			// The restore built for this attempt is dropped; release its cycle
+			// context since no worker was started.
+			e.restore.ReleaseCycle()
 			e.restore = prevRestore
 		} else {
 			e.restore.Revert(prevRestoreStatus)
@@ -2565,6 +2568,11 @@ func (e *Engine) backupRestorePrepare(spdkClient *spdkclient.Client, backupUrl s
 		}
 		if e.restore.State == btypes.ProgressStateError || e.restore.State == btypes.ProgressStateCanceled {
 			lastRestored := e.restore.LastRestored
+			// The errored cycle is replaced, not restarted, so nothing else
+			// cancels its context; release it here. A cycle that ran and
+			// finished has already been canceled by FinalizeRestore; the
+			// second cancel is a no-op.
+			e.restore.ReleaseCycle()
 			e.restore = NewEngineRestore(spdkClient, backupUrl, backupName, e, superiorPortAllocator)
 			e.restore.LastRestored = lastRestored
 			if !e.canDoIncrementalRestore(e.restore, backupUrl, backupName) {
