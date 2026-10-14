@@ -334,7 +334,8 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 // kernel multipath layer does not route I/O to the new path until explicitly
 // promoted.
 func (e *Engine) createNVMeTCPTarget(spdkClient *spdkclient.Client, superiorPortAllocator *commonbitmap.Bitmap, portCount int32, initialANAState NvmeTCPANAState) error {
-	podIP, err := commonnet.GetIPForPod() // nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+	// nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+	podIP, err := commonnet.GetIPForPod()
 	if err != nil {
 		return err
 	}

@@ -1575,7 +1575,8 @@ func (sg *ShardGroup) tryDiscoverExistingLvstore(spdkClient *spdkclient.Client) 
 // (for the head lvol). A ShardGroup serves one target, so it always uses one port
 // and does not use the request's port_count.
 func (sg *ShardGroup) prepareIPAndPort(superiorPortAllocator *commonbitmap.Bitmap) error {
-	podIP, err := commonnet.GetIPForPod() // nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+	// nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+	podIP, err := commonnet.GetIPForPod()
 	if err != nil {
 		return err
 	}
