@@ -188,7 +188,8 @@ func (s *Server) EngineFrontendReplicaAdd(ctx context.Context, req *spdkrpc.Engi
 
 	// Resolve the local node IP so Engine can call back to this EF
 	// for suspend/resume during the finish step.
-	localIP, err := commonnet.GetIPForPod() // nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+	// nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+	localIP, err := commonnet.GetIPForPod()
 	if err != nil {
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to get local IP for engine frontend %s: %v", ef.Name, err)
 	}
@@ -246,7 +247,8 @@ func (s *Server) EngineFrontendCreate(ctx context.Context, req *spdkrpc.EngineFr
 	// co-located on the same instance-manager pod, derive the address from
 	// the pod IP.
 	if targetAddress == "" {
-		if podIP, ipErr := commonnet.GetIPForPod(); ipErr == nil && podIP != "" { // nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+		// nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+		if podIP, ipErr := commonnet.GetIPForPod(); ipErr == nil && podIP != "" {
 			targetAddress = net.JoinHostPort(podIP, strconv.Itoa(types.SPDKServicePort))
 		}
 	}
