@@ -92,7 +92,7 @@ func NewBackup(spdkClient *spdkclient.Client, backupName, volumeName, snapshotNa
 		replicaAddress = replica.GetAddress()
 	}
 
-	podIP, err := commonnet.GetIPForPod()
+	podIP, err := commonnet.GetIPForPod() // nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
 	if err != nil {
 		return nil, err
 	}
