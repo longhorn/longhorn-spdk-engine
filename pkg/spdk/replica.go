@@ -363,7 +363,8 @@ func (r *Replica) GetAddress() string {
 }
 
 func (r *Replica) prepareIPAndPorts(portCount int32, superiorPortAllocator *commonbitmap.Bitmap) error {
-	podIP, err := commonnet.GetIPForPod() // nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+	// nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
+	podIP, err := commonnet.GetIPForPod()
 	if err != nil {
 		return err
 	}
