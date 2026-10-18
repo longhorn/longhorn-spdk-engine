@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.26.0@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 FROM golangci/golangci-lint:v2.12.2@sha256:5cceeef04e53efe1470638d4b4b4f5ceefd574955ab3941b2d9a68a8c9ad5240 AS golangci-lint
 
-FROM registry.suse.com/bci/bci-base:15.7@sha256:4e723af56f41107c2690afaed283ecd702d2b3ee5da673c94e775b1d038728fe AS base
+FROM registry.suse.com/bci/bci-base:15.7@sha256:b9d19a145a6a7832291fcaf354c61b9d229e38dc4b47ea90e885d9dc02079beb AS base
 
 ARG TARGETARCH
 ARG http_proxy
