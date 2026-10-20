@@ -114,6 +114,7 @@ func (u *replicaBackend) Get() (*BackendView, error) {
 		Snapshots:        r.Snapshots,
 		BackingImageName: r.BackingImageName,
 		LvsUUID:          r.LvsUUID,
+		TransportType:    nvmeTransportFromProto(r.TransportType),
 	}, nil
 }
 
