@@ -7,6 +7,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/longhorn/types/pkg/generated/enginerpc"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
@@ -20,7 +21,7 @@ import (
 // DATA_LAYOUT_TYPE_SHARDED constructs a single shardGroupBackend (EC).
 // Without forwarding this field, callers would default to the proto3 zero
 // value (REPLICATED), and EC volumes would be silently miscreated as RAID1.
-func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool, snapshotMaxCount int32, dataLayoutType spdkrpc.DataLayoutType, transportType spdkrpc.TransportType) (*api.Engine, error) {
+func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool, snapshotMaxCount int32, dataLayoutType spdkrpc.DataLayoutType, transportType enginerpc.TransportType) (*api.Engine, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to start engine: missing required parameter name")
 	}
