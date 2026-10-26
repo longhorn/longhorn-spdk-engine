@@ -1788,7 +1788,7 @@ func (s *TestSuite) TestSPDKEngineCreateWithSalvageRequested(c *C) {
 		c.Assert(err, IsNil)
 	}()
 
-	devices, err := helperinitiator.GetDevices(ip, primaryPort, primaryNQN, ne)
+	devices, err := waitForNvmeDevices(ip, primaryPort, primaryNQN, ne)
 	c.Assert(err, IsNil)
 	c.Assert(len(devices), Equals, 1)
 	c.Assert(len(devices[0].Namespaces), Equals, 1)
@@ -4941,6 +4941,25 @@ func connectTargetWithInternalHostNQN(ip, port, nqn string, ne *commonns.Executo
 		"-o", "json",
 	}, helpertypes.ExecuteTimeout)
 	return err
+}
+
+// waitForNvmeDevices retries GetDevices because the kernel creates the namespace block device
+// asynchronously: `nvme connect` returns once the controller is live, which can be before the
+// namespace shows up in `nvme list`.
+func waitForNvmeDevices(ip, port, nqn string, ne *commonns.Executor) (devices []helperinitiator.Device, err error) {
+	err = retry.New(
+		retry.Attempts(30),
+		retry.Delay(1*time.Second),
+		retry.DelayType(retry.FixedDelay),
+		retry.LastErrorOnly(true),
+	).Do(
+		func() error {
+			var getErr error
+			devices, getErr = helperinitiator.GetDevices(ip, port, nqn, ne)
+			return getErr
+		},
+	)
+	return devices, err
 }
 
 func writeDataToBlockDevice(ne *commonns.Executor, endpoint string, offsetInMB, dataCountInMB int64) error {
