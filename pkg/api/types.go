@@ -3,6 +3,7 @@ package api
 import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/longhorn/types/pkg/generated/enginerpc"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
@@ -32,7 +33,7 @@ type Replica struct {
 	LinkedCloneInfo    *LinkedCloneInfo `json:"linked_clone_info,omitempty"`
 	CloneSnapshotUsage map[string]int32 `json:"clone_snapshot_usage,omitempty"`
 
-	TransportType spdkrpc.TransportType `json:"transport_type"`
+	TransportType enginerpc.TransportType `json:"transport_type"`
 }
 
 type LinkedCloneInfo struct {
