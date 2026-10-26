@@ -22,7 +22,7 @@ import (
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
 
-	"github.com/longhorn/types/pkg/generated/spdkrpc"
+	"github.com/longhorn/types/pkg/generated/enginerpc"
 )
 
 func discoverAndConnectNVMeTarget(srcIP string, srcPort int32, maxRetries int, retryInterval time.Duration) (subsystemNQN, controllerName string, err error) {
@@ -123,14 +123,14 @@ func splitHostPort(address string) (string, int32, error) {
 	return address, 0, nil
 }
 
-// nvmeTransportFromProto maps the spdkrpc.TransportType enum to the
+// nvmeTransportFromProto maps the enginerpc.TransportType enum to the
 // go-spdk-helper NVMe transport type used throughout the engine/replica code.
 // The zero value (TRANSPORT_TYPE_TCP) maps to TCP so that engines and
 // replicas created by an older control plane - which never sets the field -
 // keep their historical TCP behavior.
-func nvmeTransportFromProto(t spdkrpc.TransportType) spdktypes.NvmeTransportType {
+func nvmeTransportFromProto(t enginerpc.TransportType) spdktypes.NvmeTransportType {
 	switch t {
-	case spdkrpc.TransportType_TRANSPORT_TYPE_RDMA:
+	case enginerpc.TransportType_TRANSPORT_TYPE_RDMA:
 		return spdktypes.NvmeTransportTypeRDMA
 	default:
 		return spdktypes.NvmeTransportTypeTCP
@@ -138,11 +138,11 @@ func nvmeTransportFromProto(t spdkrpc.TransportType) spdktypes.NvmeTransportType
 }
 
 // nvmeTransportToProto is the inverse of nvmeTransportFromProto.
-func nvmeTransportToProto(t spdktypes.NvmeTransportType) spdkrpc.TransportType {
+func nvmeTransportToProto(t spdktypes.NvmeTransportType) enginerpc.TransportType {
 	if isSameNvmeTransport(t, spdktypes.NvmeTransportTypeRDMA) {
-		return spdkrpc.TransportType_TRANSPORT_TYPE_RDMA
+		return enginerpc.TransportType_TRANSPORT_TYPE_RDMA
 	}
-	return spdkrpc.TransportType_TRANSPORT_TYPE_TCP
+	return enginerpc.TransportType_TRANSPORT_TYPE_TCP
 }
 
 // isSameNvmeTransport compares two NVMe-oF transport types case-insensitively,
