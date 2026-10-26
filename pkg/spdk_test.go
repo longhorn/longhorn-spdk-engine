@@ -4947,17 +4947,16 @@ func connectTargetWithInternalHostNQN(ip, port, nqn string, ne *commonns.Executo
 // asynchronously: `nvme connect` returns once the controller is live, which can be before the
 // namespace shows up in `nvme list`.
 func waitForNvmeDevices(ip, port, nqn string, ne *commonns.Executor) (devices []helperinitiator.Device, err error) {
-	err = retry.New(
-		retry.Attempts(30),
-		retry.Delay(1*time.Second),
-		retry.DelayType(retry.FixedDelay),
-		retry.LastErrorOnly(true),
-	).Do(
+	err = retry.Do(
 		func() error {
 			var getErr error
 			devices, getErr = helperinitiator.GetDevices(ip, port, nqn, ne)
 			return getErr
 		},
+		retry.Attempts(30),
+		retry.Delay(1*time.Second),
+		retry.DelayType(retry.FixedDelay),
+		retry.LastErrorOnly(true),
 	)
 	return devices, err
 }
