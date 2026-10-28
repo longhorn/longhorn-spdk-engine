@@ -14,7 +14,7 @@ jobs:
     runs-on: cncf-ubuntu-16-64-x86
     steps:
     - name: Checkout code
-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install make curl git kmod
       run: |
@@ -33,7 +33,7 @@ jobs:
     - name: Run ci
       run: make ci
 
-    - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+    - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
       with:
         files: ./coverage.out
         flags: unittests
@@ -45,7 +45,7 @@ jobs:
     runs-on: oracle-vm-16cpu-64gb-arm64
     steps:
     - name: Checkout code
-      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install make curl git kmod
       run: |
@@ -64,7 +64,7 @@ jobs:
     - name: Run ci
       run: sudo make ci
 
-    - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+    - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
       with:
         files: ./coverage.out
         flags: unittests
