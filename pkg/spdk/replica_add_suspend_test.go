@@ -21,16 +21,22 @@ import (
 type fakeEngineFrontendSuspendServer struct {
 	spdkrpc.UnimplementedSPDKServiceServer
 
-	mu         sync.Mutex
-	suspendErr error
-	suspends   int
-	resumes    int
+	mu           sync.Mutex
+	suspendErr   error
+	suspends     int
+	resumes      int
+	suspendNames []string
+	noFlush      bool
+	noLockFs     bool
 }
 
-func (f *fakeEngineFrontendSuspendServer) EngineFrontendSuspend(context.Context, *spdkrpc.EngineFrontendSuspendRequest) (*emptypb.Empty, error) {
+func (f *fakeEngineFrontendSuspendServer) EngineFrontendSuspend(_ context.Context, req *spdkrpc.EngineFrontendSuspendRequest) (*emptypb.Empty, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.suspends++
+	f.suspendNames = append(f.suspendNames, req.Name)
+	f.noFlush = req.NoFlush
+	f.noLockFs = req.NoLockFs
 	if f.suspendErr != nil {
 		return nil, f.suspendErr
 	}
@@ -111,6 +117,11 @@ func TestReplicaAddFrontendSuspendResumeWrapper(t *testing.T) {
 			if fake.suspends != 1 {
 				t.Fatalf("suspends = %d, want 1", fake.suspends)
 			}
+			// Syncing and freezing the filesystem can exceed the dmsetup timeout under
+			// heavy writes, and neither step of the replica add needs it.
+			if !fake.noFlush || !fake.noLockFs {
+				t.Fatalf("suspend request noFlush = %v, noLockFs = %v, want both true", fake.noFlush, fake.noLockFs)
+			}
 			if wantResumes := map[bool]int{true: 1, false: 0}[tc.wantResume]; fake.resumes != wantResumes {
 				t.Fatalf("resumes = %d, want %d", fake.resumes, wantResumes)
 			}
@@ -136,5 +147,44 @@ func TestReplicaAddFrontendSuspendResumeWrapperUnreachable(t *testing.T) {
 		if !suspendRequired && (err != nil || !worked) {
 			t.Fatalf("finish step did not run: err %v, work ran %v", err, worked)
 		}
+	}
+}
+
+// The default suspension, used by other callers of the RPC, must keep syncing and
+// freezing the filesystem.
+func TestEngineFrontendSuspendKeepsFlushByDefault(t *testing.T) {
+	fake, address := startFakeEngineFrontendSuspendServer(t, nil)
+	cli, err := client.NewSPDKClient(address)
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	defer func() {
+		if errClose := cli.Close(); errClose != nil {
+			t.Errorf("close client: %v", errClose)
+		}
+	}()
+
+	if err := cli.EngineFrontendSuspend("ef"); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	fake.mu.Lock()
+	noFlush, noLockFs := fake.noFlush, fake.noLockFs
+	fake.mu.Unlock()
+	if noFlush || noLockFs {
+		t.Fatalf("default suspend request noFlush = %v, noLockFs = %v, want both false", noFlush, noLockFs)
+	}
+
+	if err := cli.EngineFrontendSuspendWithOptions("ef", true, false); err != nil {
+		t.Fatalf("suspend with options: %v", err)
+	}
+	fake.mu.Lock()
+	noFlush, noLockFs = fake.noFlush, fake.noLockFs
+	names := append([]string(nil), fake.suspendNames...)
+	fake.mu.Unlock()
+	if !noFlush || noLockFs {
+		t.Fatalf("suspend request noFlush = %v, noLockFs = %v, want true and false", noFlush, noLockFs)
+	}
+	if len(names) != 2 || names[0] != "ef" || names[1] != "ef" {
+		t.Fatalf("suspend names = %v, want [ef ef]", names)
 	}
 }
