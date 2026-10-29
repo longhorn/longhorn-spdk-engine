@@ -944,6 +944,34 @@ func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
 	)
 	c.Assert(err, IsNil)
 	c.Assert(strings.TrimSpace(checksumAfter), Equals, strings.TrimSpace(checksumBefore))
+
+	// Suspending without flushing or freezing the filesystem, as the replica add does,
+	// must still block the new IO until the engine frontend is resumed.
+	err = spdkCli.EngineFrontendSuspendWithOptions(engineFrontend.Name, true, true)
+	c.Assert(err, IsNil)
+
+	_, err = ne.Execute(nil, "dd",
+		[]string{
+			"if=/dev/urandom",
+			fmt.Sprintf("of=%s", endpoint),
+			"bs=1M", "count=1", "seek=0", "oflag=direct", "conv=notrunc", "status=none",
+		},
+		10*time.Second,
+	)
+	c.Assert(err, NotNil)
+
+	err = spdkCli.EngineFrontendResume(engineFrontend.Name)
+	c.Assert(err, IsNil)
+
+	_, err = ne.Execute(nil, "dd",
+		[]string{
+			"if=/dev/urandom",
+			fmt.Sprintf("of=%s", endpoint),
+			"bs=1M", "count=1", "seek=0", "oflag=direct", "conv=notrunc", "status=none",
+		},
+		10*time.Second,
+	)
+	c.Assert(err, IsNil)
 }
 
 func (s *TestSuite) TestSPDKEngineFrontendExpand(c *C) {
