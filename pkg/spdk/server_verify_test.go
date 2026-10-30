@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"time"
 
+	"go.uber.org/multierr"
+
 	cockroacherrors "github.com/cockroachdb/errors"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -649,6 +651,51 @@ func (s *TestSuite) TestToEngineFrontendCreateGRPCErrorMapsKnownErrors(c *C) {
 		st, ok := grpcstatus.FromError(grpcErr)
 		c.Assert(ok, Equals, true, Commentf("case=%s", tc.name))
 		c.Assert(st.Code(), Equals, tc.expectedCode, Commentf("case=%s", tc.name))
+	}
+}
+
+func (s *TestSuite) TestToSwitchOverGRPCErrorMapsRestartRequiredToAborted(c *C) {
+	fmt.Println("Testing toSwitchOverGRPCError maps a restart-required error to Aborted")
+
+	restartRequiredErr := cockroacherrors.Wrapf(ErrSwitchOverRestartRequired, "failed to reload NVMe device info during promoting phase for %s", "ef-test")
+
+	testCases := []struct {
+		name         string
+		err          error
+		expectedCode grpccodes.Code
+	}{
+		{
+			name:         "restart required",
+			err:          restartRequiredErr,
+			expectedCode: grpccodes.Aborted,
+		},
+		{
+			name:         "restart required with failed rollback carrying a grpc status",
+			err:          multierr.Append(restartRequiredErr, grpcstatus.Error(grpccodes.Unavailable, "failed to restore old target")),
+			expectedCode: grpccodes.Aborted,
+		},
+		{
+			name:         "internal failure",
+			err:          cockroacherrors.Wrap(ErrSwitchOverTargetInternal, "failed to set ANA state"),
+			expectedCode: grpccodes.Internal,
+		},
+		{
+			name:         "precondition failure",
+			err:          cockroacherrors.Wrap(ErrSwitchOverTargetPrecondition, "switchover is already in progress"),
+			expectedCode: grpccodes.FailedPrecondition,
+		},
+	}
+
+	for _, tc := range testCases {
+		grpcErr := toSwitchOverGRPCError(tc.err, "failed to switch over target for %s", "ef-test")
+		st, ok := grpcstatus.FromError(grpcErr)
+		c.Assert(ok, Equals, true, Commentf("case=%s", tc.name))
+		c.Assert(st.Code(), Equals, tc.expectedCode, Commentf("case=%s", tc.name))
+		if tc.expectedCode == grpccodes.Aborted {
+			// Keep the message text for managers that match it across gRPC.
+			c.Assert(st.Message(), Matches, "(?s).*failed to reload NVMe device info during promoting phase.*", Commentf("case=%s", tc.name))
+			c.Assert(st.Message(), Matches, "(?s).*"+ErrSwitchOverRestartRequired.Error()+".*", Commentf("case=%s", tc.name))
+		}
 	}
 }
 
