@@ -2,6 +2,8 @@ github.com/0xPolygon/polygon-edge v1.3.3 h1:uk59QLnEGijKdK0dUbBl4/yh5xnUBbLRS/am
 github.com/0xPolygon/polygon-edge v1.3.3/go.mod h1:c3kqmV9xWHTQD8jRCvsYEkcIdMeeKIEkZ0xSkj4H2Gk=
 github.com/RoaringBitmap/roaring v1.9.4 h1:yhEIoH4YezLYT04s1nHehNO64EKFTop/wBhxv2QzDdQ=
 github.com/RoaringBitmap/roaring v1.9.4/go.mod h1:6AXUsoIEzDTFFQCe1RbGA6uFONMhvejWj5rqITANK90=
+github.com/apoorvajagtap/longhorn-types v0.0.0-20261031145929-2a5c2781dce4 h1:eyhaXkTbLPv1TLRfNJYWxKT2bfxQC9XztUQNo7CFqqA=
+github.com/apoorvajagtap/longhorn-types v0.0.0-20261031145929-2a5c2781dce4/go.mod h1:/B7OfEhPyhWGNjtfuJr7/zUT9GUArLzIo2u8SvM/pIg=
 github.com/avast/retry-go/v4 v4.7.0 h1:yjDs35SlGvKwRNSykujfjdMxMhMQQM0TnIjJaHB+Zio=
 github.com/avast/retry-go/v4 v4.7.0/go.mod h1:ZMPDa3sY2bKgpLtap9JRUgk2yTAba7cgiFhqxY2Sg6Q=
 github.com/avast/retry-go/v5 v5.0.0 h1:kf1Qc2UsTZ4qq8elDymqfbISvkyMuhgRxuJqX2NHP7k=
@@ -73,8 +75,6 @@ github.com/longhorn/go-common-libs v0.0.0-20261023023359-4e90b601fcb9 h1:aN4oUNv
 github.com/longhorn/go-common-libs v0.0.0-20261023023359-4e90b601fcb9/go.mod h1:jhyUe7xn1ZnTC1WVCcZSNRe02U/zj0ayTYxY1Xipn1c=
 github.com/longhorn/go-spdk-helper v0.13.1-0.20261029031309-fbec96a41518 h1:PhHNdttmwacGLITg3FKC8cpUvsitBeyEtlXkQW/rY58=
 github.com/longhorn/go-spdk-helper v0.13.1-0.20261029031309-fbec96a41518/go.mod h1:Q91JPmaAOi9p+y7Mj5j7qC+hSXxkcY4vMwWQ9N0PhYE=
-github.com/longhorn/types v0.0.0-20261030035820-c6ac902022cf h1:yY4WuDKME+/QCn2YL+k32A+z0jQl0GClYQUOdGH5NZk=
-github.com/longhorn/types v0.0.0-20261030035820-c6ac902022cf/go.mod h1:/B7OfEhPyhWGNjtfuJr7/zUT9GUArLzIo2u8SvM/pIg=
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
 github.com/mitchellh/go-ps v1.0.0 h1:i6ampVEEF4wQFF+bkYfwYgY+F/uYJDktmvLPf7qIgjc=
 github.com/mitchellh/go-ps v1.0.0/go.mod h1:J4lOc8z8yJs6vUwklHw2XEIiT4z4C40KtWVN3nvg8Pg=
