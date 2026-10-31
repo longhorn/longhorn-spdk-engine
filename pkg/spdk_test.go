@@ -1258,6 +1258,132 @@ func (s *TestSuite) TestSPDKEngineSnapshotCreateAndDelete(c *C) {
 	c.Assert(err, NotNil)
 }
 
+// TestSPDKEngineQosLimit validates the volume IO limit is applied to the engine
+// raid bdev at creation, kept across a snapshot revert that recreates the raid
+// bdev, and can be updated and removed at runtime.
+func (s *TestSuite) TestSPDKEngineQosLimit(c *C) {
+	fmt.Println("Testing SPDK engine QoS limit")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	rawSPDKCli, err := helperclient.NewClient(context.Background())
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := rawSPDKCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close raw SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	volumeName := getVolumeName()
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	replicaNames := []string{
+		fmt.Sprintf("%s-replica-1", volumeName),
+		fmt.Sprintf("%s-replica-2", volumeName),
+	}
+	replicas := make(map[string]*api.Replica)
+
+	defer func() {
+		err = spdkCli.EngineDelete(engineName)
+		c.Assert(err, IsNil)
+
+		for _, replica := range replicas {
+			err = spdkCli.ReplicaDelete(replica.Name, true)
+			c.Assert(err, IsNil)
+		}
+	}()
+
+	for _, replicaName := range replicaNames {
+		replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		c.Assert(err, IsNil)
+		replicas[replicaName] = replica
+	}
+
+	replicaAddressMap := make(map[string]string)
+	for _, replica := range replicas {
+		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+	}
+
+	// checkQosLimit verifies both the limit SPDK enforces on the raid bdev and
+	// the limit the engine reports.
+	checkQosLimit := func(expected api.QosLimit) {
+		bdevs, err := rawSPDKCli.BdevGetBdevs(engineName, 0)
+		c.Assert(err, IsNil)
+		c.Assert(len(bdevs), Equals, 1)
+		c.Assert(int64(bdevs[0].AssignedRateLimits.RwIosPerSec), Equals, expected.RwIOsPerSec)
+		c.Assert(int64(bdevs[0].AssignedRateLimits.RwMbytesPerSec), Equals, expected.RwMBPerSec)
+
+		engine, err := spdkCli.EngineGet(engineName)
+		c.Assert(err, IsNil)
+		c.Assert(engine.QosLimit, Equals, expected)
+	}
+
+	// Revert requires an engine without a frontend.
+	createLimit := &spdkrpc.VolumeQosLimit{RwIosPerSec: 10000, RwMbytesPerSec: 100}
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, createLimit)
+	c.Assert(err, IsNil)
+	c.Assert(engine.State, Equals, types.InstanceStateRunning)
+	c.Assert(engine.QosLimit, Equals, api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
+	checkQosLimit(api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
+
+	snapshotName := "snapshot-1"
+	_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName)
+	c.Assert(err, IsNil)
+
+	// Snapshot revert deletes and recreates the raid bdev.
+	err = spdkCli.EngineSnapshotRevert(engineName, snapshotName)
+	c.Assert(err, IsNil)
+	checkQosLimit(api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
+
+	err = spdkCli.EngineSetQosLimit(engineName, &spdkrpc.VolumeQosLimit{RwIosPerSec: 20000, RwMbytesPerSec: 200})
+	c.Assert(err, IsNil)
+	checkQosLimit(api.QosLimit{RwIOsPerSec: 20000, RwMBPerSec: 200})
+
+	err = spdkCli.EngineSetQosLimit(engineName, nil)
+	c.Assert(err, IsNil)
+	checkQosLimit(api.QosLimit{})
+}
+
 // TestSPDKEngineFrontendSnapshotRevert validates both negative and positive revert paths.
 // Revert should fail with non-empty frontend and succeed with FrontendEmpty.
 func (s *TestSuite) TestSPDKEngineFrontendSnapshotRevert(c *C) {
