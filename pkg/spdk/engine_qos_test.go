@@ -148,6 +148,7 @@ func (s *TestSuite) TestServerEngineSetQosLimit(c *C) {
 		{"rejects empty name", &spdkrpc.EngineSetQosLimitRequest{}, grpccodes.InvalidArgument},
 		{"rejects negative IOPS", &spdkrpc.EngineSetQosLimitRequest{Name: e.Name, QosLimit: &spdkrpc.VolumeQosLimit{RwIosPerSec: -1}}, grpccodes.InvalidArgument},
 		{"rejects negative bandwidth", &spdkrpc.EngineSetQosLimitRequest{Name: e.Name, QosLimit: &spdkrpc.VolumeQosLimit{RwMbytesPerSec: -1}}, grpccodes.InvalidArgument},
+		{"rejects IOPS not a multiple of 1000", &spdkrpc.EngineSetQosLimitRequest{Name: e.Name, QosLimit: &spdkrpc.VolumeQosLimit{RwIosPerSec: 1500}}, grpccodes.InvalidArgument},
 		{"returns not found for unknown engine", &spdkrpc.EngineSetQosLimitRequest{Name: "missing"}, grpccodes.NotFound},
 	}
 	for _, tc := range cases {
@@ -164,22 +165,38 @@ func (s *TestSuite) TestServerEngineSetQosLimit(c *C) {
 	c.Assert(e.qosLimit, Equals, qosLimit{rwIOsPerSec: 1000, rwMBPerSec: 100})
 }
 
-func (s *TestSuite) TestServerEngineCreateRejectsNegativeQosLimit(c *C) {
-	fmt.Println("Testing Server.EngineCreate rejects a negative QoS limit before creating the engine")
+func (s *TestSuite) TestServerEngineCreateRejectsInvalidQosLimit(c *C) {
+	fmt.Println("Testing Server.EngineCreate rejects an invalid QoS limit before creating the engine")
 
-	srv := &Server{
-		engineMap: map[string]*Engine{},
+	tests := []struct {
+		name  string
+		limit *spdkrpc.VolumeQosLimit
+	}{
+		{
+			name:  "negative IOPS",
+			limit: &spdkrpc.VolumeQosLimit{RwIosPerSec: -1},
+		},
+		{
+			name:  "IOPS not a multiple of 1000",
+			limit: &spdkrpc.VolumeQosLimit{RwIosPerSec: 1500},
+		},
 	}
 
-	_, err := srv.EngineCreate(context.Background(), &spdkrpc.EngineCreateRequest{
-		Name:       "engine-a",
-		VolumeName: "vol-a",
-		SpecSize:   10,
-		QosLimit:   &spdkrpc.VolumeQosLimit{RwIosPerSec: -1},
-	})
-	c.Assert(err, NotNil)
-	c.Assert(grpcstatus.Code(err), Equals, grpccodes.InvalidArgument)
-	c.Assert(len(srv.engineMap), Equals, 0)
+	for _, tc := range tests {
+		srv := &Server{
+			engineMap: map[string]*Engine{},
+		}
+
+		_, err := srv.EngineCreate(context.Background(), &spdkrpc.EngineCreateRequest{
+			Name:       "engine-a",
+			VolumeName: "vol-a",
+			SpecSize:   10,
+			QosLimit:   tc.limit,
+		})
+		c.Assert(err, NotNil, Commentf("case=%s", tc.name))
+		c.Assert(grpcstatus.Code(err), Equals, grpccodes.InvalidArgument, Commentf("case=%s err=%v", tc.name, err))
+		c.Assert(len(srv.engineMap), Equals, 0, Commentf("case=%s", tc.name))
+	}
 }
 
 func (s *TestSuite) TestIsQosLimitChangeInProgressError(c *C) {

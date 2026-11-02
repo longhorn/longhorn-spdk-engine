@@ -118,12 +118,7 @@ func (s *Server) EngineSetQosLimit(ctx context.Context, req *spdkrpc.EngineSetQo
 	}
 
 	if err := e.SetQosLimit(spdkClient, req.QosLimit); err != nil {
-		errCode := grpccodes.Internal
-		if isQosLimitChangeInProgressError(err) {
-			// A previous QoS change is still in progress, so the caller can retry.
-			errCode = grpccodes.Unavailable
-		}
-		return nil, grpcstatus.Errorf(errCode, "failed to set QoS limit for engine %v: %v", req.Name, err)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to set QoS limit for engine %v: %v", req.Name, err)
 	}
 
 	return &emptypb.Empty{}, nil
@@ -135,6 +130,9 @@ func validateQosLimit(limit *spdkrpc.VolumeQosLimit) error {
 	}
 	if limit.RwIosPerSec < 0 || limit.RwMbytesPerSec < 0 {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "QoS limit must not be negative, got %d IOPS and %d MB/s", limit.RwIosPerSec, limit.RwMbytesPerSec)
+	}
+	if limit.RwIosPerSec%types.QosLimitIOsPerSecGranularity != 0 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "QoS IOPS limit must be a multiple of %d, got %d", types.QosLimitIOsPerSecGranularity, limit.RwIosPerSec)
 	}
 	return nil
 }

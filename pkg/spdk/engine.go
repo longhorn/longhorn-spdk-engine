@@ -808,7 +808,9 @@ func (e *Engine) SetSnapshotMaxCount(count int32) {
 
 // SetQosLimit records the volume IO limit and applies it to the raid bdev if
 // the engine is running. Otherwise the limit is applied when the raid bdev is
-// created. If SPDK rejects the limit, the previous one is kept.
+// created. If SPDK is still processing a previous QoS change, the new limit is
+// accepted and applied later by ValidateAndUpdate. If SPDK rejects the limit
+// for any other reason, the previous one is kept and the error is returned.
 func (e *Engine) SetQosLimit(spdkClient *spdkclient.Client, limit *spdkrpc.VolumeQosLimit) error {
 	e.Lock()
 	defer e.Unlock()
@@ -822,12 +824,15 @@ func (e *Engine) SetQosLimit(spdkClient *spdkclient.Client, limit *spdkrpc.Volum
 	oldLimit := e.qosLimit
 	e.qosLimit = newLimit
 	if err := e.applyQosLimitNoLock(spdkClient); err != nil {
-		// Keep the new limit if SPDK is only still processing a previous
-		// QoS change, so ValidateAndUpdate applies it later. Restore the
-		// old limit for any other error, so a rejected limit is not retried.
-		if !isQosLimitChangeInProgressError(err) {
-			e.qosLimit = oldLimit
+		if isQosLimitChangeInProgressError(err) {
+			// The engine status keeps reporting the limit SPDK enforces
+			// until ValidateAndUpdate applies the new one.
+			e.log.WithError(err).Warn("Accepted QoS limit while SPDK is still processing a previous QoS change, will apply it during validation")
+			return nil
 		}
+		// Restore the old limit, so ValidateAndUpdate does not retry a
+		// limit SPDK rejected.
+		e.qosLimit = oldLimit
 		return err
 	}
 
@@ -847,18 +852,7 @@ func (e *Engine) applyQosLimitNoLock(spdkClient *spdkclient.Client) error {
 		return nil
 	}
 
-	// SPDK refuses a QoS change while a previous one on the same bdev is
-	// still in progress, so retry briefly on that error only.
-	err := retrygo.New(
-		retrygo.Attempts(qosLimitSetMaxRetries),
-		retrygo.Delay(qosLimitSetRetryInterval),
-		retrygo.DelayType(retrygo.FixedDelay),
-		retrygo.LastErrorOnly(true),
-		retrygo.RetryIf(isQosLimitChangeInProgressError),
-	).Do(func() error {
-		return spdkClient.BdevSetQosLimit(e.Name, e.qosLimit.rwIOsPerSec, e.qosLimit.rwMBPerSec, 0, 0)
-	})
-	if err != nil {
+	if err := spdkClient.BdevSetQosLimit(e.Name, e.qosLimit.rwIOsPerSec, e.qosLimit.rwMBPerSec, 0, 0); err != nil {
 		return errors.Wrapf(err, "failed to set QoS limit %+v on raid bdev %s", e.qosLimit, e.Name)
 	}
 	e.appliedQosLimit = e.qosLimit
@@ -3540,7 +3534,10 @@ func (e *Engine) validateQosLimitNoLock(spdkClient *spdkclient.Client, bdevRaid 
 	}
 
 	if err := e.applyQosLimitNoLock(spdkClient); err != nil {
-		e.log.WithError(err).Warn("Failed to reapply QoS limit during validation, will retry")
+		// Debug level, since this repeats every validation until SPDK accepts
+		// the limit. The path that left the limit unapplied, or the drift
+		// found above, already logged a warning.
+		e.log.WithError(err).Debug("Failed to reapply QoS limit during validation, will retry")
 		return
 	}
 	if e.appliedQosLimit != applied {

@@ -1344,18 +1344,37 @@ func (s *TestSuite) TestSPDKEngineQosLimit(c *C) {
 		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
 	}
 
-	// checkQosLimit verifies both the limit SPDK enforces on the raid bdev and
-	// the limit the engine reports.
-	checkQosLimit := func(expected api.QosLimit) {
-		bdevs, err := rawSPDKCli.BdevGetBdevs(engineName, 0)
-		c.Assert(err, IsNil)
-		c.Assert(len(bdevs), Equals, 1)
-		c.Assert(int64(bdevs[0].AssignedRateLimits.RwIosPerSec), Equals, expected.RwIOsPerSec)
-		c.Assert(int64(bdevs[0].AssignedRateLimits.RwMbytesPerSec), Equals, expected.RwMBPerSec)
+	// waitForQosLimit waits until the limit SPDK enforces on the raid bdev and
+	// the limit the engine reports both match the expected one. A limit SPDK
+	// could not take yet is applied by the engine validation, so wait for a
+	// few monitor intervals instead of checking once.
+	waitForQosLimit := func(expected api.QosLimit) {
+		err := retry.New(monitoringRetryOpts(ctx, 5)...).Do(func() error {
+			bdevs, err := rawSPDKCli.BdevGetBdevs(engineName, 0)
+			if err != nil {
+				return err
+			}
+			if len(bdevs) != 1 {
+				return fmt.Errorf("expected 1 raid bdev %s, got %d", engineName, len(bdevs))
+			}
+			enforced := api.QosLimit{
+				RwIOsPerSec: int64(bdevs[0].AssignedRateLimits.RwIosPerSec),
+				RwMBPerSec:  int64(bdevs[0].AssignedRateLimits.RwMbytesPerSec),
+			}
+			if enforced != expected {
+				return fmt.Errorf("raid bdev %s enforces QoS limit %+v, expected %+v", engineName, enforced, expected)
+			}
 
-		engine, err := spdkCli.EngineGet(engineName)
+			engine, err := spdkCli.EngineGet(engineName)
+			if err != nil {
+				return err
+			}
+			if engine.QosLimit != expected {
+				return fmt.Errorf("engine %s reports QoS limit %+v, expected %+v", engineName, engine.QosLimit, expected)
+			}
+			return nil
+		})
 		c.Assert(err, IsNil)
-		c.Assert(engine.QosLimit, Equals, expected)
 	}
 
 	// Revert requires an engine without a frontend.
@@ -1363,8 +1382,7 @@ func (s *TestSuite) TestSPDKEngineQosLimit(c *C) {
 	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, createLimit)
 	c.Assert(err, IsNil)
 	c.Assert(engine.State, Equals, types.InstanceStateRunning)
-	c.Assert(engine.QosLimit, Equals, api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
-	checkQosLimit(api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
+	waitForQosLimit(api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
 
 	snapshotName := "snapshot-1"
 	_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName)
@@ -1373,15 +1391,15 @@ func (s *TestSuite) TestSPDKEngineQosLimit(c *C) {
 	// Snapshot revert deletes and recreates the raid bdev.
 	err = spdkCli.EngineSnapshotRevert(engineName, snapshotName)
 	c.Assert(err, IsNil)
-	checkQosLimit(api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
+	waitForQosLimit(api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
 
 	err = spdkCli.EngineSetQosLimit(engineName, &spdkrpc.VolumeQosLimit{RwIosPerSec: 20000, RwMbytesPerSec: 200})
 	c.Assert(err, IsNil)
-	checkQosLimit(api.QosLimit{RwIOsPerSec: 20000, RwMBPerSec: 200})
+	waitForQosLimit(api.QosLimit{RwIOsPerSec: 20000, RwMBPerSec: 200})
 
 	err = spdkCli.EngineSetQosLimit(engineName, nil)
 	c.Assert(err, IsNil)
-	checkQosLimit(api.QosLimit{})
+	waitForQosLimit(api.QosLimit{})
 }
 
 // TestSPDKEngineFrontendSnapshotRevert validates both negative and positive revert paths.

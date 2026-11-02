@@ -41,11 +41,6 @@ const (
 	maxRetries    = 30
 	retryInterval = 1 * time.Second
 
-	// qosLimitSetMaxRetries and qosLimitSetRetryInterval bound how long the
-	// engine lock is held while SPDK finishes a previous QoS change.
-	qosLimitSetMaxRetries    = 10
-	qosLimitSetRetryInterval = 100 * time.Millisecond
-
 	disconnectMaxRetries    = 5
 	disconnectRetryInterval = 1 * time.Second
 

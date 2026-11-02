@@ -16,6 +16,12 @@ const (
 // one, which hosts the SPDK admin reactor. It is unset when the mask has a single core.
 const EnvSPDKPollerCPUMask = "SPDK_POLLER_CPUMASK"
 
+// QosLimitIOsPerSecGranularity mirrors SPDK_BDEV_QOS_MIN_IOS_PER_SEC in SPDK
+// lib/bdev/bdev.c. SPDK enforces IOPS limits per 1 ms timeslice, so it rounds
+// an IOPS limit up to a multiple of this value. A volume IOPS limit must be a
+// multiple of it, otherwise the limit SPDK enforces differs from the requested one.
+const QosLimitIOsPerSecGranularity = 1000
+
 type Mode string
 
 const (
