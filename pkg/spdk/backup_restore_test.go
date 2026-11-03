@@ -1309,6 +1309,208 @@ func (s *TestSuite) TestEngineRestoreCloseVolumeDevSucceeds(c *C) {
 	c.Assert(errors.Is(f.Close(), os.ErrClosed), Equals, true)
 }
 
+// newRevertBaselineTestEngine returns an engine whose previous restore cycle
+// ended in the given state with the given baseline snapshot and LastRestored
+// set to "backup-a". volumeDevOpened says whether that cycle opened the
+// restore device. The returned slice records every snapshot name passed to
+// the revert hook; the returned function restores the hook.
+func newRevertBaselineTestEngine(state btypes.ProgressState, snapshotName string, volumeDevOpened bool, revertErr error) (*Engine, *[]string, func()) {
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.State = lhtypes.InstanceStateRunning
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-b&volume=vol-a", "backup-b", e, nil)
+	e.restore.State = state
+	e.restore.SnapshotName = snapshotName
+	e.restore.LastRestored = "backup-a"
+	e.restore.volumeDevOpened = volumeDevOpened
+
+	reverted := &[]string{}
+	originalSnapshotRevertFn := snapshotRevertFn
+	snapshotRevertFn = func(_ *Engine, _ *spdkclient.Client, name string) error {
+		*reverted = append(*reverted, name)
+		return revertErr
+	}
+
+	return e, reverted, func() { snapshotRevertFn = originalSnapshotRevertFn }
+}
+
+func (s *TestSuite) TestRevertRestoreBaselineRevertsAfterFailedWritePhase(c *C) {
+	fmt.Println("Testing revertRestoreBaseline reverts the head when the failed cycle opened the restore device")
+
+	for _, state := range []btypes.ProgressState{btypes.ProgressStateError, btypes.ProgressStateCanceled} {
+		e, reverted, restoreHook := newRevertBaselineTestEngine(state, "restore-snap-a", true, nil)
+
+		err := e.revertRestoreBaseline(nil)
+
+		c.Assert(err, IsNil)
+		c.Assert(*reverted, DeepEquals, []string{"restore-snap-a"})
+		// The head is back on the baseline, so the next restore stays
+		// incremental and a retry that fails before writing does not revert again.
+		c.Assert(e.restore.LastRestored, Equals, "backup-a")
+		c.Assert(e.restore.volumeDevOpened, Equals, false)
+		restoreHook()
+	}
+}
+
+func (s *TestSuite) TestRevertRestoreBaselineRevertsAgainAfterConsecutiveFailedWritePhases(c *C) {
+	fmt.Println("Testing revertRestoreBaseline reverts to the same baseline after two consecutive failed write phases")
+
+	e, reverted, restoreHook := newRevertBaselineTestEngine(btypes.ProgressStateError, "restore-snap-a", true, nil)
+	defer restoreHook()
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+	}
+
+	// First retry: revert, then prepare replaces the errored restore object.
+	c.Assert(e.revertRestoreBaseline(nil), IsNil)
+	e.Lock()
+	_, err := e.backupRestorePrepare(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-c&volume=vol-a", nil, nil)
+	e.Unlock()
+	c.Assert(err, IsNil)
+
+	// That retry opens the device and fails too.
+	e.IsRestoring = false
+	e.restore.Lock()
+	e.restore.volumeDevOpened = true
+	e.restore.State = btypes.ProgressStateError
+	e.restore.Unlock()
+
+	// Second retry must revert to the same baseline.
+	c.Assert(e.revertRestoreBaseline(nil), IsNil)
+	c.Assert(*reverted, DeepEquals, []string{"restore-snap-a", "restore-snap-a"})
+}
+
+func (s *TestSuite) TestRevertRestoreBaselineSkipsWhenNoRevertIsNeeded(c *C) {
+	fmt.Println("Testing revertRestoreBaseline does nothing when the head does not need a revert")
+
+	type testCase struct {
+		state           btypes.ProgressState
+		snapshotName    string
+		volumeDevOpened bool
+		setup           func(e *Engine)
+	}
+	testCases := map[string]testCase{
+		"previous cycle never opened the restore device": {
+			state:           btypes.ProgressStateError,
+			snapshotName:    "restore-snap-a",
+			volumeDevOpened: false,
+		},
+		"previous cycle completed even though it opened the device": {
+			state:           btypes.ProgressStateComplete,
+			snapshotName:    "restore-snap-a",
+			volumeDevOpened: true,
+		},
+		"failed first restore has no baseline snapshot": {
+			state:           btypes.ProgressStateError,
+			snapshotName:    "",
+			volumeDevOpened: true,
+		},
+		"a restore is in progress": {
+			state:           btypes.ProgressStateError,
+			snapshotName:    "restore-snap-a",
+			volumeDevOpened: true,
+			setup:           func(e *Engine) { e.IsRestoring = true },
+		},
+		"a replica is rebuilding but the head is clean": {
+			state:           btypes.ProgressStateError,
+			snapshotName:    "restore-snap-a",
+			volumeDevOpened: false,
+			setup: func(e *Engine) {
+				e.backends = map[string]Backend{
+					"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeWO),
+				}
+			},
+		},
+	}
+	for testName, tc := range testCases {
+		c.Logf("testing revertRestoreBaseline.%v", testName)
+
+		e, reverted, restoreHook := newRevertBaselineTestEngine(tc.state, tc.snapshotName, tc.volumeDevOpened, nil)
+		if tc.setup != nil {
+			tc.setup(e)
+		}
+
+		c.Assert(e.revertRestoreBaseline(nil), IsNil)
+		c.Assert(len(*reverted), Equals, 0)
+		c.Assert(e.restore.LastRestored, Equals, "backup-a")
+		restoreHook()
+	}
+}
+
+func (s *TestSuite) TestRevertRestoreBaselineFailureForcesFullRestore(c *C) {
+	fmt.Println("Testing a failed revert fails once, then the next attempt skips the revert and runs a full restore")
+
+	// The baseline snapshot creation is best-effort, so the recorded name may
+	// not exist on the replicas; the revert precheck then fails like this on
+	// every attempt.
+	revertErr := errors.New("replica replica-a does not contain the reverting snapshot restore-snap-a")
+	e, reverted, restoreHook := newRevertBaselineTestEngine(btypes.ProgressStateError, "restore-snap-a", true, revertErr)
+	defer restoreHook()
+
+	err := e.revertRestoreBaseline(nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "does not contain the reverting snapshot"), Equals, true)
+	c.Assert(strings.Contains(err.Error(), "the next restore will be a full restore"), Equals, true)
+	c.Assert(*reverted, DeepEquals, []string{"restore-snap-a"})
+	c.Assert(e.restore.LastRestored, Equals, "")
+	c.Assert(e.restore.volumeDevOpened, Equals, false)
+	// The stale snapshot is still deleted by the next completed restore.
+	c.Assert(e.restore.SnapshotName, Equals, "restore-snap-a")
+
+	// The next attempt must not fail the same way again.
+	c.Assert(e.revertRestoreBaseline(nil), IsNil)
+	c.Assert(*reverted, DeepEquals, []string{"restore-snap-a"})
+}
+
+func (s *TestSuite) TestRevertRestoreBaselineWaitsForRebuildingReplica(c *C) {
+	fmt.Println("Testing revertRestoreBaseline returns an error and changes nothing while a replica is rebuilding")
+
+	e, reverted, restoreHook := newRevertBaselineTestEngine(btypes.ProgressStateError, "restore-snap-a", true, nil)
+	defer restoreHook()
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+		"replica-2": newTestReplicaBackend("replica-2", "10.0.0.2:1234", lhtypes.ModeWO),
+	}
+
+	err := e.revertRestoreBaseline(nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "replica replica-2 is still rebuilding"), Equals, true)
+	c.Assert(len(*reverted), Equals, 0)
+	c.Assert(e.restore.LastRestored, Equals, "backup-a")
+	c.Assert(e.restore.SnapshotName, Equals, "restore-snap-a")
+	c.Assert(e.restore.volumeDevOpened, Equals, true)
+}
+
+func (s *TestSuite) TestRevertRestoreBaselineWaitsForRunningEngine(c *C) {
+	fmt.Println("Testing revertRestoreBaseline returns an error and changes nothing while the engine is not running")
+
+	e, reverted, restoreHook := newRevertBaselineTestEngine(btypes.ProgressStateError, "restore-snap-a", true, nil)
+	defer restoreHook()
+	e.State = lhtypes.InstanceStateError
+
+	err := e.revertRestoreBaseline(nil)
+
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "engine engine-a is in state error"), Equals, true)
+	c.Assert(len(*reverted), Equals, 0)
+	c.Assert(e.restore.LastRestored, Equals, "backup-a")
+	c.Assert(e.restore.SnapshotName, Equals, "restore-snap-a")
+	c.Assert(e.restore.volumeDevOpened, Equals, true)
+}
+
+func (s *TestSuite) TestEngineRestoreStartNewRestoreResetsVolumeDevOpened(c *C) {
+	fmt.Println("Testing StartNewRestore resets volumeDevOpened for the next cycle")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	r := NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-a&volume=vol-a", "backup-a", e, nil)
+	r.volumeDevOpened = true
+
+	r.StartNewRestore("s3://backupbucket@us-east-1/backupstore?backup=backup-b&volume=vol-a", "backup-b", true)
+
+	c.Assert(r.volumeDevOpened, Equals, false)
+}
+
 func (s *TestSuite) TestPreflightReplicaIOPathsForRestorePassesWithoutCandidates(c *C) {
 	fmt.Println("Testing preflightReplicaIOPathsForRestore passes when no replica bdev is eligible for inspection")
 
