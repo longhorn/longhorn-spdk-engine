@@ -9,6 +9,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
+
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 )
 
@@ -970,6 +971,50 @@ func (c *Client) BdevRaidGrowBaseBdev(raidName, baseBdevName string) (growed boo
 	return growed, json.Unmarshal(cmdOutput, &growed)
 }
 
+// BdevRaidSetRaidOptions sets the options of one raid bdev with bdev_raid_set_raid_options,
+// unlike the global bdev_raid_set_options. Options left nil are not sent and stay unchanged.
+//
+//	"name": Required. The RAID bdev name.
+//
+//	"explicitResize": Optional. If true, the RAID bdev does not resize on a base bdev resize
+//	event and grows only through BdevRaidResize. SPDK does not save the option in its config.
+func (c *Client) BdevRaidSetRaidOptions(req spdktypes.BdevRaidSetRaidOptionsRequest) (result bool, err error) {
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_raid_set_raid_options", req)
+	if err != nil {
+		return false, err
+	}
+
+	return result, json.Unmarshal(cmdOutput, &result)
+}
+
+// BdevRaidResize recalculates the size of a raid bdev from its current base bdevs.
+// A raid bdev with explicit resize (BdevRaidSetRaidOptions) does not resize when a base bdev
+// is resized; like EC bdevs with BdevEcResize, it grows only through this call. The call also
+// works without the option.
+// When nothing changes, the call succeeds with Resized false and the current block count.
+// It fails with -EBUSY while a base bdev is being removed or added, a background process
+// runs, or a base bdev is faulty; the caller can retry later.
+//
+//	"name": Required. The RAID bdev name.
+//
+//	"expectedSizeInMib": Optional. The minimum size in MiB that the RAID bdev must reach
+//	(raid1 only). SPDK checks it before resizing: if a base bdev is smaller, the call fails
+//	with -ENOSPC and the RAID bdev keeps its size. 0 omits it, and the RAID bdev then takes
+//	the size of its base bdevs.
+func (c *Client) BdevRaidResize(name string, expectedSizeInMib uint64) (resp spdktypes.BdevRaidResizeResponse, err error) {
+	req := spdktypes.BdevRaidResizeRequest{
+		Name:              name,
+		ExpectedSizeInMib: expectedSizeInMib,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_raid_resize", req)
+	if err != nil {
+		return resp, err
+	}
+
+	return resp, json.Unmarshal(cmdOutput, &resp)
+}
+
 // BdevNvmeAttachController constructs NVMe bdev.
 //
 //	"name": Name of the NVMe controller. And the corresponding bdev nvme name are same as the nvme namespace name, which is `{ControllerName}n1`
@@ -1067,6 +1112,34 @@ func (c *Client) BdevNvmeGetControllers(name string) (controllerInfoList []spdkt
 	}
 
 	return controllerInfoList, json.Unmarshal(cmdOutput, &controllerInfoList)
+}
+
+// BdevNvmeGetIoPaths gets I/O paths of active NVMe bdevs. An I/O path is the
+// pairing of a namespace bdev with one controller's I/O qpair on one poll group
+// thread. A bdev has multiple I/O paths when it is attached through multiple
+// controllers (multipath) or used by multiple poll group threads.
+//
+//	"name": Optional. Name of the namespace bdev, e.g. "Nvme0n1". If this is not
+//	        specified, the function will list I/O paths of all NVMe bdevs.
+//	        Note that this is not the controller name ("Nvme0"). A controller
+//	        name matches nothing: every poll group is still returned, each
+//	        with an empty io_paths list, and there is no error.
+func (c *Client) BdevNvmeGetIoPaths(name string) (pollGroups []spdktypes.BdevNvmePollGroupIoPaths, err error) {
+	req := spdktypes.BdevNvmeGetIoPathsRequest{
+		Name: name,
+	}
+
+	cmdOutput, err := c.jsonCli.SendCommand("bdev_nvme_get_io_paths", req)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp spdktypes.BdevNvmeGetIoPathsResponse
+	if err := json.Unmarshal(cmdOutput, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.PollGroups, nil
 }
 
 // BdevNvmeGetControllerHealthInfo retrieves health information for a specified

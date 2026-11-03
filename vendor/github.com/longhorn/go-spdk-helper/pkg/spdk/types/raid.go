@@ -65,3 +65,24 @@ type BdevRaidGrowBaseBdevRequest struct {
 	RaidName string `json:"raid_name"`
 	BaseName string `json:"base_name"`
 }
+
+// BdevRaidResizeRequest is the request for bdev_raid_resize.
+type BdevRaidResizeRequest struct {
+	Name              string `json:"name"`
+	ExpectedSizeInMib uint64 `json:"expected_size_in_mib,omitempty"`
+}
+
+// BdevRaidResizeResponse is the response for bdev_raid_resize.
+type BdevRaidResizeResponse struct {
+	Name        string `json:"name"`
+	OldBlockcnt uint64 `json:"old_blockcnt"`
+	NewBlockcnt uint64 `json:"new_blockcnt"`
+	Resized     bool   `json:"resized"`
+}
+
+// BdevRaidSetRaidOptionsRequest is the request for bdev_raid_set_raid_options. A nil option
+// is not sent and stays unchanged.
+type BdevRaidSetRaidOptionsRequest struct {
+	Name           string `json:"name"`
+	ExplicitResize *bool  `json:"explicit_resize,omitempty"`
+}
