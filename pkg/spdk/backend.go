@@ -3,6 +3,8 @@ package spdk
 import (
 	"github.com/sirupsen/logrus"
 
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
+
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
@@ -82,6 +84,8 @@ type BackendView struct {
 	Snapshots        map[string]*api.Lvol
 	BackingImageName string
 	LvsUUID          string
+	// TransportType is the NVMe-oF transport the backend is exposed over.
+	TransportType spdktypes.NvmeTransportType
 }
 
 // isBackendDispatchable reports whether the engine should issue a per-backend
