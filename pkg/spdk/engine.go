@@ -147,6 +147,13 @@ type Engine struct {
 
 	SnapshotMaxCount int32
 
+	// qosLimit is the volume IO limit requested for the raid bdev.
+	// appliedQosLimit is the limit SPDK currently enforces on it. SPDK keeps
+	// QoS on the bdev object, so the limit is lost whenever the raid bdev is
+	// recreated and must be applied again from qosLimit.
+	qosLimit        qosLimit
+	appliedQosLimit qosLimit
+
 	IsRestoring           bool
 	RestoringSnapshotName string
 
@@ -305,6 +312,18 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 	e.log.Infof("Connected all available replicas %+v, then launching raid during engine creation", e.backends)
 	if _, err := spdkClient.BdevRaidCreate(e.Name, spdktypes.BdevRaidLevel1, 0, replicaBdevList, ""); err != nil {
 		return nil, err
+	}
+
+	// A new raid bdev starts without any QoS limit.
+	e.appliedQosLimit = qosLimit{}
+	if err := e.applyQosLimitNoLock(spdkClient); err != nil {
+		if !isQosLimitChangeInProgressError(err) {
+			return nil, errors.Wrapf(err, "failed to apply QoS limit during engine creation")
+		}
+		// SPDK is still processing a previous QoS change on the new raid
+		// bdev. This is temporary, so ValidateAndUpdate applies the limit
+		// instead of failing the engine creation.
+		e.log.WithError(err).Warn("QoS limit change is still in progress during engine creation, will retry during validation")
 	}
 
 	switch e.Frontend {
@@ -751,6 +770,12 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 		SnapshotMaxCount:      e.SnapshotMaxCount,
 	}
 
+	// Report the limit SPDK enforces only while running. Otherwise the raid
+	// bdev may not exist, e.g. after a failed raid recreate.
+	if e.State == types.InstanceStateRunning {
+		res.QosLimit = e.appliedQosLimit.toProto()
+	}
+
 	if e.NvmeTcpTarget != nil {
 		res.Ip = e.NvmeTcpTarget.IP
 		res.Port = e.NvmeTcpTarget.Port
@@ -778,6 +803,71 @@ func (e *Engine) SetSnapshotMaxCount(count int32) {
 	select {
 	case e.UpdateCh <- nil:
 	default:
+	}
+}
+
+// SetQosLimit records the volume IO limit and applies it to the raid bdev if
+// the engine is running. Otherwise the limit is applied when the raid bdev is
+// created. If SPDK is still processing a previous QoS change, the new limit is
+// accepted and applied later by ValidateAndUpdate. If SPDK rejects the limit
+// for any other reason, the previous one is kept and the error is returned.
+func (e *Engine) SetQosLimit(spdkClient *spdkclient.Client, limit *spdkrpc.VolumeQosLimit) error {
+	e.Lock()
+	defer e.Unlock()
+
+	newLimit := qosLimitFromProto(limit)
+	if e.State != types.InstanceStateRunning {
+		e.qosLimit = newLimit
+		return nil
+	}
+
+	oldLimit := e.qosLimit
+	e.qosLimit = newLimit
+	if err := e.applyQosLimitNoLock(spdkClient); err != nil {
+		if isQosLimitChangeInProgressError(err) {
+			// The engine status keeps reporting the limit SPDK enforces
+			// until ValidateAndUpdate applies the new one.
+			e.log.WithError(err).Warn("Accepted QoS limit while SPDK is still processing a previous QoS change, will apply it during validation")
+			return nil
+		}
+		// Restore the old limit, so ValidateAndUpdate does not retry a
+		// limit SPDK rejected.
+		e.qosLimit = oldLimit
+		return err
+	}
+
+	select {
+	case e.UpdateCh <- nil:
+	default:
+	}
+
+	return nil
+}
+
+// applyQosLimitNoLock sets qosLimit on the raid bdev when it differs from
+// appliedQosLimit. Callers that recreate the raid bdev must reset
+// appliedQosLimit first, since a new bdev starts without any limit.
+func (e *Engine) applyQosLimitNoLock(spdkClient *spdkclient.Client) error {
+	if e.qosLimit == e.appliedQosLimit {
+		return nil
+	}
+
+	if err := spdkClient.BdevSetQosLimit(e.Name, e.qosLimit.rwIOsPerSec, e.qosLimit.rwMBPerSec, 0, 0); err != nil {
+		return errors.Wrapf(err, "failed to set QoS limit %+v on raid bdev %s", e.qosLimit, e.Name)
+	}
+	e.appliedQosLimit = e.qosLimit
+
+	e.log.Infof("Applied QoS limit %d IOPS, %d MB/s to raid bdev %s", e.qosLimit.rwIOsPerSec, e.qosLimit.rwMBPerSec, e.Name)
+	return nil
+}
+
+// reapplyQosLimitAfterRaidRecreateNoLock applies qosLimit to a recreated raid bdev.
+// A failure only logs, since the raid bdev is already usable and
+// ValidateAndUpdate retries the limit.
+func (e *Engine) reapplyQosLimitAfterRaidRecreateNoLock(spdkClient *spdkclient.Client) {
+	e.appliedQosLimit = qosLimit{}
+	if err := e.applyQosLimitNoLock(spdkClient); err != nil {
+		e.log.WithError(err).Warn("Failed to reapply QoS limit after recreating raid bdev, will retry during validation")
 	}
 }
 
@@ -1855,6 +1945,10 @@ func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, sna
 				return err
 			},
 		)
+
+		if engineErr == nil {
+			e.reapplyQosLimitAfterRaidRecreateNoLock(spdkClient)
+		}
 	}
 
 	return updated, replicasErr, engineErr
@@ -3299,6 +3393,8 @@ func (e *Engine) reconstructRaidBdev(spdkClient *spdkclient.Client, bdevRaidUUID
 		return err
 	}
 
+	e.reapplyQosLimitAfterRaidRecreateNoLock(spdkClient)
+
 	return nil
 }
 
@@ -3402,6 +3498,8 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		return err
 	}
 
+	e.validateQosLimitNoLock(spdkClient, bdevRaid, &updateRequired)
+
 	containValidReplica := e.validateReplicaStatusMapNoLock(bdevMap, &updateRequired)
 
 	e.log.UpdateLoggerWithWarnOnFailure(logrus.Fields{
@@ -3418,6 +3516,33 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 	e.checkAndUpdateInfoFromReplicasNoLock()
 
 	return nil
+}
+
+// validateQosLimitNoLock syncs appliedQosLimit with the limit SPDK reports on
+// the raid bdev and reapplies qosLimit if they differ, e.g. after a raid
+// recreate failed to reapply it. A failure only logs, so that the engine is
+// not marked as error and the next validation retries.
+func (e *Engine) validateQosLimitNoLock(spdkClient *spdkclient.Client, bdevRaid *spdktypes.BdevInfo, updateRequired *bool) {
+	applied := qosLimit{
+		rwIOsPerSec: int64(bdevRaid.AssignedRateLimits.RwIosPerSec),
+		rwMBPerSec:  int64(bdevRaid.AssignedRateLimits.RwMbytesPerSec),
+	}
+	if applied != e.appliedQosLimit {
+		e.log.Warnf("Found QoS limit %+v on raid bdev %s different from the recorded one %+v", applied, e.Name, e.appliedQosLimit)
+		e.appliedQosLimit = applied
+		*updateRequired = true
+	}
+
+	if err := e.applyQosLimitNoLock(spdkClient); err != nil {
+		// Debug level, since this repeats every validation until SPDK accepts
+		// the limit. The path that left the limit unapplied, or the drift
+		// found above, already logged a warning.
+		e.log.WithError(err).Debug("Failed to reapply QoS limit during validation, will retry")
+		return
+	}
+	if e.appliedQosLimit != applied {
+		*updateRequired = true
+	}
 }
 
 func (e *Engine) shouldSkipValidateAndUpdateNoLock() bool {

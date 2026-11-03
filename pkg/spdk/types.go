@@ -151,6 +151,30 @@ var (
 	ErrAlreadyRestored = errors.New("already restored backup")
 )
 
+// qosLimit is a volume IO limit on the raid bdev. 0 means unlimited.
+type qosLimit struct {
+	rwIOsPerSec int64
+	rwMBPerSec  int64
+}
+
+func qosLimitFromProto(l *spdkrpc.VolumeQosLimit) qosLimit {
+	if l == nil {
+		return qosLimit{}
+	}
+	return qosLimit{rwIOsPerSec: l.RwIosPerSec, rwMBPerSec: l.RwMbytesPerSec}
+}
+
+func (l qosLimit) toProto() *spdkrpc.VolumeQosLimit {
+	return &spdkrpc.VolumeQosLimit{RwIosPerSec: l.rwIOsPerSec, RwMbytesPerSec: l.rwMBPerSec}
+}
+
+// isQosLimitChangeInProgressError reports whether SPDK rejected
+// bdev_set_qos_limit with EAGAIN because a previous QoS change on the bdev is
+// still in progress.
+func isQosLimitChangeInProgressError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Resource temporarily unavailable")
+}
+
 type Lvol struct {
 	sync.RWMutex
 
