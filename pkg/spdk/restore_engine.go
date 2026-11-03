@@ -43,6 +43,12 @@ type EngineRestore struct {
 	LastRestored           string
 	CurrentRestoringBackup string
 
+	// volumeDevOpened is set once this cycle opened the restore device, so the
+	// volume head may have been written to. If the cycle fails or is canceled
+	// with this set, the next restore reverts the head to the baseline
+	// snapshot first. StartNewRestore resets it; a successful revert clears it.
+	volumeDevOpened bool
+
 	// finalized is set once the engine has recorded the outcome of the
 	// current restore cycle. While set, status reports from backupstore
 	// workers are ignored. See FinalizeRestore for why late reports happen.
@@ -107,6 +113,7 @@ func (r *EngineRestore) StartNewRestore(backupURL string, currentRestoringBackup
 	// cycle, and the new cycle's own status reports must get through.
 	r.finalized = false
 	r.statusReports = 0
+	r.volumeDevOpened = false
 
 	// FinalizeRestore already canceled the previous cycle's context; cancel
 	// again for a cycle that never reached it. The new cycle gets its own.
@@ -199,6 +206,11 @@ func (r *EngineRestore) OpenVolumeDev(_ string) (*os.File, string, error) {
 	if err != nil {
 		return nil, "", errors.Wrapf(err, "failed to open NVMe device %v", endpoint)
 	}
+
+	r.Lock()
+	r.volumeDevOpened = true
+	r.Unlock()
+
 	return fh, endpoint, nil
 }
 

@@ -3033,6 +3033,12 @@ func (ef *EngineFrontend) BackupRestore(engine *Engine, spdkClient *spdkclient.C
 		return nil, fmt.Errorf("engine %s is being deleted; aborting the backup restore setup", engine.Name)
 	}
 
+	// Must run before the raid bdev is exposed and the initiator connects;
+	// the revert deletes and recreates the raid bdev.
+	if err := engine.revertRestoreBaseline(spdkClient); err != nil {
+		return nil, errors.Wrapf(err, "engine %s: failed to revert the volume head to the restore baseline", engine.Name)
+	}
+
 	// Ensure the engine has a NVMe-TCP target to connect to (creates one if absent).
 	if err := engine.ensureNvmeTcpTargetForRestore(spdkClient, superiorPortAllocator); err != nil {
 		return nil, errors.Wrapf(err, "engine %s: failed to ensure NVMe-TCP target for backup restore", engine.Name)

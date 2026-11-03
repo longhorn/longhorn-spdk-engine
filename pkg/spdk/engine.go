@@ -2621,6 +2621,96 @@ func (e *Engine) canDoIncrementalRestore(restore *EngineRestore, backupURL, requ
 	return true
 }
 
+// snapshotRevertFn reverts the engine's volume head to a snapshot. It is a
+// variable so tests can replace it.
+var snapshotRevertFn = func(e *Engine, spdkClient *spdkclient.Client, snapshotName string) error {
+	return e.SnapshotRevert(spdkClient, snapshotName)
+}
+
+// restoreBaselineSnapshotToRevertLocked returns the snapshot to revert the
+// volume head to before the next restore, or "" if no revert is needed. The
+// caller holds the engine lock.
+//
+// A restore writes into the live head. A cycle that failed or was canceled
+// after opening the device leaves the head as the baseline plus part of the
+// failed backup. Neither an incremental nor a full restore can remove those
+// blocks, so the head is reverted to the snapshot of the last completed
+// restore first.
+func (e *Engine) restoreBaselineSnapshotToRevertLocked() string {
+	if e.restore == nil || e.IsRestoring {
+		return ""
+	}
+
+	e.restore.RLock()
+	defer e.restore.RUnlock()
+
+	if e.restore.State != btypes.ProgressStateError && e.restore.State != btypes.ProgressStateCanceled {
+		return ""
+	}
+	if !e.restore.volumeDevOpened {
+		return ""
+	}
+	return e.restore.SnapshotName
+}
+
+// revertRestoreBaseline reverts the volume head to the restore baseline if
+// the previous restore cycle may have left it partially overwritten. It must
+// run before the restore data path is set up, because the revert recreates
+// the raid bdev.
+//
+// If the engine is not running or a replica is still rebuilding, it returns
+// an error and leaves the restore state as is; the next attempt reverts.
+//
+// Any other revert failure clears LastRestored and volumeDevOpened, so the
+// next attempt skips the revert and runs a full restore instead of failing
+// the same way again.
+func (e *Engine) revertRestoreBaseline(spdkClient *spdkclient.Client) error {
+	e.Lock()
+	snapshotName := e.restoreBaselineSnapshotToRevertLocked()
+	restore := e.restore
+	var transientErr error
+	if snapshotName != "" {
+		transientErr = e.revertRestoreBaselineBlockerLocked()
+	}
+	e.Unlock()
+
+	if snapshotName == "" {
+		return nil
+	}
+	if transientErr != nil {
+		return errors.Wrapf(transientErr, "cannot revert the volume head to restore baseline snapshot %v yet", snapshotName)
+	}
+
+	e.log.Infof("Reverting the volume head to restore baseline snapshot %v before the next restore", snapshotName)
+	if err := snapshotRevertFn(e, spdkClient, snapshotName); err != nil {
+		restore.Lock()
+		restore.LastRestored = ""
+		restore.volumeDevOpened = false
+		restore.Unlock()
+		e.log.WithError(err).Warnf("Failed to revert the volume head to restore baseline snapshot %v; stale blocks from the failed restore may remain and the next restore will be a full restore", snapshotName)
+		return errors.Wrapf(err, "failed to revert the volume head to restore baseline snapshot %v; the next restore will be a full restore", snapshotName)
+	}
+
+	restore.Lock()
+	restore.volumeDevOpened = false
+	restore.Unlock()
+	return nil
+}
+
+// revertRestoreBaselineBlockerLocked returns the reason a baseline revert
+// must wait, or nil. The caller holds the engine lock.
+func (e *Engine) revertRestoreBaselineBlockerLocked() error {
+	if e.State != types.InstanceStateRunning {
+		return fmt.Errorf("engine %s is in state %v", e.Name, e.State)
+	}
+	for replicaName, replicaStatus := range e.backends {
+		if isBackendDispatchable(replicaStatus) && replicaStatus.Mode() == types.ModeWO {
+			return fmt.Errorf("replica %s is still rebuilding", replicaName)
+		}
+	}
+	return nil
+}
+
 func (e *Engine) backupRestore(backupURL string, concurrentLimit int32) error {
 	backupURL = butil.UnescapeURL(backupURL)
 
