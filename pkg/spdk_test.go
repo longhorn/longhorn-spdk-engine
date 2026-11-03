@@ -1261,6 +1261,71 @@ func (s *TestSuite) TestSPDKEngineSnapshotCreateAndDelete(c *C) {
 // TestSPDKEngineQosLimit validates the volume IO limit is applied to the engine
 // raid bdev at creation, kept across a snapshot revert that recreates the raid
 // bdev, and can be updated and removed at runtime.
+// waitForEngineQosLimit waits until the limit SPDK enforces on the raid bdev
+// of the engine and the limit the engine reports both match the expected one.
+// A limit SPDK could not take yet is applied by the engine validation, so it
+// waits for a few monitor intervals instead of checking once.
+//
+// Every attempt records what SPDK and the engine showed, so a failure reports
+// the step and how both sides changed while waiting.
+func waitForEngineQosLimit(ctx context.Context, c *C, rawSPDKCli *helperclient.Client, spdkCli *client.SPDKClient,
+	engineName, step string, expected api.QosLimit) {
+	start := time.Now()
+	attempt := 0
+	observations := []string{}
+
+	err := retry.New(monitoringRetryOpts(ctx, 5)...).Do(func() error {
+		attempt++
+
+		bdevs, bdevErr := rawSPDKCli.BdevGetBdevs(engineName, 0)
+		engine, engineErr := spdkCli.EngineGet(engineName)
+
+		var enforced api.QosLimit
+		bdevObservation := ""
+		switch {
+		case bdevErr != nil:
+			bdevObservation = fmt.Sprintf("raid bdev error: %v", bdevErr)
+		case len(bdevs) != 1:
+			bdevObservation = fmt.Sprintf("found %d raid bdevs", len(bdevs))
+		default:
+			limits := bdevs[0].AssignedRateLimits
+			enforced = api.QosLimit{
+				RwIOsPerSec: int64(limits.RwIosPerSec),
+				RwMBPerSec:  int64(limits.RwMbytesPerSec),
+			}
+			bdevObservation = fmt.Sprintf("raid bdev uuid=%s enforced=%+v r_mbytes_per_sec=%d w_mbytes_per_sec=%d",
+				bdevs[0].UUID, enforced, limits.RMbytesPerSec, limits.WMbytesPerSec)
+		}
+
+		engineObservation := ""
+		if engineErr != nil {
+			engineObservation = fmt.Sprintf("engine error: %v", engineErr)
+		} else {
+			engineObservation = fmt.Sprintf("engine state=%s errorMsg=%q reported=%+v", engine.State, engine.ErrorMsg, engine.QosLimit)
+		}
+
+		observation := fmt.Sprintf("attempt %d after %v: %s; %s",
+			attempt, time.Since(start).Round(time.Millisecond), bdevObservation, engineObservation)
+		observations = append(observations, observation)
+
+		if bdevErr != nil || engineErr != nil || len(bdevs) != 1 || enforced != expected || engine.QosLimit != expected {
+			return fmt.Errorf("%s", observation)
+		}
+		return nil
+	})
+	if err != nil {
+		// Only after every attempt failed, ask SPDK directly so the
+		// failure shows the error SPDK returns now, which the engine
+		// logs at debug level only. The test fails regardless.
+		probeErr := rawSPDKCli.BdevSetQosLimit(engineName, expected.RwIOsPerSec, expected.RwMBPerSec, 0, 0)
+		observations = append(observations, fmt.Sprintf("direct bdev_set_qos_limit after %v: err=%v",
+			time.Since(start).Round(time.Millisecond), probeErr))
+	}
+	c.Assert(err, IsNil, Commentf("step %q: expected QoS limit %+v on engine %s, observations:\n%s",
+		step, expected, engineName, strings.Join(observations, "\n")))
+
+}
+
 func (s *TestSuite) TestSPDKEngineQosLimit(c *C) {
 	fmt.Println("Testing SPDK engine QoS limit")
 
@@ -1344,37 +1409,8 @@ func (s *TestSuite) TestSPDKEngineQosLimit(c *C) {
 		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
 	}
 
-	// waitForQosLimit waits until the limit SPDK enforces on the raid bdev and
-	// the limit the engine reports both match the expected one. A limit SPDK
-	// could not take yet is applied by the engine validation, so wait for a
-	// few monitor intervals instead of checking once.
-	waitForQosLimit := func(expected api.QosLimit) {
-		err := retry.New(monitoringRetryOpts(ctx, 5)...).Do(func() error {
-			bdevs, err := rawSPDKCli.BdevGetBdevs(engineName, 0)
-			if err != nil {
-				return err
-			}
-			if len(bdevs) != 1 {
-				return fmt.Errorf("expected 1 raid bdev %s, got %d", engineName, len(bdevs))
-			}
-			enforced := api.QosLimit{
-				RwIOsPerSec: int64(bdevs[0].AssignedRateLimits.RwIosPerSec),
-				RwMBPerSec:  int64(bdevs[0].AssignedRateLimits.RwMbytesPerSec),
-			}
-			if enforced != expected {
-				return fmt.Errorf("raid bdev %s enforces QoS limit %+v, expected %+v", engineName, enforced, expected)
-			}
-
-			engine, err := spdkCli.EngineGet(engineName)
-			if err != nil {
-				return err
-			}
-			if engine.QosLimit != expected {
-				return fmt.Errorf("engine %s reports QoS limit %+v, expected %+v", engineName, engine.QosLimit, expected)
-			}
-			return nil
-		})
-		c.Assert(err, IsNil)
+	waitForQosLimit := func(step string, expected api.QosLimit) {
+		waitForEngineQosLimit(ctx, c, rawSPDKCli, spdkCli, engineName, step, expected)
 	}
 
 	// Revert requires an engine without a frontend.
@@ -1382,24 +1418,184 @@ func (s *TestSuite) TestSPDKEngineQosLimit(c *C) {
 	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, createLimit)
 	c.Assert(err, IsNil)
 	c.Assert(engine.State, Equals, types.InstanceStateRunning)
-	waitForQosLimit(api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
+	waitForQosLimit("after engine create", api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
 
+	// Runtime update on the raid bdev created with the engine, before any
+	// revert recreates it.
+	err = spdkCli.EngineSetQosLimit(engineName, &spdkrpc.VolumeQosLimit{RwIosPerSec: 20000, RwMbytesPerSec: 200})
+	c.Assert(err, IsNil)
+	waitForQosLimit("after runtime update following the engine create", api.QosLimit{RwIOsPerSec: 20000, RwMBPerSec: 200})
+
+	// The snapshot only gives the revert something to revert to. It does not
+	// touch the raid bdev or its limit.
 	snapshotName := "snapshot-1"
 	_, err = spdkCli.EngineSnapshotCreate(engineName, snapshotName)
 	c.Assert(err, IsNil)
 
-	// Snapshot revert deletes and recreates the raid bdev.
+	// Snapshot revert deletes and recreates the raid bdev, which must get the
+	// current limit reapplied.
 	err = spdkCli.EngineSnapshotRevert(engineName, snapshotName)
 	c.Assert(err, IsNil)
-	waitForQosLimit(api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
+	waitForQosLimit("after snapshot revert recreated the raid bdev", api.QosLimit{RwIOsPerSec: 20000, RwMBPerSec: 200})
 
-	err = spdkCli.EngineSetQosLimit(engineName, &spdkrpc.VolumeQosLimit{RwIosPerSec: 20000, RwMbytesPerSec: 200})
+	err = spdkCli.EngineSetQosLimit(engineName, &spdkrpc.VolumeQosLimit{RwIosPerSec: 30000, RwMbytesPerSec: 300})
 	c.Assert(err, IsNil)
-	waitForQosLimit(api.QosLimit{RwIOsPerSec: 20000, RwMBPerSec: 200})
+	waitForQosLimit("after runtime update following the revert", api.QosLimit{RwIOsPerSec: 30000, RwMBPerSec: 300})
 
 	err = spdkCli.EngineSetQosLimit(engineName, nil)
 	c.Assert(err, IsNil)
-	waitForQosLimit(api.QosLimit{})
+	waitForQosLimit("after removing the limit", api.QosLimit{})
+}
+
+// TestSPDKEngineQosLimitWithFrontend checks whether the QoS limit of an engine
+// can be changed at runtime while an NVMe/TCP frontend keeps its raid bdev
+// open, both while the frontend is idle and while IO is in flight. SPDK
+// refuses such a change on a raid bdev without IO channels (spdk/spdk#3768),
+// which TestSPDKEngineQosLimit covers with an engine without a frontend.
+func (s *TestSuite) TestSPDKEngineQosLimitWithFrontend(c *C) {
+	fmt.Println("Testing SPDK engine QoS limit with a frontend")
+
+	diskDriverName := "aio"
+
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	err = os.Setenv(commonnet.EnvPodIP, ip)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	LaunchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer func() {
+		CleanupDiskFile(c, loopDevicePath)
+	}()
+
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+
+	rawSPDKCli, err := helperclient.NewClient(context.Background())
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := rawSPDKCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close raw SPDK client")
+		}
+	}()
+
+	disk, err := spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, diskDriverName, int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	c.Assert(disk, NotNil)
+
+	disk, err = waitForDiskReady(ctx, spdkCli, loopDevicePath, diskDriverName)
+	c.Assert(err, IsNil)
+
+	defer func() {
+		err := spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, diskDriverName)
+		c.Assert(err, IsNil)
+	}()
+
+	volumeName := getVolumeName()
+	engineName := fmt.Sprintf("%s-e", volumeName)
+	engineFrontendName := fmt.Sprintf("%s-ef", volumeName)
+	replicaNames := []string{
+		fmt.Sprintf("%s-replica-1", volumeName),
+		fmt.Sprintf("%s-replica-2", volumeName),
+	}
+	replicas := make(map[string]*api.Replica)
+
+	defer func() {
+		err = spdkCli.EngineFrontendDelete(engineFrontendName)
+		c.Assert(err, IsNil)
+
+		err = spdkCli.EngineDelete(engineName)
+		c.Assert(err, IsNil)
+
+		for _, replica := range replicas {
+			err = spdkCli.ReplicaDelete(replica.Name, true)
+			c.Assert(err, IsNil)
+		}
+	}()
+
+	for _, replicaName := range replicaNames {
+		replica, err := spdkCli.ReplicaCreate(replicaName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+		c.Assert(err, IsNil)
+		replicas[replicaName] = replica
+	}
+
+	replicaAddressMap := make(map[string]string)
+	for _, replica := range replicas {
+		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
+	}
+
+	waitForQosLimit := func(step string, expected api.QosLimit) {
+		waitForEngineQosLimit(ctx, c, rawSPDKCli, spdkCli, engineName, step, expected)
+	}
+
+	createLimit := &spdkrpc.VolumeQosLimit{RwIosPerSec: 10000, RwMbytesPerSec: 100}
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, createLimit)
+	c.Assert(err, IsNil)
+	c.Assert(engine.State, Equals, types.InstanceStateRunning)
+	c.Assert(engine.Port, Not(Equals), int32(0))
+
+	// The frontend connects to the engine NVMe/TCP target and keeps its raid
+	// bdev open for as long as it is attached.
+	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+	c.Assert(err, IsNil)
+	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
+	endpoint := helperutil.GetLonghornDevicePath(volumeName)
+	c.Assert(engineFrontend.Endpoint, Equals, endpoint)
+
+	waitForQosLimit("after engine create with an attached frontend", api.QosLimit{RwIOsPerSec: 10000, RwMBPerSec: 100})
+
+	// Runtime update while the frontend is attached but no IO is issued.
+	err = spdkCli.EngineSetQosLimit(engineName, &spdkrpc.VolumeQosLimit{RwIosPerSec: 20000, RwMbytesPerSec: 200})
+	c.Assert(err, IsNil)
+	waitForQosLimit("after runtime update with the frontend attached and idle", api.QosLimit{RwIOsPerSec: 20000, RwMBPerSec: 200})
+
+	// Runtime update while IO is in flight. Direct and synchronous writes keep
+	// the background dd running for several seconds.
+	ddDone := make(chan error, 1)
+	go func() {
+		_, err := ne.Execute(nil, "dd",
+			[]string{
+				"if=/dev/urandom",
+				fmt.Sprintf("of=%s", endpoint),
+				"bs=4k", "count=5000", "oflag=direct,dsync", "conv=notrunc", "status=none",
+			},
+			60*time.Second,
+		)
+		ddDone <- err
+	}()
+	time.Sleep(1 * time.Second)
+
+	err = spdkCli.EngineSetQosLimit(engineName, &spdkrpc.VolumeQosLimit{RwIosPerSec: 30000, RwMbytesPerSec: 300})
+	c.Assert(err, IsNil)
+	waitForQosLimit("after runtime update with IO in flight", api.QosLimit{RwIOsPerSec: 30000, RwMBPerSec: 300})
+
+	select {
+	case err = <-ddDone:
+		c.Assert(err, IsNil, Commentf("background dd failed"))
+	case <-time.After(90 * time.Second):
+		c.Fatal("background dd did not complete")
+	}
+
+	// Removing the limit while the frontend is attached.
+	err = spdkCli.EngineSetQosLimit(engineName, nil)
+	c.Assert(err, IsNil)
+	waitForQosLimit("after removing the limit with the frontend attached", api.QosLimit{})
 }
 
 // TestSPDKEngineFrontendSnapshotRevert validates both negative and positive revert paths.
@@ -5292,7 +5488,7 @@ func (s *TestSuite) TestSPDKRebuildParentSwitchDuringEsnapReadLoad(c *C) {
 	c.Assert(err, IsNil)
 	srcAddress := net.JoinHostPort(ip, strconv.Itoa(int(src.PortStart)))
 	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		map[string]string{srcName: srcAddress}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		map[string]string{srcName: srcAddress}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, nil)
 	c.Assert(err, IsNil)
 	frontend, err := spdkCli.EngineFrontendCreate(frontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
 		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
