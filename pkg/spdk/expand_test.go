@@ -9,14 +9,14 @@ import (
 
 	"github.com/cockroachdb/errors"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
 	clientpkg "github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
-
-	. "gopkg.in/check.v1"
 )
 
 func (s *TestSuite) TestEngineFinishExpansionSuccessClearsErrorState(c *C) {
@@ -25,6 +25,7 @@ func (s *TestSuite) TestEngineFinishExpansionSuccessClearsErrorState(c *C) {
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.State = lhtypes.InstanceStateError
 	e.ErrorMsg = "previous failure"
+	e.expansionErrorMsg = e.ErrorMsg
 
 	e.finishExpansion(10, 20, nil)
 
@@ -108,8 +109,8 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionFailureWithoutExpansion(c *
 	c.Assert(ef.isExpanding, Equals, false)
 }
 
-func (s *TestSuite) TestEngineFinishExpansionPartialFailureKeepsOriginalSize(c *C) {
-	fmt.Println("Testing Engine finish expansion partial failure keeps original size")
+func (s *TestSuite) TestEngineFinishExpansionPartialFailureSucceedsWithWarning(c *C) {
+	fmt.Println("Testing Engine finish expansion partial failure succeeds with a warning")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.lastExpansionError = "replica expand failed"
@@ -118,20 +119,21 @@ func (s *TestSuite) TestEngineFinishExpansionPartialFailureKeepsOriginalSize(c *
 
 	c.Assert(e.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateRunning))
 	c.Assert(e.ErrorMsg, Equals, "")
-	c.Assert(e.SpecSize, Equals, uint64(10))
+	c.Assert(e.SpecSize, Equals, uint64(20))
+	c.Assert(e.lastExpansionError, Equals, "the expansion succeeded, but some replica expansion failed: replica expand failed")
 	c.Assert(e.lastExpansionFailedAt, Not(Equals), "")
 }
 
-func (s *TestSuite) TestEngineFinishExpansionPartialFailureRestoresOriginalSize(c *C) {
-	fmt.Println("Testing Engine finish expansion partial failure restores original size when spec size was updated during expand")
+func (s *TestSuite) TestEngineFinishExpansionPartialFailureUsesNewSize(c *C) {
+	fmt.Println("Testing Engine finish expansion partial failure moves to the new size whatever the spec size was during expand")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.SpecSize = 20
+	e.SpecSize = 15
 	e.lastExpansionError = "replica expand failed"
 
 	e.finishExpansion(10, 20, nil)
 
-	c.Assert(e.SpecSize, Equals, uint64(10))
+	c.Assert(e.SpecSize, Equals, uint64(20))
 }
 
 func (s *TestSuite) TestEngineFrontendFinishExpansionPartialFailureKeepsOriginalSize(c *C) {

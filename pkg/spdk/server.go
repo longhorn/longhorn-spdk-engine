@@ -118,6 +118,16 @@ func NewServer(ctx context.Context, portStart, portEnd int32, newServiceClient S
 		return nil, errors.Wrap(err, "failed to set NVMe options")
 	}
 
+	// The engine grows raid bdevs explicitly with bdev_raid_resize during expansion, after
+	// the replicas that failed to expand have been removed. Keep SPDK from resizing them on
+	// its own when a base bdev is resized.
+	resizeOnBaseBdevResize := false
+	if _, err = cli.BdevRaidSetOptions(spdktypes.BdevRaidSetOptionsRequest{
+		ResizeOnBaseBdevResize: &resizeOnBaseBdevResize,
+	}); err != nil {
+		return nil, errors.Wrap(err, "failed to set raid options")
+	}
+
 	broadcasters := map[types.InstanceType]*broadcaster.Broadcaster{}
 	broadcastChs := map[types.InstanceType]chan interface{}{}
 	updateChs := map[types.InstanceType]chan interface{}{}

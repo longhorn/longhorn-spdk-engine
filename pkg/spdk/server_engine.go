@@ -135,8 +135,8 @@ func (s *Server) EngineExpand(ctx context.Context, req *spdkrpc.EngineExpandRequ
 
 	// EC volumes take the backend-reset path because ShardGroupExpand has
 	// already driven the backend resize against the ShardGroup process;
-	// RAID1 keeps its tear-down/expand-replicas/reconstruct cycle. The
-	// engine itself remains layout-blind - the dispatch is decided here
+	// RAID1 expands its replicas in Engine.Expand before the same backend
+	// refresh. The engine itself remains layout-blind - the dispatch is decided here
 	// by inspecting which Backend implementation EngineCreate's factory
 	// populated. EngineExpandRequest does not currently carry
 	// DataLayoutType, so this inference is the substitute for

@@ -1139,8 +1139,13 @@ func (ef *EngineFrontend) isInitiatorCreationRequired(targetIP string) (bool, er
 }
 
 // Expand performs an online volume expansion for the Longhorn Engine using SPDK.
-// It expands the underlying replica logical volumes (lvol), recreates the SPDK RAID bdev,
-// suspends and resumes frontend I/O as needed, and ensures cleanup and status updates on failure.
+// It asks the engine to expand its replicas and RAID bdev, then grows the dm device.
+//
+// Like the V1 engine, application I/O is blocked for the whole backend expansion: when
+// the frontend has a dm device, it is suspended before EngineExpand and resumed after
+// the dm reload, also on every error path. The engine moves to the new size if at least
+// one replica expanded; a replica failure is then kept in lastExpansionError as a
+// warning while the frontend also moves to the new size.
 func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Client, size uint64) (retErr error) {
 	ef.log.Info("Expanding engine frontend")
 
@@ -1163,6 +1168,7 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 	if ef.NvmeTcpFrontend != nil {
 		targetAddress = net.JoinHostPort(ef.NvmeTcpFrontend.TargetIP, strconv.Itoa(int(ef.NvmeTcpFrontend.TargetPort)))
 	}
+	endpoint := ef.Endpoint
 
 	engineSpdkClient, err := ef.newServiceClient(ef.getEngineServiceAddress())
 	if err != nil {
@@ -1182,6 +1188,8 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 	}
 	ef.Unlock()
 	// Phase 1 ends: lock released.
+
+	frontendConfigured, suspendIO := ef.planFrontendExpansion(frontend, endpoint)
 
 	// engineErr will be set when the engine failed to do any non-recoverable operations.
 	expanded := false
@@ -1216,6 +1224,16 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 		return errors.Wrap(err, "prepare raid for expansion failed")
 	}
 
+	if suspendIO {
+		// Registered before the suspend: a timed out suspend can still complete later.
+		defer func() {
+			retErr = ef.resumeIOAfterExpansion(size, retErr)
+		}()
+		if err := ef.suspendIOForExpansion(size); err != nil {
+			return err
+		}
+	}
+
 	if err := engineSpdkClient.EngineExpand(ctx, engineName, size); err != nil {
 		return errors.Wrapf(err, "failed to expand engine %v", engineName)
 	}
@@ -1225,21 +1243,40 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 		return errors.Wrapf(err, "failed to get engine %v after expansion", engineName)
 	}
 	engineActualSize = engine.ActualSize
-	if engine.LastExpansionError != "" {
+	if engine.SpecSize < size {
+		// The engine did not move to the new size although EngineExpand returned
+		// no error, for example an engine that keeps its old size on a partial
+		// replica failure. Keep the frontend size until a retry completes it.
 		backendExpansionError = engine.LastExpansionError
+		if backendExpansionError == "" {
+			backendExpansionError = fmt.Sprintf("engine %s is at size %v after expansion, requested %v", engineName, engine.SpecSize, size)
+		}
 		backendExpansionFailedAt = engine.LastExpansionFailedAt
-		ef.log.Warnf("Engine %s partially failed to expand to %v; keeping engine frontend size at %v: %v",
+		ef.log.Warnf("Engine %s did not expand to %v; keeping engine frontend size at %v: %v",
 			engineName, size, originalSize, backendExpansionError)
 		return nil
+	}
+	// The engine moved to the new size, so a replica failure is only a warning.
+	// It is kept in lastExpansionError once the frontend has grown too.
+	expansionWarning := engine.LastExpansionError
+	expansionWarningAt := engine.LastExpansionFailedAt
+	if expansionWarning != "" {
+		ef.log.Warnf("Engine %s expanded to %v with replica failures: %v", engineName, size, expansionWarning)
 	}
 
 	// From here on the backend has already grown to size. A failure below means the
 	// frontend (nvme path / dm table) has not caught up yet, not that anything is
-	// broken: treat it the same as a backend partial failure (soft, retryable, keep
-	// SpecSize at originalSize) instead of a hard error, so the frontend instance is
+	// broken: treat it as a soft, retryable failure that keeps SpecSize at
+	// originalSize instead of a hard error, so the frontend instance is
 	// not flagged Error and the volume is not force detached/reattached over what is
 	// often just a transient dm resize timeout under heavy I/O.
-	if targetAddress != "" {
+	//
+	// handleFrontend only runs for a frontend that was not configured. A configured frontend
+	// has nothing to set up, because its target and address did not change. Running it
+	// anyway would call StartNvmeTCPInitiator, which resumes the dm device, or suspends,
+	// reloads, and resumes it, whenever it does not find the path reusable as is. That
+	// would end the I/O block before the dm reload below.
+	if targetAddress != "" && !frontendConfigured {
 		if err := ef.handleFrontend(spdkClient, targetAddress); err != nil {
 			backendExpansionError = errors.Wrap(err, "failed to handle frontend").Error()
 			backendExpansionFailedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -1251,8 +1288,14 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 
 	// It waits for the kernel to recognize the new physical NVMe capacity
 	// and then reloads the dm table to propagate the size change up to the volume.
-	if frontend != types.FrontendEmpty && ef.initiator != nil {
-		if err := ef.syncDmDeviceSizeForExpansion(size); err != nil {
+	// The dm device of a configured frontend is still suspended here. handleFrontend may
+	// just have created the initiator of a frontend that was not configured.
+	ef.RLock()
+	syncDmDevice := frontend != types.FrontendEmpty && ef.initiator != nil
+	endpoint = ef.Endpoint
+	ef.RUnlock()
+	if syncDmDevice {
+		if err := ef.syncDmDeviceSizeForExpansion(size, !suspendIO && endpoint != ""); err != nil {
 			backendExpansionError = errors.Wrapf(err, "failed to sync linear dm device size during engine %s expansion", engineName).Error()
 			backendExpansionFailedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			ef.log.Warnf("Engine %s expanded backend to %v but frontend dm resize failed; keeping engine frontend size at %v: %v",
@@ -1263,8 +1306,55 @@ func (ef *EngineFrontend) Expand(ctx context.Context, spdkClient *spdkclient.Cli
 
 	ef.log.Info("Expanding engine completed")
 	expanded = true
+	backendExpansionError = expansionWarning
+	backendExpansionFailedAt = expansionWarningAt
 
 	return nil
+}
+
+// planFrontendExpansion decides how Expand handles the frontend. The expansion keeps the
+// engine target, so a configured NVMe/TCP frontend keeps its path and target address, and
+// Expand skips handleFrontend for it. Application I/O is blocked for the whole backend
+// expansion only on such a frontend, when it has a dm device endpoint.
+func (ef *EngineFrontend) planFrontendExpansion(frontend, endpoint string) (frontendConfigured, suspendIO bool) {
+	frontendConfigured = ef.isNvmeTcpFrontendConfigured()
+	suspendIO = frontendConfigured && frontend == types.FrontendSPDKTCPBlockdev && endpoint != ""
+	return frontendConfigured, suspendIO
+}
+
+// suspendIOForExpansion blocks application I/O on the dm device for the backend
+// expansion, like the V1 engine syncs and then holds its controller lock while it
+// expands the replicas. The filesystems are synced first on a best-effort basis, so
+// little dirty data is left when I/O stops. The suspend then skips syncing and
+// freezing the mounted filesystem (noflush, nolockfs): the reload only grows the
+// existing target's length on the same underlying device, and a filesystem sync can
+// block past DmsetupTimeout under sustained writes. The kernel still waits for the
+// I/O that is already in flight to complete before the suspend returns.
+//
+// The caller resumes the dm device with resumeIOAfterExpansion on every path,
+// including a failed suspend.
+func (ef *EngineFrontend) suspendIOForExpansion(size uint64) error {
+	if err := expansionSyncFilesystems(); err != nil {
+		ef.log.WithError(err).Warnf("Failed to sync before suspending engine frontend for expansion to %v, continuing", size)
+	}
+
+	ef.log.Infof("Suspending engine frontend I/O for expansion to %v", size)
+	if err := expansionSuspendDmDevice(ef); err != nil {
+		return errors.Wrapf(err, "failed to suspend engine frontend %s for expansion to %v", ef.Name, size)
+	}
+	return nil
+}
+
+// resumeIOAfterExpansion resumes the dm device that suspendIOForExpansion suspended
+// and returns err with a resume failure added to it.
+func (ef *EngineFrontend) resumeIOAfterExpansion(size uint64, err error) error {
+	ef.log.Infof("Resuming engine frontend I/O after expansion to %v", size)
+	if resumeErr := expansionResumeDmDevice(ef); resumeErr != nil {
+		// The dm device may be left suspended, so record the earlier error as well.
+		return multierr.Append(err, errors.Wrapf(resumeErr,
+			"failed to resume engine frontend %s after expansion to %v", ef.Name, size))
+	}
+	return err
 }
 
 func (ef *EngineFrontend) requireExpansion(ctx context.Context, engineSpdkClient *client.SPDKClient, size uint64) (requireExpansion bool, err error) {
@@ -1356,8 +1446,21 @@ func (ef *EngineFrontend) finishExpansion(fromSize uint64, expanded bool, size u
 		} else {
 			ef.lastExpansionFailedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
-		ef.log.Warnf("Partially failed to expand from size %v to %v; keeping engine frontend size at %v: %v",
-			fromSize, size, fromSize, backendExpansionError)
+		if expanded {
+			// The engine and the dm device grew although some replicas failed to
+			// expand. Like the V1 engine, keep the failure as a warning only.
+			ef.log.Warnf("Succeeded to expand from size %v to %v with replica failures: %v",
+				fromSize, size, backendExpansionError)
+			ef.SpecSize = size
+
+			// Re-persist the record so the updated SpecSize survives a restart.
+			if err := saveEngineFrontendRecord(ef.metadataDir, ef); err != nil {
+				ef.log.WithError(err).Warn("Failed to persist engine frontend record after expansion")
+			}
+		} else {
+			ef.log.Warnf("Partially failed to expand from size %v to %v; keeping engine frontend size at %v: %v",
+				fromSize, size, fromSize, backendExpansionError)
+		}
 		ef.isExpanding = false
 		return
 	}
@@ -1389,30 +1492,22 @@ func (ef *EngineFrontend) validateExpansionFrontend() error {
 	return nil
 }
 
-func (ef *EngineFrontend) syncDmDeviceSizeForExpansion(size uint64) (err error) {
+// syncDmDeviceSizeForExpansion waits for the NVMe device to report the new size and
+// reloads the dm device. For a configured frontend, Expand runs it while the dm device is
+// already suspended. Otherwise suspend is true when the dm device has an endpoint, and the
+// dm device is suspended only around the reload, as before the expansion blocked I/O.
+func (ef *EngineFrontend) syncDmDeviceSizeForExpansion(size uint64, suspend bool) (err error) {
 	if err := ef.initiator.WaitForDeviceSize(size); err != nil {
 		return errors.Wrapf(err, "failed to wait for dm device %s to reach size %v", ef.Name, size)
 	}
 
-	if ef.Endpoint != "" {
-		ef.log.Infof("Suspending engine frontend for dm resize to %v", size)
-		// noflush+nolockfs: skip syncing and freezing a mounted fs. The reload only grows
-		// the existing target's length on the same underlying device, so the filesystem
-		// does not need to be quiesced, and a filesystem sync can block past
-		// DmsetupTimeout under sustained write throughput. The kernel still waits for the
-		// I/O that is already in flight to complete before the suspend returns.
-		if err := ef.suspend(true, true); err != nil {
+	if suspend {
+		defer func() {
+			err = ef.resumeIOAfterExpansion(size, err)
+		}()
+		if err := expansionSuspendDmDevice(ef); err != nil {
 			return errors.Wrapf(err, "failed to suspend engine frontend %s for dm resize to %v", ef.Name, size)
 		}
-
-		defer func() {
-			if resumeErr := ef.initiator.Resume(helpertypes.DmsetupTimeout); resumeErr != nil {
-				// The dm device may be left suspended after a reload failure, so record
-				// both the target size and whether the preceding reload also failed.
-				err = multierr.Append(err, errors.Wrapf(resumeErr,
-					"failed to resume engine frontend %s after dm resize to %v (reload error: %v)", ef.Name, size, err))
-			}
-		}()
 	}
 
 	if err := ef.initiator.ReloadDmDevice(); err != nil {

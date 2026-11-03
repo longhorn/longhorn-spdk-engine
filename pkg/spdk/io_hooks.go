@@ -71,6 +71,26 @@ var (
 	backingImageExposeSnapshotLvolBdev       = exposeSnapshotLvolBdev
 	backingImageStopExposeBdev               = func(cli *spdkclient.Client, nqn string) error { return cli.StopExposeBdev(nqn) }
 	backingImageDiscoverAndConnectNVMeTarget = discoverAndConnectNVMeTarget
+
+	expansionBdevRaidGet = func(cli *spdkclient.Client, name string, timeout uint64) ([]spdktypes.BdevInfo, error) {
+		return cli.BdevRaidGet(name, timeout)
+	}
+	expansionBdevRaidRemoveBaseBdev = func(cli *spdkclient.Client, name string) (bool, error) {
+		return cli.BdevRaidRemoveBaseBdev(name)
+	}
+	expansionBdevNvmeResetController = func(cli *spdkclient.Client, name string) (bool, error) {
+		return cli.BdevNvmeResetController(name)
+	}
+	expansionBdevGetBdevs = func(cli *spdkclient.Client, name string, timeout uint64) ([]spdktypes.BdevInfo, error) {
+		return cli.BdevGetBdevs(name, timeout)
+	}
+	expansionBdevRaidResize = func(cli *spdkclient.Client, name string) (spdktypes.BdevRaidResizeResponse, error) {
+		return cli.BdevRaidResize(name)
+	}
+
+	expansionSyncFilesystems = commonns.Sync
+	expansionSuspendDmDevice = func(ef *EngineFrontend) error { return ef.suspend(true, true) }
+	expansionResumeDmDevice  = func(ef *EngineFrontend) error { return ef.resume() }
 )
 
 var _ backingImageServiceClient = (*lhclient.SPDKClient)(nil)

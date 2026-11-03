@@ -65,3 +65,27 @@ type BdevRaidGrowBaseBdevRequest struct {
 	RaidName string `json:"raid_name"`
 	BaseName string `json:"base_name"`
 }
+
+// BdevRaidResizeRequest is the request for bdev_raid_resize.
+type BdevRaidResizeRequest struct {
+	Name string `json:"name"`
+}
+
+// BdevRaidResizeResponse is the response for bdev_raid_resize.
+type BdevRaidResizeResponse struct {
+	Name        string `json:"name"`
+	OldBlockcnt uint64 `json:"old_blockcnt"`
+	NewBlockcnt uint64 `json:"new_blockcnt"`
+	Resized     bool   `json:"resized"`
+}
+
+// BdevRaidSetOptionsRequest is the request for bdev_raid_set_options.
+// Every field is a pointer: a nil field is not sent, so SPDK keeps its current value,
+// while an explicit zero or false is sent. For example, ProcessMaxBandwidthMbSec 0
+// removes the background process bandwidth limit. SPDK validates the values, for
+// example it rejects a ProcessWindowSizeKb of 0.
+type BdevRaidSetOptionsRequest struct {
+	ProcessWindowSizeKb      *uint32 `json:"process_window_size_kb,omitempty"`
+	ProcessMaxBandwidthMbSec *uint32 `json:"process_max_bandwidth_mb_sec,omitempty"`
+	ResizeOnBaseBdevResize   *bool   `json:"resize_on_base_bdev_resize,omitempty"`
+}
