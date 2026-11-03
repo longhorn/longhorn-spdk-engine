@@ -43,9 +43,6 @@ type EngineRestore struct {
 	LastRestored           string
 	CurrentRestoringBackup string
 
-	// backupstore ignores the CloseVolumeDev error, so a lost write is only caught here.
-	deviceSyncErr error
-
 	// finalized is set once the engine has recorded the outcome of the
 	// current restore cycle. While set, status reports from backupstore
 	// workers are ignored. See FinalizeRestore for why late reports happen.
@@ -104,7 +101,6 @@ func (r *EngineRestore) StartNewRestore(backupURL string, currentRestoringBackup
 	r.Progress = 0
 	r.Error = ""
 	r.ErrorSourceReplicaName = ""
-	r.deviceSyncErr = nil
 	r.BackupURL = backupURL
 	r.State = btypes.ProgressStateInProgress
 	// Reset the late-report guard: FinalizeRestore set it for the previous
@@ -200,9 +196,6 @@ func (r *EngineRestore) CloseVolumeDev(volDev *os.File) error {
 	if err := volDev.Sync(); err != nil {
 		syncErr = errors.Wrapf(err, "failed to sync NVMe device %v before close", volDev.Name())
 		r.log.WithError(err).Errorf("Failed to sync NVMe device %v before close", volDev.Name())
-		r.Lock()
-		r.deviceSyncErr = syncErr
-		r.Unlock()
 	}
 
 	r.log.Infof("Closing NVMe device %v", volDev.Name())

@@ -2954,7 +2954,6 @@ func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 			restoreReports := e.restore.statusReports
 			restoreError := e.restore.Error
 			restoreState := e.restore.State
-			deviceSyncErr := e.restore.deviceSyncErr
 			e.restore.RUnlock()
 
 			if restoreState == btypes.ProgressStateCanceled {
@@ -2966,10 +2965,6 @@ func (e *Engine) waitForRestoreComplete(spdkClient *spdkclient.Client) error {
 				return retrygo.Unrecoverable(err)
 			}
 			if restoreProgress == 100 {
-				if deviceSyncErr != nil {
-					e.log.WithError(deviceSyncErr).Error("Backup restore wrote all blocks but failed to persist them")
-					return retrygo.Unrecoverable(deviceSyncErr)
-				}
 				e.log.Infof("Backup restore is done: %v%%", restoreProgress)
 				return nil
 			}
