@@ -1,7 +1,9 @@
 package pkg
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -10,15 +12,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/avast/retry-go/v5"
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -29,6 +34,7 @@ import (
 	commonns "github.com/longhorn/go-common-libs/ns"
 	commontypes "github.com/longhorn/go-common-libs/types"
 	helperinitiator "github.com/longhorn/go-spdk-helper/pkg/initiator"
+	helperjsonrpc "github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	helperclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 	helperutil "github.com/longhorn/go-spdk-helper/pkg/util"
@@ -192,10 +198,14 @@ func LaunchTestSPDKTargetDaemon(c *C, execute func(envs []string, name string, a
 
 // launchTestSPDKGRPCServer launches the SPDK gRPC server and returns the server instance.
 // This helper allows tests to access the server instance for advanced testing scenarios (e.g. error injection).
-func launchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error), wg *sync.WaitGroup) *server.Server {
+func launchTestSPDKGRPCServer(ctx context.Context, c *C, ip string, execute func(envs []string, name string, args []string, timeout time.Duration) (string, error), wg *sync.WaitGroup, clientFactory ...server.ServiceClientFactory) *server.Server {
 
 	LaunchTestSPDKTargetDaemon(c, execute)
-	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort, nil)
+	var factory server.ServiceClientFactory
+	if len(clientFactory) != 0 {
+		factory = clientFactory[0]
+	}
+	srv, err := server.NewServer(ctx, defaultTestStartPort, defaultTestEndPort, factory)
 	c.Assert(err, IsNil)
 
 	spdkGRPCListener, err := net.Listen("tcp", net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
@@ -4826,6 +4836,466 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 
 	continuedData := writePatternToBlockDevice(c, endpoint, 'R', 4096, 4096)
 	readAndVerifyBlockDevicePattern(c, endpoint, continuedData, 4096)
+}
+
+// failedFinishSuspendFrontend forwards the first suspension to the real frontend so the
+// rebuild snapshot is taken without I/O. It then simulates the finish-step timeout from
+// longhorn/longhorn#14411 while the test reads directly from the rebuilding dst head.
+type failedFinishSuspendFrontend struct {
+	spdkrpc.UnimplementedSPDKServiceServer
+
+	mu          sync.Mutex
+	client      *client.SPDKClient
+	name        string
+	suspends    int
+	resumes     int
+	finishReady chan struct{}
+	allowFinish chan struct{}
+}
+
+func (f *failedFinishSuspendFrontend) EngineFrontendSuspend(ctx context.Context, req *spdkrpc.EngineFrontendSuspendRequest) (*emptypb.Empty, error) {
+	f.mu.Lock()
+	f.suspends++
+	call := f.suspends
+	f.mu.Unlock()
+
+	if call == 2 {
+		close(f.finishReady)
+	}
+	if call >= 2 {
+		select {
+		case <-f.allowFinish:
+			return nil, grpcstatus.Error(grpccodes.Internal, "dmsetup suspend timed out")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if err := f.client.EngineFrontendSuspendWithOptions(f.name, req.NoFlush, req.NoLockFs); err != nil {
+		return nil, err
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (f *failedFinishSuspendFrontend) EngineFrontendResume(context.Context, *spdkrpc.EngineFrontendResumeRequest) (*emptypb.Empty, error) {
+	f.mu.Lock()
+	f.resumes++
+	f.mu.Unlock()
+	if err := f.client.EngineFrontendResume(f.name); err != nil {
+		return nil, err
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// Direct I/O bypasses the kernel cache, so every read reaches the dst head and
+// its external snapshot while the parent has not yet been replaced.
+func readDirectPatternUntilStopped(endpoint string, expected []byte, stop <-chan struct{}, reads *atomic.Int64) error {
+	fd, err := unix.Open(endpoint, unix.O_RDONLY|unix.O_DIRECT, 0)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := unix.Close(fd); err != nil {
+			logrus.WithError(err).Error("Failed to close direct read file descriptor")
+		}
+	}()
+	buf, err := unix.Mmap(-1, 0, len(expected), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANON)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := unix.Munmap(buf); err != nil {
+			logrus.WithError(err).Error("Failed to unmap direct read buffer")
+		}
+	}()
+
+	for {
+		select {
+		case <-stop:
+			return nil
+		default:
+		}
+		n, err := unix.Pread(fd, buf, 0)
+		if err != nil {
+			return err
+		}
+		if n != len(expected) || !bytes.Equal(buf, expected) {
+			return fmt.Errorf("direct read from %s returned %d bytes with unexpected data", endpoint, n)
+		}
+		reads.Add(1)
+	}
+}
+
+// A pending read in an error bdev gives the test a known in-flight esnap read.
+// The parent change must wait for that read to finish before destroying its channel.
+func assertEsnapParentSwitchWaitsForRead(c *C, ctx context.Context, ip string, ne *commonns.Executor, diskUUID string) {
+	conn, err := net.Dial("unix", helpertypes.DefaultUnixDomainSocketPath)
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := conn.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK RPC connection")
+		}
+	}()
+	rpc := helperjsonrpc.NewClient(ctx, conn)
+	rawCli, err := helperclient.NewClient(ctx)
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := rawCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close raw SPDK client")
+		}
+	}()
+	call := func(method string, params map[string]interface{}) {
+		_, err := rpc.SendCommand(method, params)
+		c.Assert(err, IsNil, Commentf("SPDK RPC %s failed", method))
+	}
+
+	id := strings.ReplaceAll(util.UUID(), "-", "")[:8]
+	mallocName := "esnap-read-base-" + id
+	errorName := "EE_" + mallocName
+	baseName := "esnap-parent-base-" + id
+	snapshotName := "esnap-parent-snap-" + id
+	cloneName := "esnap-parent-clone-" + id
+
+	call("bdev_malloc_create", map[string]interface{}{
+		"name": mallocName, "num_blocks": 256, "block_size": 4096,
+	})
+	defer func() { _, _ = rpc.SendCommand("bdev_malloc_delete", map[string]interface{}{"name": mallocName}) }()
+	call("bdev_error_create", map[string]interface{}{"base_name": mallocName})
+	defer func() { _, _ = rpc.SendCommand("bdev_error_delete", map[string]interface{}{"name": errorName}) }()
+
+	baseUUID, err := rawCli.BdevLvolCreate("", diskUUID, baseName, 1, "", true)
+	c.Assert(err, IsNil)
+	defer func() { _, _ = rawCli.BdevLvolDelete(baseUUID) }()
+	snapshotUUID, err := rawCli.BdevLvolSnapshot(baseUUID, snapshotName, nil)
+	c.Assert(err, IsNil)
+	defer func() { _, _ = rawCli.BdevLvolDelete(snapshotUUID) }()
+	cloneUUID, err := rawCli.BdevLvolCloneBdev(errorName, defaultTestDiskName, cloneName)
+	c.Assert(err, IsNil)
+	defer func() { _, _ = rawCli.BdevLvolDelete(cloneUUID) }()
+
+	portListener, err := net.Listen("tcp", net.JoinHostPort(ip, "0"))
+	c.Assert(err, IsNil)
+	port := strconv.Itoa(portListener.Addr().(*net.TCPAddr).Port)
+	c.Assert(portListener.Close(), IsNil)
+	nqn := helpertypes.GetNQN(cloneName)
+	c.Assert(rawCli.StartExposeBdev(nqn, cloneUUID, strings.ReplaceAll(util.UUID(), "-", ""), ip, port,
+		helpertypes.InternalHostNQN), IsNil)
+	defer func() { _ = rawCli.StopExposeBdev(nqn) }()
+	c.Assert(connectTargetWithInternalHostNQN(ip, port, nqn, ne), IsNil)
+	defer func() { _ = helperinitiator.DisconnectTarget(nqn, ne) }()
+	devices, err := waitForNvmeDevices(ip, port, nqn, ne)
+	c.Assert(err, IsNil)
+	c.Assert(len(devices), Equals, 1)
+	c.Assert(len(devices[0].Namespaces), Equals, 1)
+	endpoint := filepath.Join("/dev", devices[0].Namespaces[0].NameSpace)
+
+	call("bdev_set_qd_sampling_period", map[string]interface{}{"name": errorName, "period": 1000})
+	call("bdev_error_inject_error", map[string]interface{}{
+		"name": errorName, "io_type": "read", "error_type": "pending", "num": 1,
+	})
+	defer func() { _, _ = rpc.SendCommand("bdev_error_resume_pending", map[string]interface{}{"name": errorName}) }()
+
+	readDone := make(chan error, 1)
+	go func() {
+		fd, err := unix.Open(endpoint, unix.O_RDONLY|unix.O_DIRECT, 0)
+		if err != nil {
+			readDone <- err
+			return
+		}
+		defer func() {
+			if err := unix.Close(fd); err != nil {
+				logrus.WithError(err).Error("Failed to close direct read file descriptor")
+			}
+		}()
+		buf, err := unix.Mmap(-1, 0, 4096, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANON)
+		if err != nil {
+			readDone <- err
+			return
+		}
+		defer func() {
+			if err := unix.Munmap(buf); err != nil {
+				logrus.WithError(err).Error("Failed to unmap direct read buffer")
+			}
+		}()
+		n, err := unix.Pread(fd, buf, 0)
+		if err == nil && (n != len(buf) || !bytes.Equal(buf, make([]byte, len(buf)))) {
+			err = fmt.Errorf("read %d bytes with unexpected data from %s", n, endpoint)
+		}
+		readDone <- err
+	}()
+
+	// Observe the pending I/O before switching parent. A read count alone cannot
+	// establish that the old esnap channel still owns an in-flight request.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		result, err := rpc.SendCommand("bdev_get_iostat", map[string]interface{}{"names": []string{errorName}})
+		c.Assert(err, IsNil)
+		var stats struct {
+			Bdevs []struct {
+				QueueDepth uint64 `json:"queue_depth"`
+			} `json:"bdevs"`
+		}
+		c.Assert(json.Unmarshal(result, &stats), IsNil)
+		if len(stats.Bdevs) == 1 && stats.Bdevs[0].QueueDepth > 0 {
+			break
+		}
+		select {
+		case readErr := <-readDone:
+			c.Fatalf("esnap read completed before it could be held: %v", readErr)
+		default:
+		}
+		if time.Now().After(deadline) {
+			c.Fatal("esnap read never reached the pending error bdev")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	parentDone := make(chan error, 1)
+	go func() {
+		_, err := rawCli.BdevLvolSetParent(cloneUUID, snapshotUUID)
+		parentDone <- err
+	}()
+	select {
+	case err := <-parentDone:
+		c.Fatalf("set-parent completed while an esnap read was still pending: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	call("bdev_error_resume_pending", map[string]interface{}{"name": errorName})
+	select {
+	case err := <-readDone:
+		c.Assert(err, IsNil)
+	case <-time.After(30 * time.Second):
+		c.Fatal("esnap read did not complete after pending I/O resumed")
+	}
+	select {
+	case err := <-parentDone:
+		c.Assert(err, IsNil)
+	case <-time.After(30 * time.Second):
+		c.Fatal("set-parent did not complete after the esnap read")
+	}
+}
+
+// TestSPDKRebuildParentSwitchDuringEsnapReadLoad exercises the #14411 path:
+// the finish-step frontend suspend fails, and direct reads of the dst head
+// continue while RebuildingDstFinish switches its parent.
+// This is an integration stress test; it cannot guarantee that a read is in
+// flight at the exact switch. The SPDK blob_ut held-read tests force that order.
+func (s *TestSuite) TestSPDKRebuildParentSwitchDuringEsnapReadLoad(c *C) {
+	ip, err := commonnet.GetAnyExternalIP()
+	c.Assert(err, IsNil)
+	c.Assert(os.Setenv(commonnet.EnvPodIP, ip), IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var spdkWg sync.WaitGroup
+	defer func() {
+		cancel()
+		spdkWg.Wait()
+	}()
+	ne, err := helperutil.NewExecutor(commontypes.ProcDirectory)
+	c.Assert(err, IsNil)
+	fake := &failedFinishSuspendFrontend{
+		finishReady: make(chan struct{}), allowFinish: make(chan struct{}),
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort(ip, "0"))
+	c.Assert(err, IsNil)
+	grpcServer := grpc.NewServer()
+	spdkrpc.RegisterSPDKServiceServer(grpcServer, fake)
+	go func() {
+		if err := grpcServer.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			logrus.WithError(err).Error("Failed to serve the test engine frontend")
+		}
+	}()
+	defer grpcServer.Stop()
+	// GetServiceClient normally replaces every supplied port with SPDKServicePort.
+	// Route only this frontend callback to the fake server's actual port.
+	callbackAddress := listener.Addr().String()
+	clientFactory := func(address string) (*client.SPDKClient, error) {
+		if address == callbackAddress {
+			return client.NewSPDKClient(address)
+		}
+		return server.GetServiceClient(address)
+	}
+	launchTestSPDKGRPCServer(ctx, c, ip, ne.Execute, &spdkWg, clientFactory)
+
+	loopDevicePath := PrepareDiskFile(c)
+	defer CleanupDiskFile(c, loopDevicePath)
+	spdkCli, err := client.NewSPDKClient(net.JoinHostPort(ip, strconv.Itoa(types.SPDKServicePort)))
+	c.Assert(err, IsNil)
+	defer func() {
+		if errClose := spdkCli.Close(); errClose != nil {
+			logrus.WithError(errClose).Error("Failed to close SPDK client")
+		}
+	}()
+	fake.client = spdkCli
+
+	_, err = spdkCli.DiskCreate(defaultTestDiskName, "", loopDevicePath, "aio", int64(defaultTestBlockSize))
+	c.Assert(err, IsNil)
+	disk, err := waitForDiskReady(ctx, spdkCli, loopDevicePath, "aio")
+	c.Assert(err, IsNil)
+	defer func() { _ = spdkCli.DiskDelete(defaultTestDiskName, disk.Uuid, disk.Path, "aio") }()
+	assertEsnapParentSwitchWaitsForRead(c, ctx, ip, ne, disk.Uuid)
+
+	volumeName := fmt.Sprintf("test-esnap-read-%s", time.Now().Format("20060102150405"))
+	engineName, frontendName := volumeName+"-e", volumeName+"-ef"
+	srcName, dstName := volumeName+"-r1", volumeName+"-r2"
+	defer func() {
+		_ = spdkCli.EngineFrontendDelete(frontendName)
+		_ = spdkCli.EngineDelete(engineName)
+		_ = spdkCli.ReplicaDelete(dstName, true)
+		_ = spdkCli.ReplicaDelete(srcName, true)
+	}()
+
+	src, err := spdkCli.ReplicaCreate(srcName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	srcAddress := net.JoinHostPort(ip, strconv.Itoa(int(src.PortStart)))
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		map[string]string{srcName: srcAddress}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+	c.Assert(err, IsNil)
+	frontend, err := spdkCli.EngineFrontendCreate(frontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+	c.Assert(err, IsNil)
+	c.Assert(frontend.State, Equals, types.InstanceStateRunning)
+	fake.name = frontendName
+	endpoint := helperutil.GetLonghornDevicePath(volumeName)
+	expected := writePatternToBlockDevice(c, endpoint, 'A', 0, int64(defaultTestBlockSize))
+
+	dst, err := spdkCli.ReplicaCreate(dstName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	c.Assert(err, IsNil)
+	dstAddress := net.JoinHostPort(ip, strconv.Itoa(int(dst.PortStart)))
+	var releaseFinishOnce sync.Once
+	releaseFinish := func() { releaseFinishOnce.Do(func() { close(fake.allowFinish) }) }
+	defer releaseFinish()
+
+	err = spdkCli.EngineReplicaAdd(engineName, dstName, dstAddress, defaultTestFastSync, frontendName, callbackAddress, nil)
+	c.Assert(err, IsNil)
+	fake.mu.Lock()
+	initialSuspends := fake.suspends
+	fake.mu.Unlock()
+	if initialSuspends == 0 {
+		c.Fatal("rebuild frontend callback bypassed the test server")
+	}
+	finishState := func() string {
+		fake.mu.Lock()
+		suspends, resumes := fake.suspends, fake.resumes
+		fake.mu.Unlock()
+		engine, engineErr := spdkCli.EngineGet(engineName)
+		replica, replicaErr := spdkCli.ReplicaGet(dstName)
+		progress, progressErr := spdkCli.ReplicaRebuildingDstShallowCopyCheck(dstName)
+		engineState := fmt.Sprintf("get error: %v", engineErr)
+		if engine != nil {
+			engineState = fmt.Sprintf("state=%s mode=%s error=%s", engine.State, engine.ReplicaModeMap[dstName], engine.ErrorMsg)
+		}
+		replicaState := fmt.Sprintf("get error: %v", replicaErr)
+		if replica != nil {
+			replicaState = fmt.Sprintf("state=%s rebuilding=%v error=%s", replica.State, replica.Rebuilding, replica.ErrorMsg)
+		}
+		return fmt.Sprintf("suspends=%d resumes=%d engine=(%s) dst=(%s) shallowCopy=%+v shallowCopyErr=%v",
+			suspends, resumes, engineState, replicaState, progress, progressErr)
+	}
+	finishTimer := time.NewTimer(2 * time.Minute)
+	defer finishTimer.Stop()
+	modeTicker := time.NewTicker(2 * time.Second)
+	defer modeTicker.Stop()
+waitForFinish:
+	for {
+		select {
+		case <-fake.finishReady:
+			break waitForFinish
+		case <-modeTicker.C:
+			engine, err := spdkCli.EngineGet(engineName)
+			if err == nil && engine.ReplicaModeMap[dstName] == types.ModeERR {
+				c.Fatalf("rebuild failed before finish-step suspension: %s", finishState())
+			}
+		case <-finishTimer.C:
+			c.Fatalf("rebuild did not reach the finish-step suspension: %s", finishState())
+		}
+	}
+
+	// The rebuilding head is already exposed but still has the external snapshot
+	// as its parent. Read it directly to ensure I/O goes through its esnap channel.
+	dstNQN := helpertypes.GetNQN(dstName)
+	dstPort := strconv.Itoa(int(dst.PortStart))
+	c.Assert(connectTargetWithInternalHostNQN(ip, dstPort, dstNQN, ne), IsNil)
+	defer func() { _ = helperinitiator.DisconnectTarget(dstNQN, ne) }()
+	devices, err := waitForNvmeDevices(ip, dstPort, dstNQN, ne)
+	c.Assert(err, IsNil)
+	c.Assert(len(devices), Equals, 1)
+	c.Assert(len(devices[0].Namespaces), Equals, 1)
+	dstEndpoint := filepath.Join("/dev", devices[0].Namespaces[0].NameSpace)
+
+	stopReads := make(chan struct{})
+	readDone := make(chan struct{})
+	var reads atomic.Int64
+	var readErr error
+	go func() {
+		readErr = readDirectPatternUntilStopped(dstEndpoint, expected, stopReads, &reads)
+		close(readDone)
+	}()
+	var stopReadsOnce sync.Once
+	stopReader := func() bool {
+		stopReadsOnce.Do(func() { close(stopReads) })
+		select {
+		case <-readDone:
+			return true
+		case <-time.After(10 * time.Second):
+			return false
+		}
+	}
+	defer func() {
+		if !stopReader() {
+			logrus.Warn("Timed out waiting for direct esnap reader to stop")
+		}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for reads.Load() < 32 && time.Now().Before(deadline) {
+		select {
+		case <-readDone:
+			c.Fatalf("direct esnap reader stopped before parent switch: %v", readErr)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c.Assert(reads.Load() >= 32, Equals, true)
+	readsBeforeFinish := reads.Load()
+	releaseFinish()
+
+	err = retry.New(retry.Delay(500*time.Millisecond), retry.Attempts(120)).Do(func() error {
+		e, err := spdkCli.EngineGet(engineName)
+		if err != nil {
+			return err
+		}
+		if e.ReplicaModeMap[dstName] != types.ModeRW {
+			return fmt.Errorf("dst replica mode is %v, want RW", e.ReplicaModeMap[dstName])
+		}
+		return nil
+	})
+	c.Assert(err, IsNil)
+	postSwitchDeadline := time.Now().Add(10 * time.Second)
+	// Check that the direct reader still makes progress after the switch. This
+	// does not establish whether a read overlapped the channel teardown.
+	for reads.Load() == readsBeforeFinish && time.Now().Before(postSwitchDeadline) {
+		select {
+		case <-readDone:
+			c.Fatalf("direct esnap reader stopped after parent switch: %v", readErr)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c.Assert(reads.Load() > readsBeforeFinish, Equals, true)
+	c.Assert(stopReader(), Equals, true)
+	c.Assert(readErr, IsNil)
+	fake.mu.Lock()
+	suspends, resumes := fake.suspends, fake.resumes
+	fake.mu.Unlock()
+	c.Assert(suspends, Equals, 2)
+	c.Assert(resumes, Equals, 1)
+	running, err := util.IsSPDKTargetProcessRunning()
+	c.Assert(err, IsNil)
+	c.Assert(running, Equals, true)
+
+	// Remove the source and verify that the rebuilt dst now serves the data.
+	c.Assert(spdkCli.EngineReplicaDelete(engineName, srcName, srcAddress), IsNil)
+	c.Assert(spdkCli.ReplicaDelete(srcName, true), IsNil)
+	readAndVerifyBlockDevicePattern(c, endpoint, expected, 0)
 }
 
 func (s *TestSuite) TestSPDKEngineReplicaAddWithoutEngineFrontendInfo(c *C) {
