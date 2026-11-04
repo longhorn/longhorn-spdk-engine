@@ -2577,6 +2577,10 @@ func (e *Engine) backupRestorePrepare(spdkClient *spdkclient.Client, backupUrl s
 		}
 		if e.restore.State == btypes.ProgressStateError || e.restore.State == btypes.ProgressStateCanceled {
 			lastRestored := e.restore.LastRestored
+			// The snapshot of the last completed restore. It is still on the
+			// replicas and completeBackupRestore deletes it on the next
+			// success, so it is kept even when LastRestored is cleared below.
+			snapshotName := e.restore.SnapshotName
 			// The errored cycle is replaced, not restarted, so nothing else
 			// cancels its context; release it here. A cycle that ran and
 			// finished has already been canceled by FinalizeRestore; the
@@ -2584,6 +2588,7 @@ func (e *Engine) backupRestorePrepare(spdkClient *spdkclient.Client, backupUrl s
 			e.restore.ReleaseCycle()
 			e.restore = NewEngineRestore(spdkClient, backupUrl, backupName, e, superiorPortAllocator)
 			e.restore.LastRestored = lastRestored
+			e.restore.SnapshotName = snapshotName
 			if !e.canDoIncrementalRestore(e.restore, backupUrl, backupName) {
 				e.restore.LastRestored = ""
 			}
