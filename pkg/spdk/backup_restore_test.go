@@ -818,6 +818,30 @@ func (s *TestSuite) TestBackupRestorePrepareReleasesReplacedErroredCycle(c *C) {
 	c.Assert(e.ctx.Err(), IsNil)
 }
 
+func (s *TestSuite) TestBackupRestorePrepareKeepsSnapshotNameAcrossReplacedErroredCycle(c *C) {
+	fmt.Println("Testing the next restore keeps the restore snapshot name of the errored cycle it replaces")
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		"replica-1": newTestReplicaBackend("replica-1", "10.0.0.1:1234", lhtypes.ModeRW),
+	}
+	e.restore = NewEngineRestore(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-b&volume=vol-a", "backup-b", e, nil)
+	e.restore.State = btypes.ProgressStateError
+	e.restore.LastRestored = "backup-a"
+	e.restore.SnapshotName = "restore-snap-a"
+
+	e.Lock()
+	_, err := e.backupRestorePrepare(nil, "s3://backupbucket@us-east-1/backupstore?backup=backup-c&volume=vol-a", nil, nil)
+	e.Unlock()
+	c.Assert(err, IsNil)
+
+	// The backup store is unreachable here, so the incremental check fails
+	// and LastRestored is cleared. The snapshot still exists on the replicas
+	// and must still be deleted by the next completed restore.
+	c.Assert(e.restore.LastRestored, Equals, "")
+	c.Assert(e.restore.SnapshotName, Equals, "restore-snap-a")
+}
+
 func (s *TestSuite) TestFinalizeRestoreIgnoresLateWorkerReports(c *C) {
 	fmt.Println("Testing EngineRestore ignores worker status reports after the outcome is recorded")
 
