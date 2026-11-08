@@ -57,12 +57,24 @@ func (s *TestSuite) TestGetExposedPort(c *C) {
 			expectError:  false,
 		},
 		{
-			name: "non-TCP listener is rejected",
+			name: "RDMA listener returns correct port",
 			subsystem: spdktypes.NvmfSubsystem{
 				ListenAddresses: []spdktypes.NvmfSubsystemListenAddress{{
 					Trtype:  spdktypes.NvmeTransportTypeRDMA,
 					Adrfam:  spdktypes.NvmeAddressFamilyIPv4,
 					Trsvcid: "20003",
+				}},
+			},
+			expectedPort: 20003,
+			expectError:  false,
+		},
+		{
+			name: "non-TCP/RDMA listener is rejected",
+			subsystem: spdktypes.NvmfSubsystem{
+				ListenAddresses: []spdktypes.NvmfSubsystemListenAddress{{
+					Trtype:  spdktypes.NvmeTransportTypePCIe,
+					Adrfam:  spdktypes.NvmeAddressFamilyIPv4,
+					Trsvcid: "20004",
 				}},
 			},
 			expectedPort: 0,

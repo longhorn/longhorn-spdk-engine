@@ -3,6 +3,7 @@ package api
 import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/longhorn/types/pkg/generated/enginerpc"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
@@ -31,6 +32,8 @@ type Replica struct {
 	UUID               string           `json:"uuid"`
 	LinkedCloneInfo    *LinkedCloneInfo `json:"linked_clone_info,omitempty"`
 	CloneSnapshotUsage map[string]int32 `json:"clone_snapshot_usage,omitempty"`
+
+	TransportType enginerpc.TransportType `json:"transport_type"`
 }
 
 type LinkedCloneInfo struct {
@@ -107,6 +110,8 @@ func ProtoReplicaToReplica(r *spdkrpc.Replica) *Replica {
 		ErrorMsg:   r.ErrorMsg,
 		Rebuilding: r.Rebuilding,
 		UUID:       r.Uuid,
+
+		TransportType: r.TransportType,
 	}
 	for snapName, snapProtoLvol := range r.Snapshots {
 		res.Snapshots[snapName] = ProtoLvolToLvol(snapProtoLvol)
