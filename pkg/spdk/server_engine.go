@@ -401,6 +401,32 @@ func (s *Server) EngineSetTargetListenerANAState(ctx context.Context, req *spdkr
 	return &emptypb.Empty{}, nil
 }
 
+func (s *Server) EngineRegisterFrontend(ctx context.Context, req *spdkrpc.EngineRegisterFrontendRequest) (ret *emptypb.Empty, err error) {
+	if req.Name == "" || req.FrontendName == "" || req.FrontendAddress == "" || req.HostNqn == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name, frontend name, frontend address and host NQN are required")
+	}
+
+	s.RLock()
+	e := s.engineMap[req.Name]
+	spdkClient := s.spdkClient
+	s.RUnlock()
+
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for engine frontend registration", req.Name)
+	}
+
+	if err := e.RegisterFrontend(spdkClient, req.FrontendName, req.FrontendAddress, req.HostNqn); err != nil {
+		// Aborted tells the engine frontend that the engine is reachable and
+		// suspending the engine frontends, so that it can wait for it.
+		if errors.Is(err, ErrSharedBlockFrontendsFreezing) {
+			return nil, grpcstatus.Error(grpccodes.Aborted, err.Error())
+		}
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, err.Error())
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 // EngineGet returns a specific engine
 func (s *Server) EngineGet(ctx context.Context, req *spdkrpc.EngineGetRequest) (ret *spdkrpc.Engine, err error) {
 	s.RLock()
@@ -502,7 +528,9 @@ func (s *Server) EngineReplicaAdd(ctx context.Context, req *spdkrpc.EngineReplic
 	}
 
 	var frontendSuspendResumeWrapper replicaAddFrontendSuspendResumeWrapper
-	if efName != "" {
+	if e.SharedBlock {
+		frontendSuspendResumeWrapper = e.buildSharedBlockReplicaAddFrontendSuspendResumeWrapper(ctx, s.getSPDKClient)
+	} else if efName != "" {
 		log := logrus.WithFields(logrus.Fields{
 			"engineName":     req.EngineName,
 			"replicaName":    req.ReplicaName,
@@ -601,7 +629,12 @@ func (s *Server) EngineSnapshotCreate(ctx context.Context, req *spdkrpc.Snapshot
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v for snapshot creation", req.Name)
 	}
 
-	snapshotName, err := e.SnapshotCreate(spdkClient, req.SnapshotName)
+	snapshotName, err := e.SnapshotCreate(ctx, spdkClient, req.SnapshotName, req.EngineFrontendName)
+	// Aborted tells the engine frontend that the engine has not taken the
+	// snapshot, so that it can resume at once.
+	if errors.Is(err, ErrSharedBlockFrontendsFreezing) {
+		return nil, grpcstatus.Error(grpccodes.Aborted, err.Error())
+	}
 	return &spdkrpc.SnapshotResponse{SnapshotName: snapshotName}, err
 }
 

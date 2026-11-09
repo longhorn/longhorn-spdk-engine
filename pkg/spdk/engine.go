@@ -1662,7 +1662,10 @@ const (
 	SnapshotOperationHash   = SnapshotOperationType("snapshot-hash")
 )
 
-func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName string) (snapshotName string, err error) {
+// SnapshotCreate creates a snapshot. engineFrontendName is the engine frontend
+// requesting the snapshot, which has suspended itself. For a shared block
+// engine, the engine frontends on the other hosts are suspended as well.
+func (e *Engine) SnapshotCreate(ctx context.Context, spdkClient *spdkclient.Client, inputSnapshotName, engineFrontendName string) (snapshotName string, err error) {
 	e.log.Infof("Creating snapshot %s", inputSnapshotName)
 
 	opts := &api.SnapshotOptions{
@@ -1670,7 +1673,15 @@ func (e *Engine) SnapshotCreate(spdkClient *spdkclient.Client, inputSnapshotName
 		Timestamp:   util.Now(),
 	}
 
-	return e.snapshotOperation(spdkClient, inputSnapshotName, SnapshotOperationCreate, opts)
+	if !e.SharedBlock {
+		return e.snapshotOperation(spdkClient, inputSnapshotName, SnapshotOperationCreate, opts)
+	}
+
+	err = e.withSharedBlockFrontendsSuspended(ctx, spdkClient, engineFrontendName, false, false, func() (opErr error) {
+		snapshotName, opErr = e.snapshotOperation(spdkClient, inputSnapshotName, SnapshotOperationCreate, opts)
+		return opErr
+	})
+	return snapshotName, err
 }
 
 func (e *Engine) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName string) (err error) {
@@ -2938,7 +2949,7 @@ func (e *Engine) completeBackupRestore(spdkClient *spdkclient.Client, backupSnap
 	}
 
 	e.log.Infof("Creating snapshot %v for the restored volume", newSnapshotName)
-	if _, createErr := e.SnapshotCreate(spdkClient, newSnapshotName); createErr != nil {
+	if _, createErr := e.SnapshotCreate(context.Background(), spdkClient, newSnapshotName, ""); createErr != nil {
 		e.log.WithError(createErr).Warnf("Failed to create snapshot %v for the restored volume", newSnapshotName)
 	}
 
@@ -4561,4 +4572,269 @@ func (e *Engine) getReservationState() *spdkrpc.ReservationState {
 		return nil
 	}
 	return reservationPtplRecordToState(record, e.sharedBlockState.reservationEpoch)
+}
+
+// RegisterFrontend records how to suspend an engine frontend of the shared
+// block engine. An engine frontend registers before it connects to the engine
+// target and periodically afterwards, so that the registration survives an
+// engine restart and follows an engine frontend address change. It is rejected
+// while the engine frontends are suspended, so that no host can connect then.
+// It also allows new connections to the engine target if allowing them failed
+// after a suspension.
+func (e *Engine) RegisterFrontend(spdkClient *spdkclient.Client, name, address, hostNQN string) error {
+	if !e.SharedBlock {
+		return errors.Errorf("engine %s is not a shared block engine", e.Name)
+	}
+
+	allowNewConnections := func() error {
+		e.RLock()
+		nqn := ""
+		if e.NvmeTcpTarget != nil {
+			nqn = e.NvmeTcpTarget.Nqn
+		}
+		e.RUnlock()
+		if nqn == "" {
+			// A recreated engine target allows new connections.
+			return nil
+		}
+		if _, err := sharedBlockNvmfSubsystemAllowAnyHost(spdkClient, nqn, true); err != nil {
+			return err
+		}
+		e.log.Infof("Allowed new connections to engine %s rejected by the previous suspension", e.Name)
+		return nil
+	}
+	changed, err := e.sharedBlockState.frontends.register(name, address, hostNQN, allowNewConnections)
+	if err != nil {
+		return errors.Wrapf(err, "cannot register engine frontend %s to engine %s", name, e.Name)
+	}
+	if changed {
+		e.log.Infof("Registered engine frontend %s at %s with host NQN %s", name, address, hostNQN)
+	}
+	return nil
+}
+
+// withSharedBlockFrontendsSuspended runs work while the engine frontends on
+// all connected hosts are suspended, so that no host can write to the engine
+// target.
+// callerName is the engine frontend requesting the work, which has suspended
+// itself, or empty if there is none. The engine target rejects new connections
+// throughout, so a host that is not connected, e.g., one whose engine frontend
+// is deleted or not registered yet after an engine restart, cannot connect and
+// write. Before running work, it verifies that every host connected to the
+// engine target belongs to a suspended engine frontend, and fails otherwise. It
+// does not run work either if ctx is done, as the requester may no longer wait
+// for it, e.g., the caller may resume itself after its request times out. work
+// should acquire the engine lock by itself, as it is not held while the engine
+// frontends are called.
+func (e *Engine) withSharedBlockFrontendsSuspended(ctx context.Context, spdkClient *spdkclient.Client, callerName string, noFlush, noLockFS bool, work func() error) (err error) {
+	frontends, err := e.sharedBlockState.frontends.startFreezing()
+	if err != nil {
+		return errors.Wrapf(err, "engine %s", e.Name)
+	}
+	defer e.sharedBlockState.frontends.stopFreezing()
+
+	e.RLock()
+	nqn := ""
+	if e.NvmeTcpTarget != nil {
+		nqn = e.NvmeTcpTarget.Nqn
+	}
+	e.RUnlock()
+	if nqn == "" {
+		// No host can write without the engine target.
+		return work()
+	}
+
+	// Reject new connections before the connected hosts are queried, so that
+	// they are the only ones that can write until the work is done. Until new
+	// connections are allowed again, the next engine frontend registration
+	// allows them, as the rejection may take effect even if the call fails.
+	e.sharedBlockState.frontends.setNewConnectionsRejected(true)
+	if _, err := sharedBlockNvmfSubsystemAllowAnyHost(spdkClient, nqn, false); err != nil {
+		return errors.Wrapf(err, "failed to reject new connections to engine %s before suspending engine frontends", e.Name)
+	}
+	defer func() {
+		if _, err := sharedBlockNvmfSubsystemAllowAnyHost(spdkClient, nqn, true); err != nil {
+			e.log.WithError(err).Errorf("Failed to allow new connections to engine %s after the work, will allow them on the next engine frontend registration", e.Name)
+			return
+		}
+		e.sharedBlockState.frontends.setNewConnectionsRejected(false)
+	}()
+
+	connectedHosts, err := getConnectedHostNQNs(spdkClient, nqn)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get the hosts connected to engine %s before suspending engine frontends", e.Name)
+	}
+
+	frozenHosts := map[string]bool{}
+	if caller := frontends[callerName]; caller != nil {
+		frozenHosts[caller.hostNQN] = true
+	}
+	delete(frontends, callerName)
+
+	suspended, err := e.suspendFrontends(frontends, connectedHosts, noFlush, noLockFS)
+	defer e.resumeFrontends(suspended)
+	if err != nil {
+		return err
+	}
+	for _, frontend := range suspended {
+		frozenHosts[frontend.hostNQN] = true
+	}
+
+	// A host may have connected right before new connections were rejected.
+	connectedHosts, err = getConnectedHostNQNs(spdkClient, nqn)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get the hosts connected to engine %s after suspending engine frontends", e.Name)
+	}
+	for hostNQN := range connectedHosts {
+		if !frozenHosts[hostNQN] {
+			return errors.Errorf("host %s is connected to engine %s without a suspended engine frontend", hostNQN, e.Name)
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return errors.Wrapf(err, "cancelled the work of engine %s after suspending engine frontends", e.Name)
+	}
+	return work()
+}
+
+// withSharedBlockFreezeExclusion runs work while the engine frontends are
+// marked as being suspended without suspending them, so that no suspension,
+// e.g., of a snapshot, can start and resume them during the work.
+func (e *Engine) withSharedBlockFreezeExclusion(work func() error) error {
+	if _, err := e.sharedBlockState.frontends.startFreezing(); err != nil {
+		return errors.Wrapf(err, "engine %s", e.Name)
+	}
+	defer e.sharedBlockState.frontends.stopFreezing()
+
+	return work()
+}
+
+// suspendFrontends suspends the engine frontends of the connected hosts in
+// parallel and returns the suspended ones. The engine frontends of the other
+// hosts, e.g., deleted or unreachable ones, are skipped without a request that
+// may wait for the timeout, as these hosts cannot connect and write while new
+// connections are rejected. Any failure fails the suspension, and the caller
+// should resume the returned engine frontends.
+func (e *Engine) suspendFrontends(frontends map[string]*registeredFrontend, connectedHosts map[string]bool, noFlush, noLockFS bool) (map[string]*registeredFrontend, error) {
+	var (
+		lock      sync.Mutex
+		wg        sync.WaitGroup
+		suspended = map[string]*registeredFrontend{}
+		failures  []string
+	)
+	for name, frontend := range frontends {
+		if !connectedHosts[frontend.hostNQN] {
+			e.log.Infof("Skipped suspending engine frontend %s at %s, as its host %s is not connected", name, frontend.address, frontend.hostNQN)
+			continue
+		}
+		wg.Add(1)
+		go func(name string, frontend *registeredFrontend) {
+			defer wg.Done()
+
+			err := e.callFrontend(frontend.address, func(c *client.SPDKClient) error {
+				suspendErr := c.EngineFrontendSuspendWithOptions(name, noFlush, noLockFS)
+				if grpcstatus.Code(errors.UnwrapAll(suspendErr)) == grpccodes.DeadlineExceeded {
+					// The suspension may still complete after the request timed
+					// out, and nothing else would resume it.
+					if resumeErr := c.EngineFrontendResume(name); resumeErr != nil {
+						e.log.WithError(resumeErr).Warnf("Failed to resume engine frontend %s at %s after the suspension timed out", name, frontend.address)
+					}
+				}
+				return suspendErr
+			})
+
+			lock.Lock()
+			defer lock.Unlock()
+			if err == nil {
+				suspended[name] = frontend
+				return
+			}
+			failures = append(failures, errors.Wrapf(err, "failed to suspend engine frontend %s at %s", name, frontend.address).Error())
+		}(name, frontend)
+	}
+	wg.Wait()
+
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		return suspended, errors.Errorf("failed to suspend engine frontends of engine %s: %v", e.Name, failures)
+	}
+	return suspended, nil
+}
+
+// resumeFrontends resumes the engine frontends in parallel. A failure is only
+// logged, as the result of the work does not depend on it.
+func (e *Engine) resumeFrontends(frontends map[string]*registeredFrontend) {
+	var wg sync.WaitGroup
+	for name, frontend := range frontends {
+		wg.Add(1)
+		go func(name string, frontend *registeredFrontend) {
+			defer wg.Done()
+
+			if err := e.callFrontend(frontend.address, func(c *client.SPDKClient) error {
+				return c.EngineFrontendResume(name)
+			}); err != nil {
+				e.log.WithError(err).Errorf("Failed to resume engine frontend %s at %s", name, frontend.address)
+			}
+		}(name, frontend)
+	}
+	wg.Wait()
+}
+
+func (e *Engine) callFrontend(address string, call func(*client.SPDKClient) error) error {
+	c, err := e.newServiceClient(address)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.Unavailable, "failed to create SPDK client for %s: %v", address, err)
+	}
+	defer func() {
+		if errClose := c.Close(); errClose != nil {
+			e.log.WithError(errClose).Warnf("Failed to close SPDK client for %s", address)
+		}
+	}()
+	return call(c)
+}
+
+// buildSharedBlockReplicaAddFrontendSuspendResumeWrapper builds the
+// replicaAddFrontendSuspendResumeWrapper of a replica add of the shared block
+// engine, which suspends the engine frontends on all hosts. Like
+// buildGRPCReplicaAddFrontendSuspendResumeWrapper, the snapshot step does not
+// run the work unless they are suspended, and the finish step proceeds without
+// the suspension if it fails. The finish step waits for another suspension
+// instead, as the engine frontends may be resumed during the work otherwise.
+// For the same reason, no suspension can start while it proceeds without the
+// suspension.
+// ctx is the context of the request, which only the snapshot step runs in.
+// getSPDKClient returns the current SPDK client, as the finish step runs after
+// the shallow copy, which may outlive the client of the request.
+func (e *Engine) buildSharedBlockReplicaAddFrontendSuspendResumeWrapper(ctx context.Context, getSPDKClient func() *spdkclient.Client) replicaAddFrontendSuspendResumeWrapper {
+	return func(work func() error, suspendRequired bool) error {
+		if suspendRequired {
+			return e.withSharedBlockFrontendsSuspended(ctx, getSPDKClient(), "", true, true, work)
+		}
+
+		workStarted := false
+		err := retrygo.New(
+			retrygo.UntilSucceeded(),
+			retrygo.Delay(sharedBlockFreezingRetryInterval),
+			retrygo.DelayType(retrygo.FixedDelay),
+			retrygo.LastErrorOnly(true),
+			retrygo.RetryIf(func(err error) bool {
+				return !workStarted && errors.Is(err, ErrSharedBlockFrontendsFreezing)
+			}),
+			retrygo.OnRetry(func(_ uint, err error) {
+				e.log.WithError(err).Warn("Engine frontends are being suspended, will retry suspending them before replica add work")
+			}),
+		).Do(func() error {
+			startWork := func() error {
+				workStarted = true
+				return work()
+			}
+			err := e.withSharedBlockFrontendsSuspended(context.Background(), getSPDKClient(), "", true, true, startWork)
+			if workStarted || errors.Is(err, ErrSharedBlockFrontendsFreezing) {
+				return err
+			}
+			e.log.WithError(err).Warn("Failed to suspend engine frontends before replica add work, proceeding without suspension")
+			return e.withSharedBlockFreezeExclusion(startWork)
+		})
+		return retryLastError(err)
+	}
 }

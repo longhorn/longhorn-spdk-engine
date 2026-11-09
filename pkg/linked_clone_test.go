@@ -772,7 +772,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 		srcChecksum, err := util.GetFileChunkChecksum(srcEndpoint, 0, dataCountInMB*int64(helpertypes.MiB))
 		c.Assert(err, IsNil)
 
-		_, err = lce.spdkCli.EngineSnapshotCreate(lce.srcEngineName, lce.snapshotName)
+		_, err = lce.spdkCli.EngineSnapshotCreate(lce.srcEngineName, lce.snapshotName, "")
 		c.Assert(err, IsNil)
 
 		// Drop the src frontend (no more I/O needed on src); keep the src engine
@@ -836,7 +836,7 @@ func (s *TestSuite) TestLinkedCloneRebuildAfterExpansion(c *C) {
 			cloneEndpoint, offsetInMB*int64(helpertypes.MiB), dataCountInMB*int64(helpertypes.MiB))
 		c.Assert(err, IsNil)
 
-		_, err = lce.spdkCli.EngineSnapshotCreate(lce.engineName, "snap-post-expand")
+		_, err = lce.spdkCli.EngineSnapshotCreate(lce.engineName, "snap-post-expand", "")
 		c.Assert(err, IsNil)
 
 		// ── Step 6: create 2nd replica at expanded size ───────────────────────────

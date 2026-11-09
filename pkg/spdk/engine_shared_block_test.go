@@ -3,9 +3,12 @@ package spdk
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -17,6 +20,11 @@ import (
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
+	"github.com/longhorn/go-spdk-helper/pkg/initiator"
+	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
+
+	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
@@ -74,6 +82,230 @@ func (s *TestSuite) TestEngineFrontendSharedBlockOnlySupportsBlockdev(c *C) {
 	// The maintenance mode attaches a shared block volume without a frontend.
 	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
 	c.Assert(ef.handleFrontend(nil, "10.0.0.1:20006"), IsNil)
+}
+
+// The engine registers a shared block engine frontend before it connects, so
+// suspending it while it is creating must fail, as it can connect afterwards.
+func (s *TestSuite) TestEngineFrontendSharedBlockRejectsSuspendWhileCreating(c *C) {
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.isCreating = true
+
+	err := ef.SuspendWithOptions(nil, false, false)
+	c.Assert(err, ErrorMatches, ".*engine frontend ef-a is creating.*")
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateRunning))
+}
+
+// An expansion resumes the engine frontend after its dm resize, so the engine
+// must not rely on suspending it then.
+func (s *TestSuite) TestEngineFrontendSharedBlockRejectsSuspendWhileExpanding(c *C) {
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
+	ef.State = lhtypes.InstanceStateRunning
+	ef.isExpanding = true
+
+	err := ef.SuspendWithOptions(nil, false, false)
+	c.Assert(err, ErrorMatches, ".*engine frontend ef-a is expanding.*")
+	c.Assert(string(ef.State), Equals, string(lhtypes.InstanceStateRunning))
+}
+
+// A shared block engine frontend is not in the map until it is created, but
+// may connect to the engine target before that, so suspending it must fail
+// instead of reporting it as nonexistent.
+func (s *TestSuite) TestServerEngineFrontendSuspendRejectsCreatingSharedBlock(c *C) {
+	srv := &Server{engineFrontendMap: map[string]*EngineFrontend{}, creatingSharedBlockFrontends: map[string]int{"ef-a": 1}}
+
+	_, err := srv.EngineFrontendSuspend(context.Background(), &spdkrpc.EngineFrontendSuspendRequest{Name: "ef-a"})
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+
+	_, err = srv.EngineFrontendSuspend(context.Background(), &spdkrpc.EngineFrontendSuspendRequest{Name: "ef-b"})
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.NotFound)
+}
+
+// The recovery of a shared block engine frontend holds the volume host lock
+// while it waits for the engine to finish suspending the engine frontends, so
+// suspending it must fail without waiting for the lock.
+func (s *TestSuite) TestServerEngineFrontendSuspendRejectsRecoveringSharedBlock(c *C) {
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
+	c.Assert(ef.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStatePending))
+	srv := &Server{engineFrontendMap: map[string]*EngineFrontend{"ef-a": ef}}
+	unlockVolumeHost := srv.acquireVolumeHostLock("vol-a")
+	defer unlockVolumeHost()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := srv.EngineFrontendSuspend(context.Background(), &spdkrpc.EngineFrontendSuspendRequest{Name: "ef-a"})
+		errCh <- err
+	}()
+	select {
+	case err := <-errCh:
+		c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+	case <-time.After(5 * time.Second):
+		c.Fatal("suspending the recovering engine frontend waits for the volume host lock")
+	}
+}
+
+// The engine has not taken the snapshot when it is already suspending the
+// engine frontends, so the engine frontend must be able to resume at once.
+func (s *TestSuite) TestServerEngineSnapshotCreateWhileFreezing(c *C) {
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, make(chan interface{}, 1), 0, nil, true, "")
+	_, err := e.sharedBlockState.frontends.startFreezing()
+	c.Assert(err, IsNil)
+	srv := &Server{engineMap: map[string]*Engine{"engine-a": e}}
+
+	_, err = srv.EngineSnapshotCreate(context.Background(), &spdkrpc.SnapshotRequest{Name: "engine-a", EngineFrontendName: "ef-a"})
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.Aborted)
+	c.Assert(isEngineFrontendsFreezingError(err), Equals, true)
+}
+
+// While a shared block engine frontend waits for the engine after a failed
+// snapshot, the engine may suspend and resume it as part of the next
+// suspension, which takes its lock. The engine may also start suspending the
+// engine frontends right after the wait, so the wait ends only with a
+// registration under the lock.
+func (s *TestSuite) TestEngineFrontendWaitForEngineFrontendsResumed(c *C) {
+	freezingErr := grpcstatus.Error(grpccodes.Aborted, ErrSharedBlockFrontendsFreezing.Error())
+	for _, tc := range []struct {
+		registerErrs    []error
+		wantLocked      []bool
+		resumedByEngine bool
+	}{
+		// Freezing, waited, and then freezing again right after the wait.
+		{registerErrs: []error{freezingErr, freezingErr, nil, freezingErr, nil, nil}, wantLocked: []bool{true, false, false, true, false, true}},
+		{registerErrs: []error{freezingErr, nil}, wantLocked: []bool{true, false}, resumedByEngine: true},
+		{registerErrs: []error{grpcstatus.Error(grpccodes.Unavailable, "engine is unreachable")}, wantLocked: []bool{true}},
+	} {
+		ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
+		ef.State = lhtypes.InstanceStateRunning
+		locked := []bool{}
+		ef.registerToEngineFn = func(i *initiator.Initiator) error {
+			c.Assert(ef.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateSuspended))
+			unlocked := ef.TryLock()
+			locked = append(locked, !unlocked)
+			err := tc.registerErrs[len(locked)-1]
+			if unlocked {
+				if tc.resumedByEngine && err == nil {
+					ef.State = lhtypes.InstanceStateRunning
+				}
+				ef.Unlock()
+			}
+			return err
+		}
+
+		ef.Lock()
+		stillSuspended := ef.waitForEngineFrontendsResumed()
+		ef.Unlock()
+		c.Assert(locked, DeepEquals, tc.wantLocked)
+		c.Assert(stillSuspended, Equals, !tc.resumedByEngine)
+	}
+}
+
+// A recovery holds the volume host lock, so it must stop waiting for the engine
+// once a concurrent engine frontend creation evicts it, which waits for the lock.
+func (s *TestSuite) TestEngineFrontendRecoveryReconnectCancelledWhileFreezing(c *C) {
+	freezingErr := grpcstatus.Error(grpccodes.Aborted, ErrSharedBlockFrontendsFreezing.Error())
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
+	ef.State = lhtypes.InstanceStatePending
+	registered := 0
+	ef.registerToEngineFn = func(i *initiator.Initiator) error {
+		registered++
+		ef.Lock()
+		ef.State = lhtypes.InstanceStateRunning
+		ef.Unlock()
+		return freezingErr
+	}
+
+	err := ef.reconnectNvmeTCPPathForRecovery(nil)
+	c.Assert(errors.Is(err, ErrRecoveryCancelled), Equals, true, Commentf("got %v", err))
+	c.Assert(registered, Equals, 1)
+}
+
+// An engine may suspend the shared block device before the instance manager
+// restarts, so the recovery keeps it suspended for the engine to resume it.
+func (s *TestSuite) TestRecoverFromHostSharedBlockKeepsSuspendedDevice(c *C) {
+	for _, tc := range []struct {
+		suspended  bool
+		checkErr   error
+		wantState  lhtypes.InstanceState
+		wantErrMsg string
+	}{
+		{suspended: false, wantState: lhtypes.InstanceStateRunning},
+		{suspended: true, wantState: lhtypes.InstanceStateSuspended},
+		{checkErr: fmt.Errorf("dmsetup failed"), wantState: lhtypes.InstanceStateError, wantErrMsg: ".*failed to check whether the device is suspended.*"},
+	} {
+		comment := Commentf("suspended %v, check error %v", tc.suspended, tc.checkErr)
+		ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
+		ef.metadataDir = c.MkDir()
+		ef.getInitiatorEndpointFn = func() string { return "/dev/longhorn/vol-a" }
+		ef.loadInitiatorNVMeDeviceInfoFn = func(transportAddress, transportServiceID, subsystemNQN string) error { return nil }
+		ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error { return nil }
+		ef.isInitiatorSuspendedFn = func() (bool, error) { return tc.suspended, tc.checkErr }
+
+		err := ef.RecoverFromHost(nil)
+		if tc.wantErrMsg == "" {
+			c.Assert(err, IsNil, comment)
+		} else {
+			c.Assert(err, ErrorMatches, tc.wantErrMsg, comment)
+		}
+		c.Assert(ef.State, Equals, tc.wantState, comment)
+		ef.signalStop()
+	}
+}
+
+// An engine frontend suspended by an engine registers again as well, so that
+// the engine restarted before resuming it can resume it in a later suspension.
+func (s *TestSuite) TestEngineFrontendRegisterToEngineAgain(c *C) {
+	for _, tc := range []struct {
+		state          lhtypes.InstanceState
+		wantRegistered bool
+	}{
+		{state: lhtypes.InstanceStateRunning, wantRegistered: true},
+		{state: lhtypes.InstanceStateSuspended, wantRegistered: true},
+		{state: lhtypes.InstanceStatePending, wantRegistered: false},
+		{state: lhtypes.InstanceStateError, wantRegistered: false},
+	} {
+		ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
+		ef.State = tc.state
+		ef.initiator = &initiator.Initiator{}
+		registered := false
+		ef.registerToEngineFn = func(i *initiator.Initiator) error {
+			registered = true
+			return nil
+		}
+
+		c.Assert(ef.registerToEngineAgain(), IsNil)
+		c.Assert(registered, Equals, tc.wantRegistered, Commentf("state %s", tc.state))
+	}
+}
+
+func (s *TestSuite) TestEngineFrontendSharedBlockRejectsSnapshotCreateWithoutSuspend(c *C) {
+	for _, tc := range []struct {
+		state     lhtypes.InstanceState
+		endpoint  string
+		expanding bool
+	}{
+		{state: lhtypes.InstanceStateRunning, endpoint: ""},
+		{state: lhtypes.InstanceStateError, endpoint: "/dev/longhorn/vol-a"},
+		{state: lhtypes.InstanceStateRunning, endpoint: "/dev/longhorn/vol-a", expanding: true},
+	} {
+		ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
+		ef.State = tc.state
+		ef.Endpoint = tc.endpoint
+		ef.isExpanding = tc.expanding
+
+		_, err := ef.SnapshotCreate("snap-a")
+		c.Assert(errors.Is(err, ErrEngineFrontendLifecyclePrecondition), Equals, true)
+		c.Assert(string(ef.State), Equals, string(tc.state))
+	}
+}
+
+func (s *TestSuite) TestEngineFrontendSharedBlockSnapshotCreateInMaintenanceMode(c *C) {
+	errEngineCalled := errors.New("engine called")
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendEmpty, 1048576, 0, 0, make(chan interface{}, 1),
+		func(string) (*client.SPDKClient, error) { return nil, errEngineCalled }, true)
+	ef.State = lhtypes.InstanceStateRunning
+
+	_, err := ef.SnapshotCreate("snap-a")
+	c.Assert(errors.Is(err, errEngineCalled), Equals, true)
 }
 
 func (s *TestSuite) TestEngineFrontendSharedBlockRejectsSwitchover(c *C) {
@@ -395,4 +627,495 @@ func (s *TestSuite) TestEngineGetReservationState(c *C) {
 	other.State = lhtypes.InstanceStateRunning
 	other.sharedBlockState.reservationPrepared = true
 	c.Assert(other.getWithoutLock().Reservation, IsNil)
+}
+
+func (f *fakeEngineFrontendSuspendServer) counts() (suspends, resumes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.suspends, f.resumes
+}
+
+// unreachableAddress returns an address no one listens on.
+func unreachableAddress(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	return address
+}
+
+// newFreezeTestEngine returns a shared block engine whose target reports the
+// given connected hosts, one set per query.
+func newFreezeTestEngine(t *testing.T, connectedHosts ...[]string) *Engine {
+	t.Helper()
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1048576, make(chan interface{}, 10), 0, client.NewSPDKClient, true, "")
+	e.NvmeTcpTarget = &NvmeTcpTarget{Nqn: "nqn-a"}
+	original := sharedBlockNvmfSubsystemGetControllers
+	t.Cleanup(func() { sharedBlockNvmfSubsystemGetControllers = original })
+	sharedBlockNvmfSubsystemGetControllers = func(_ *spdkclient.Client, nqn string) ([]spdktypes.NvmfSubsystemController, error) {
+		if nqn != "nqn-a" {
+			t.Errorf("unexpected NQN %s", nqn)
+		}
+		if len(connectedHosts) == 0 {
+			t.Fatal("unexpected connected host query")
+		}
+		controllers := []spdktypes.NvmfSubsystemController{}
+		for _, host := range connectedHosts[0] {
+			controllers = append(controllers, spdktypes.NvmfSubsystemController{Hostnqn: host})
+		}
+		connectedHosts = connectedHosts[1:]
+		return controllers, nil
+	}
+	fenceNewConnectionsForTest(t, nil)
+	return e
+}
+
+// fenceNewConnectionsForTest records whether the engine target allows new
+// connections, which it does initially. fail, if any, returns the error of a
+// call setting whether to allow them.
+func fenceNewConnectionsForTest(t *testing.T, fail func(allowAnyHost bool) error) *atomic.Bool {
+	t.Helper()
+
+	allowAnyHost := &atomic.Bool{}
+	allowAnyHost.Store(true)
+	original := sharedBlockNvmfSubsystemAllowAnyHost
+	t.Cleanup(func() { sharedBlockNvmfSubsystemAllowAnyHost = original })
+	sharedBlockNvmfSubsystemAllowAnyHost = func(_ *spdkclient.Client, nqn string, allow bool) (bool, error) {
+		if nqn != "nqn-a" {
+			t.Errorf("unexpected NQN %s", nqn)
+		}
+		if fail != nil {
+			if err := fail(allow); err != nil {
+				return false, err
+			}
+		}
+		allowAnyHost.Store(allow)
+		return true, nil
+	}
+	return allowAnyHost
+}
+
+func registerFrontendForTest(t *testing.T, e *Engine, name, address, hostNQN string) {
+	t.Helper()
+
+	if err := e.RegisterFrontend(nil, name, address, hostNQN); err != nil {
+		t.Fatalf("register engine frontend %s: %v", name, err)
+	}
+}
+
+func TestSharedBlockFrontendsSuspended(t *testing.T) {
+	caller, callerAddress := startFakeEngineFrontendSuspendServer(t, nil)
+	other, otherAddress := startFakeEngineFrontendSuspendServer(t, nil)
+	gone, goneAddress := startFakeEngineFrontendSuspendServer(t, grpcstatus.Error(grpccodes.NotFound, "cannot find engine frontend"))
+
+	// The engine frontends on host-c and host-e do not exist or are
+	// unreachable, but their hosts are not connected, so they cannot write and
+	// are skipped without a request.
+	e := newFreezeTestEngine(t, []string{"host-a", "host-b"}, []string{"host-a", "host-b"})
+	registerFrontendForTest(t, e, "ef-a", callerAddress, "host-a")
+	registerFrontendForTest(t, e, "ef-b", otherAddress, "host-b")
+	registerFrontendForTest(t, e, "ef-c", goneAddress, "host-c")
+	registerFrontendForTest(t, e, "ef-e", unreachableAddress(t), "host-e")
+
+	allowAnyHost := fenceNewConnectionsForTest(t, nil)
+
+	worked := false
+	err := e.withSharedBlockFrontendsSuspended(context.Background(), nil, "ef-a", false, false, func() error {
+		worked = true
+		if allowAnyHost.Load() {
+			t.Error("engine target allows new connections during the work")
+		}
+		if suspends, resumes := other.counts(); suspends != 1 || resumes != 0 {
+			t.Errorf("ef-b is not suspended during the work: suspends %d, resumes %d", suspends, resumes)
+		}
+		if err := e.RegisterFrontend(nil, "ef-d", otherAddress, "host-d"); !errors.Is(err, ErrSharedBlockFrontendsFreezing) {
+			t.Errorf("expected registration to be rejected during the work, got %v", err)
+		}
+		if err := e.withSharedBlockFrontendsSuspended(context.Background(), nil, "", false, false, func() error { return nil }); !errors.Is(err, ErrSharedBlockFrontendsFreezing) {
+			t.Errorf("expected concurrent suspension to be rejected, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !worked {
+		t.Fatal("work did not run")
+	}
+	if !allowAnyHost.Load() {
+		t.Error("engine target does not allow new connections after the work")
+	}
+	if suspends, resumes := caller.counts(); suspends != 0 || resumes != 0 {
+		t.Errorf("the caller is suspended by itself, got suspends %d, resumes %d", suspends, resumes)
+	}
+	if suspends, resumes := other.counts(); suspends != 1 || resumes != 1 {
+		t.Errorf("ef-b must be suspended and resumed once, got suspends %d, resumes %d", suspends, resumes)
+	}
+	if suspends, resumes := gone.counts(); suspends != 0 || resumes != 0 {
+		t.Errorf("ef-c of a host that is not connected must not be called, got suspends %d, resumes %d", suspends, resumes)
+	}
+	other.mu.Lock()
+	defer other.mu.Unlock()
+	if other.noFlush || other.noLockFs {
+		t.Errorf("ef-b must be suspended with the given options, got noFlush %v, noLockFs %v", other.noFlush, other.noLockFs)
+	}
+	registerFrontendForTest(t, e, "ef-d", otherAddress, "host-d")
+}
+
+func TestSharedBlockFrontendsSuspendedAfterFrontendReplaced(t *testing.T) {
+	deleted, deletedAddress := startFakeEngineFrontendSuspendServer(t, grpcstatus.Error(grpccodes.NotFound, "cannot find engine frontend"))
+	current, currentAddress := startFakeEngineFrontendSuspendServer(t, nil)
+
+	// ef-old on host-b is deleted and replaced by ef-new, which keeps host-b
+	// connected.
+	e := newFreezeTestEngine(t, []string{"host-b"}, []string{"host-b"})
+	registerFrontendForTest(t, e, "ef-old", deletedAddress, "host-b")
+	registerFrontendForTest(t, e, "ef-new", currentAddress, "host-b")
+
+	if err := e.withSharedBlockFrontendsSuspended(context.Background(), nil, "", false, false, func() error { return nil }); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if suspends, _ := deleted.counts(); suspends != 0 {
+		t.Errorf("the replaced ef-old must not be suspended, got suspends %d", suspends)
+	}
+	if suspends, resumes := current.counts(); suspends != 1 || resumes != 1 {
+		t.Errorf("ef-new must be suspended and resumed once, got suspends %d, resumes %d", suspends, resumes)
+	}
+}
+
+func TestSharedBlockFrontendsSuspendedCancelledBeforeWork(t *testing.T) {
+	other, otherAddress := startFakeEngineFrontendSuspendServer(t, nil)
+
+	e := newFreezeTestEngine(t, []string{"host-b"}, []string{"host-b"})
+	registerFrontendForTest(t, e, "ef-b", otherAddress, "host-b")
+
+	// The caller gives up, e.g., times out, and resumes itself, so the work
+	// must not run.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	worked := false
+	err := e.withSharedBlockFrontendsSuspended(ctx, nil, "ef-a", false, false, func() error {
+		worked = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected the cancelled suspension to fail")
+	}
+	if worked {
+		t.Error("work ran after the caller gave up")
+	}
+	if suspends, resumes := other.counts(); suspends != 1 || resumes != 1 {
+		t.Errorf("ef-b must be suspended and resumed once, got suspends %d, resumes %d", suspends, resumes)
+	}
+	registerFrontendForTest(t, e, "ef-c", otherAddress, "host-c")
+}
+
+func TestSharedBlockFrontendsSuspendedFailure(t *testing.T) {
+	tests := []struct {
+		name            string
+		suspendErr      error
+		unreachableHost string
+		connectedHosts  [][]string
+		expectedErr     string
+		expectedResumes int
+	}{
+		{
+			name:            "unreachable engine frontend whose host is connected",
+			unreachableHost: "host-c",
+			connectedHosts:  [][]string{{"host-b", "host-c"}},
+			expectedErr:     "failed to suspend engine frontend ef-c",
+			expectedResumes: 1,
+		},
+		{
+			name:           "engine frontend fails to suspend",
+			suspendErr:     grpcstatus.Error(grpccodes.FailedPrecondition, "engine frontend is creating"),
+			connectedHosts: [][]string{{"host-b"}},
+			expectedErr:    "failed to suspend engine frontend ef-b",
+		},
+		{
+			name:            "engine frontend suspension times out",
+			suspendErr:      grpcstatus.Error(grpccodes.DeadlineExceeded, "context deadline exceeded"),
+			connectedHosts:  [][]string{{"host-b"}},
+			expectedErr:     "failed to suspend engine frontend ef-b",
+			expectedResumes: 1,
+		},
+		{
+			name:           "engine frontend does not exist but its host is connected",
+			suspendErr:     grpcstatus.Error(grpccodes.NotFound, "cannot find engine frontend"),
+			connectedHosts: [][]string{{"host-b"}},
+			expectedErr:    "failed to suspend engine frontend ef-b",
+		},
+		{
+			name:            "host connects without a suspended engine frontend",
+			connectedHosts:  [][]string{{"host-b"}, {"host-b", "host-x"}},
+			expectedErr:     "host host-x is connected to engine engine-a without a suspended engine frontend",
+			expectedResumes: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			other, otherAddress := startFakeEngineFrontendSuspendServer(t, tt.suspendErr)
+
+			e := newFreezeTestEngine(t, tt.connectedHosts...)
+			registerFrontendForTest(t, e, "ef-b", otherAddress, "host-b")
+			if tt.unreachableHost != "" {
+				registerFrontendForTest(t, e, "ef-c", unreachableAddress(t), tt.unreachableHost)
+			}
+
+			err := e.withSharedBlockFrontendsSuspended(context.Background(), nil, "", false, false, func() error {
+				t.Error("work must not run")
+				return nil
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.expectedErr) {
+				t.Fatalf("expected error %q, got %v", tt.expectedErr, err)
+			}
+			// ef-b is resumed if it is suspended, or its suspension times out
+			// and may still complete.
+			if suspends, resumes := other.counts(); suspends != 1 || resumes != tt.expectedResumes {
+				t.Errorf("expected ef-b to be suspended once and resumed %d times, got suspends %d, resumes %d", tt.expectedResumes, suspends, resumes)
+			}
+			// The failure does not leave the engine frontends being suspended.
+			registerFrontendForTest(t, e, "ef-d", otherAddress, "host-d")
+		})
+	}
+}
+
+func TestSharedBlockFrontendsSuspendedFenceFailure(t *testing.T) {
+	other, otherAddress := startFakeEngineFrontendSuspendServer(t, nil)
+
+	e := newFreezeTestEngine(t)
+	allowAnyHost := fenceNewConnectionsForTest(t, func(allow bool) error {
+		if !allow {
+			return errors.New("failed to set allow_any_host")
+		}
+		return nil
+	})
+	registerFrontendForTest(t, e, "ef-b", otherAddress, "host-b")
+
+	// Nothing is suspended, as a host might connect without being suspended.
+	err := e.withSharedBlockFrontendsSuspended(context.Background(), nil, "", false, false, func() error {
+		t.Error("work must not run")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "failed to reject new connections") {
+		t.Fatalf("expected fence failure, got %v", err)
+	}
+	if suspends, resumes := other.counts(); suspends != 0 || resumes != 0 {
+		t.Errorf("ef-b must not be suspended, got suspends %d, resumes %d", suspends, resumes)
+	}
+
+	// The rejection may take effect even if the call fails, so the next
+	// registration allows new connections.
+	allowAnyHost.Store(false)
+	registerFrontendForTest(t, e, "ef-d", otherAddress, "host-d")
+	if !allowAnyHost.Load() {
+		t.Error("registration must allow new connections after the fence failure")
+	}
+}
+
+func TestSharedBlockFrontendsSuspendedAllowFailure(t *testing.T) {
+	other, otherAddress := startFakeEngineFrontendSuspendServer(t, nil)
+
+	e := newFreezeTestEngine(t, []string{"host-b"}, []string{"host-b"})
+	registerFrontendForTest(t, e, "ef-b", otherAddress, "host-b")
+	allowFails := &atomic.Bool{}
+	allowFails.Store(true)
+	allowAnyHost := fenceNewConnectionsForTest(t, func(allow bool) error {
+		if allow && allowFails.Load() {
+			return errors.New("failed to set allow_any_host")
+		}
+		return nil
+	})
+
+	// The work is done, so the failure to allow new connections afterwards
+	// does not fail it.
+	if err := e.withSharedBlockFrontendsSuspended(context.Background(), nil, "", false, false, func() error { return nil }); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if allowAnyHost.Load() {
+		t.Fatal("engine target must still reject new connections")
+	}
+	if suspends, resumes := other.counts(); suspends != 1 || resumes != 1 {
+		t.Errorf("ef-b must be suspended and resumed once, got suspends %d, resumes %d", suspends, resumes)
+	}
+
+	// The registration fails until it allows new connections, so that the
+	// engine frontend does not connect before then.
+	if err := e.RegisterFrontend(nil, "ef-d", otherAddress, "host-d"); err == nil || !strings.Contains(err.Error(), "failed to allow new connections") {
+		t.Fatalf("expected registration to fail to allow new connections, got %v", err)
+	}
+	allowFails.Store(false)
+	registerFrontendForTest(t, e, "ef-d", otherAddress, "host-d")
+	if !allowAnyHost.Load() {
+		t.Fatal("registration must allow new connections")
+	}
+
+	// New connections are allowed, so the next registration does not allow
+	// them again.
+	allowAnyHost.Store(false)
+	registerFrontendForTest(t, e, "ef-d", otherAddress, "host-d")
+	if allowAnyHost.Load() {
+		t.Error("registration must not allow new connections once they are allowed")
+	}
+}
+
+// The engine frontends on all hosts must be suspended before the replica add
+// does anything, and nothing is done if they cannot be.
+func TestServerEngineReplicaAddSharedBlockSuspendFailure(t *testing.T) {
+	e := newFreezeTestEngine(t, []string{"host-b"})
+	e.State = lhtypes.InstanceStateRunning
+	registerFrontendForTest(t, e, "ef-b", unreachableAddress(t), "host-b")
+	srv := &Server{engineMap: map[string]*Engine{e.Name: e}}
+
+	_, err := srv.EngineReplicaAdd(context.Background(), &spdkrpc.EngineReplicaAddRequest{
+		EngineName:     e.Name,
+		ReplicaName:    "replica-c",
+		ReplicaAddress: "10.0.0.3:20001",
+	})
+	if err == nil || !strings.Contains(err.Error(), "failed to suspend engine frontend ef-b") {
+		t.Fatalf("expected suspension failure, got %v", err)
+	}
+	if len(e.backends) != 0 {
+		t.Fatalf("replica add must not start, got backends %v", e.backends)
+	}
+}
+
+func TestSharedBlockReplicaAddFrontendSuspendResumeWrapper(t *testing.T) {
+	getSPDKClient := func() *spdkclient.Client { return nil }
+
+	t.Run("snapshot step suspends the engine frontends", func(t *testing.T) {
+		ef, efAddress := startFakeEngineFrontendSuspendServer(t, nil)
+		e := newFreezeTestEngine(t, []string{"host-b"}, []string{"host-b"})
+		registerFrontendForTest(t, e, "ef-b", efAddress, "host-b")
+		wrapper := e.buildSharedBlockReplicaAddFrontendSuspendResumeWrapper(context.Background(), getSPDKClient)
+
+		err := wrapper(func() error {
+			if suspends, resumes := ef.counts(); suspends != 1 || resumes != 0 {
+				t.Errorf("ef-b is not suspended during the work: suspends %d, resumes %d", suspends, resumes)
+			}
+			return nil
+		}, true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if suspends, resumes := ef.counts(); suspends != 1 || resumes != 1 {
+			t.Fatalf("ef-b must be suspended and resumed once, got suspends %d, resumes %d", suspends, resumes)
+		}
+	})
+
+	t.Run("finish step suspends the engine frontends", func(t *testing.T) {
+		ef, efAddress := startFakeEngineFrontendSuspendServer(t, nil)
+		e := newFreezeTestEngine(t, []string{"host-b"}, []string{"host-b"})
+		registerFrontendForTest(t, e, "ef-b", efAddress, "host-b")
+		wrapper := e.buildSharedBlockReplicaAddFrontendSuspendResumeWrapper(context.Background(), getSPDKClient)
+
+		workErr := errors.New("finish failed")
+		err := wrapper(func() error {
+			if suspends, resumes := ef.counts(); suspends != 1 || resumes != 0 {
+				t.Errorf("ef-b is not suspended during the work: suspends %d, resumes %d", suspends, resumes)
+			}
+			return workErr
+		}, false)
+		if !errors.Is(err, workErr) {
+			t.Fatalf("expected the work error, got %v", err)
+		}
+		if suspends, resumes := ef.counts(); suspends != 1 || resumes != 1 {
+			t.Fatalf("ef-b must be suspended and resumed once, got suspends %d, resumes %d", suspends, resumes)
+		}
+		ef.mu.Lock()
+		defer ef.mu.Unlock()
+		if !ef.noFlush || !ef.noLockFs {
+			t.Fatalf("ef-b must be suspended with noflush and nolockfs, got %v, %v", ef.noFlush, ef.noLockFs)
+		}
+	})
+
+	t.Run("finish step waits for another suspension", func(t *testing.T) {
+		ef, efAddress := startFakeEngineFrontendSuspendServer(t, nil)
+		e := newFreezeTestEngine(t, []string{"host-b"}, []string{"host-b"})
+		registerFrontendForTest(t, e, "ef-b", efAddress, "host-b")
+		wrapper := e.buildSharedBlockReplicaAddFrontendSuspendResumeWrapper(context.Background(), getSPDKClient)
+
+		// Another suspension, e.g., of a snapshot, is in progress.
+		if _, err := e.sharedBlockState.frontends.startFreezing(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var worked atomic.Bool
+		done := make(chan error, 1)
+		go func() {
+			done <- wrapper(func() error {
+				worked.Store(true)
+				if suspends, _ := ef.counts(); suspends != 1 {
+					t.Errorf("ef-b is not suspended during the work: suspends %d", suspends)
+				}
+				return nil
+			}, false)
+		}()
+		time.Sleep(100 * time.Millisecond)
+		if worked.Load() {
+			t.Fatal("finish step must not run during another suspension")
+		}
+
+		e.sharedBlockState.frontends.stopFreezing()
+		select {
+		case err := <-done:
+			if err != nil || !worked.Load() {
+				t.Fatalf("expected work to run, got worked %v, err %v", worked.Load(), err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("finish step does not run after the other suspension")
+		}
+	})
+
+	t.Run("finish step proceeds without the suspension", func(t *testing.T) {
+		e := newFreezeTestEngine(t, []string{"host-b"})
+		registerFrontendForTest(t, e, "ef-b", unreachableAddress(t), "host-b")
+		wrapper := e.buildSharedBlockReplicaAddFrontendSuspendResumeWrapper(context.Background(), getSPDKClient)
+
+		worked := false
+		err := wrapper(func() error {
+			worked = true
+			// No suspension, e.g., of a snapshot, can start and resume the
+			// engine frontends during the work.
+			if err := e.withSharedBlockFrontendsSuspended(context.Background(), nil, "", false, false, func() error { return nil }); !errors.Is(err, ErrSharedBlockFrontendsFreezing) {
+				t.Errorf("expected suspension to be rejected during the work, got %v", err)
+			}
+			return nil
+		}, false)
+		if err != nil || !worked {
+			t.Fatalf("expected work to run, got worked %v, err %v", worked, err)
+		}
+		if _, err := e.sharedBlockState.frontends.startFreezing(); err != nil {
+			t.Fatalf("expected suspension to be allowed after the work, got %v", err)
+		}
+	})
+
+	t.Run("finish step keeps new connections to be allowed when proceeding without the suspension", func(t *testing.T) {
+		e := newFreezeTestEngine(t)
+		registerFrontendForTest(t, e, "ef-b", unreachableAddress(t), "host-b")
+		allowAnyHost := fenceNewConnectionsForTest(t, func(allow bool) error {
+			if !allow {
+				return errors.New("failed to set allow_any_host")
+			}
+			return nil
+		})
+		wrapper := e.buildSharedBlockReplicaAddFrontendSuspendResumeWrapper(context.Background(), getSPDKClient)
+
+		// The rejection may take effect even if the call fails.
+		if err := wrapper(func() error { return nil }, false); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		allowAnyHost.Store(false)
+		registerFrontendForTest(t, e, "ef-d", unreachableAddress(t), "host-d")
+		if !allowAnyHost.Load() {
+			t.Error("registration must allow new connections after the work")
+		}
+	})
 }

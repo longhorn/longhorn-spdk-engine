@@ -7,11 +7,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/cockroachdb/errors"
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
+
+	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 )
+
+// ErrSharedBlockFrontendsFreezing is returned when an engine frontend cannot
+// register, or another operation cannot suspend the engine frontends, because
+// the engine frontends of the shared block engine are being suspended.
+var ErrSharedBlockFrontendsFreezing = errors.New("engine frontends of the shared block engine are being suspended")
 
 // sharedBlockEngineState is the state of a shared block engine.
 type sharedBlockEngineState struct {
@@ -36,6 +44,113 @@ type sharedBlockEngineState struct {
 	// the maintenance mode, where reporting the missing file as an empty state
 	// would overwrite the synced state.
 	reservationPrepared bool
+
+	// frontends has its own lock, as the engine lock is not held while the
+	// engine calls the engine frontends.
+	frontends sharedBlockFrontends
+}
+
+type registeredFrontend struct {
+	address string
+	hostNQN string
+}
+
+// sharedBlockFrontends tracks how to suspend each engine frontend of a shared
+// block engine, so that the engine can suspend the frontends on all hosts before
+// an operation that requires no I/O.
+type sharedBlockFrontends struct {
+	sync.Mutex
+
+	// registered maps the name of each engine frontend to how to suspend it.
+	registered map[string]*registeredFrontend
+	isFreezing bool
+	// newConnectionsRejected is whether the engine target may still reject
+	// new connections, as allowing them failed after a suspension.
+	newConnectionsRejected bool
+}
+
+// register records the engine frontend, and returns whether it changed. It is
+// rejected while the engine frontends are suspended. If the engine target may
+// still reject new connections after a suspension, allowNewConnections is called
+// first, so that the engine frontend can connect. A host has at most one
+// engine frontend of the volume, so the other engine frontends of the host,
+// which have been deleted, are removed. Otherwise suspending them would fail
+// while the host is connected.
+func (f *sharedBlockFrontends) register(name, address, hostNQN string, allowNewConnections func() error) (changed bool, err error) {
+	f.Lock()
+	defer f.Unlock()
+
+	if f.isFreezing {
+		return false, ErrSharedBlockFrontendsFreezing
+	}
+	if f.newConnectionsRejected {
+		// The lock is held, so that no suspension can start and reject new
+		// connections meanwhile.
+		if err := allowNewConnections(); err != nil {
+			return false, errors.Wrap(err, "failed to allow new connections rejected by the previous suspension")
+		}
+		f.newConnectionsRejected = false
+	}
+	if f.registered == nil {
+		f.registered = map[string]*registeredFrontend{}
+	}
+	for otherName, other := range f.registered {
+		if otherName != name && other.hostNQN == hostNQN {
+			delete(f.registered, otherName)
+			changed = true
+		}
+	}
+	old := f.registered[name]
+	changed = changed || old == nil || old.address != address || old.hostNQN != hostNQN
+	f.registered[name] = &registeredFrontend{address: address, hostNQN: hostNQN}
+	return changed, nil
+}
+
+// startFreezing marks the engine frontends as being suspended, and returns a
+// copy of the registered engine frontends.
+func (f *sharedBlockFrontends) startFreezing() (map[string]*registeredFrontend, error) {
+	f.Lock()
+	defer f.Unlock()
+
+	if f.isFreezing {
+		return nil, ErrSharedBlockFrontendsFreezing
+	}
+	f.isFreezing = true
+
+	frontends := make(map[string]*registeredFrontend, len(f.registered))
+	for name, frontend := range f.registered {
+		frontends[name] = frontend
+	}
+	return frontends, nil
+}
+
+func (f *sharedBlockFrontends) stopFreezing() {
+	f.Lock()
+	defer f.Unlock()
+
+	f.isFreezing = false
+}
+
+// setNewConnectionsRejected records whether the engine target may still reject
+// new connections. It is called while the engine frontends are suspended, so
+// that no registration checks it meanwhile.
+func (f *sharedBlockFrontends) setNewConnectionsRejected(newConnectionsRejected bool) {
+	f.Lock()
+	defer f.Unlock()
+
+	f.newConnectionsRejected = newConnectionsRejected
+}
+
+func getConnectedHostNQNs(spdkClient *spdkclient.Client, nqn string) (map[string]bool, error) {
+	controllers, err := sharedBlockNvmfSubsystemGetControllers(spdkClient, nqn)
+	if err != nil {
+		return nil, err
+	}
+	hosts := map[string]bool{}
+	for _, controller := range controllers {
+		hosts[controller.Hostnqn] = true
+	}
+	return hosts, nil
 }
 
 // reservationPtplRecord is the NVMe reservation state SPDK persists in a ptpl

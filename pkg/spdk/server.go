@@ -58,6 +58,10 @@ type Server struct {
 	replicaMap        map[string]*Replica
 	engineMap         map[string]*Engine
 	engineFrontendMap map[string]*EngineFrontend
+	// creatingSharedBlockFrontends counts the in-flight creations of each
+	// shared block engine frontend, which is not in engineFrontendMap until
+	// it is created, but may already connect to the engine target.
+	creatingSharedBlockFrontends map[string]int
 
 	// restoreFrontendMap tracks the temporary restore frontend of each engine,
 	// keyed by engine name. An entry exists from the moment a restore starts
@@ -259,6 +263,12 @@ func (s *Server) tryEnsureSPDKTgtConnectionHealthy() error {
 
 	logrus.Info("spdk gRPC server: reconnecting to spdk_tgt")
 	return s.clientReconnect()
+}
+
+func (s *Server) getSPDKClient() *spdkclient.Client {
+	s.RLock()
+	defer s.RUnlock()
+	return s.spdkClient
 }
 
 func (s *Server) clientReconnect() error {

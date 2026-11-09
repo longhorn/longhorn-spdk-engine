@@ -174,6 +174,31 @@ func (c *SPDKClient) EngineSetTargetListenerANAState(name, anaState string) erro
 	return nil
 }
 
+// EngineRegisterFrontend registers an engine frontend to a shared block engine,
+// so that the engine can suspend it. frontendAddress is the SPDK service
+// address of the engine frontend, and hostNQN is the host NQN it connects to the
+// engine target with.
+func (c *SPDKClient) EngineRegisterFrontend(name, frontendName, frontendAddress, hostNQN string) error {
+	if name == "" || frontendName == "" || frontendAddress == "" || hostNQN == "" {
+		return fmt.Errorf("failed to register engine frontend: missing required parameter")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineRegisterFrontend(ctx, &spdkrpc.EngineRegisterFrontendRequest{
+		Name:            name,
+		FrontendName:    frontendName,
+		FrontendAddress: frontendAddress,
+		HostNqn:         hostNQN,
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to register engine frontend %v to engine %v", frontendName, name)
+	}
+	return nil
+}
+
 // EngineList returns all engines known to the SPDK service.
 func (c *SPDKClient) EngineList() (map[string]*api.Engine, error) {
 	client := c.getSPDKServiceClient()
@@ -244,7 +269,9 @@ func (c *SPDKClient) EngineExpandPrecheck(ctx context.Context, name string, size
 }
 
 // EngineSnapshotCreate creates a snapshot directly on the engine.
-func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) (string, error) {
+// engineFrontendName is the engine frontend requesting the snapshot, which has
+// suspended itself, or empty if there is none.
+func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName, engineFrontendName string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("failed to create engine snapshot: missing required parameter name")
 	}
@@ -254,8 +281,9 @@ func (c *SPDKClient) EngineSnapshotCreate(name, snapshotName string) (string, er
 	defer cancel()
 
 	resp, err := client.EngineSnapshotCreate(ctx, &spdkrpc.SnapshotRequest{
-		Name:         name,
-		SnapshotName: snapshotName,
+		Name:               name,
+		SnapshotName:       snapshotName,
+		EngineFrontendName: engineFrontendName,
 	})
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to create engine %s snapshot %s", name, snapshotName)
