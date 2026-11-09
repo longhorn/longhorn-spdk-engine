@@ -559,7 +559,7 @@ func (s *TestSuite) TestSPDKEngineFrontendCreateWithoutEngine(c *C) {
 
 	// Create engine frontend (NVMe/TCP initiator)
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(ip, strconv.Itoa(30000)), 0, 0, 0)
+		net.JoinHostPort(ip, strconv.Itoa(30000)), 0, 0, 0, false)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateError)
 	c.Assert(engineFrontend.ErrorMsg, Not(Equals), "")
@@ -732,7 +732,7 @@ func (s *TestSuite) TestSPDKEngineAndEngineFrontendCreateAndDeleteWithDifferentF
 				replicaModeMap[replica.Name] = types.ModeRW
 			}
 
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, test.frontend, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, test.frontend, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ErrorMsg, Equals, "")
@@ -756,7 +756,7 @@ func (s *TestSuite) TestSPDKEngineAndEngineFrontendCreateAndDeleteWithDifferentF
 			assertEngineEndpoint(c, e.IP, e.Port, test.expectEngineEndpoint)
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, test.frontend, defaultTestLvolSize,
-				net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0)
+				net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0, false)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 			c.Assert(engineFrontend.ErrorMsg, Equals, "")
@@ -867,7 +867,7 @@ func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
 	}
 
 	// Create engine target
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 	c.Assert(err, IsNil)
 	c.Assert(engine.State, Equals, types.InstanceStateRunning)
 	c.Assert(engine.ErrorMsg, Equals, "")
@@ -895,7 +895,7 @@ func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
 
 	// Create engine frontend (NVMe/TCP initiator)
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0)
+		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0, false)
 
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
@@ -1127,7 +1127,7 @@ func (s *TestSuite) TestSPDKEngineFrontendExpand(c *C) {
 	}
 
 	// Create engine target
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 	c.Assert(err, IsNil)
 	c.Assert(engine.State, Equals, types.InstanceStateRunning)
 	c.Assert(engine.ErrorMsg, Equals, "")
@@ -1155,7 +1155,7 @@ func (s *TestSuite) TestSPDKEngineFrontendExpand(c *C) {
 
 	// Create engine frontend (NVMe/TCP initiator)
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0)
+		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0, false)
 
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
@@ -1269,14 +1269,14 @@ func (s *TestSuite) TestSPDKEngineSnapshotCreateAndDelete(c *C) {
 		replicaModeMap[replica.Name] = types.ModeRW
 	}
 
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 	c.Assert(err, IsNil)
 	c.Assert(engine.State, Equals, types.InstanceStateRunning)
 	c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 	c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
 
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(ip, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+		net.JoinHostPort(ip, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend, NotNil)
 
@@ -1420,7 +1420,7 @@ func (s *TestSuite) TestSPDKEngineFrontendSnapshotRevert(c *C) {
 				replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
 			}
 
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, tc.engineFrontendType, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, tc.engineFrontendType, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine, NotNil)
 			if engine.State != types.InstanceStateRunning {
@@ -1430,7 +1430,7 @@ func (s *TestSuite) TestSPDKEngineFrontendSnapshotRevert(c *C) {
 			engineFrontendTargetAddress := net.JoinHostPort(ip, strconv.Itoa(int(engine.Port)))
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, tc.engineFrontendType, defaultTestLvolSize,
-				engineFrontendTargetAddress, 0, 0, 0)
+				engineFrontendTargetAddress, 0, 0, 0, false)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend, NotNil)
 
@@ -1901,7 +1901,7 @@ func (s *TestSuite) TestSPDKEngineCreateWithSalvageRequested(c *C) {
 		replicaAddressMap[replica.Name] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
 	}
 
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, true, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, true, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 	c.Assert(err, IsNil)
 	c.Assert(engine, NotNil)
 	c.Assert(engine.State, Equals, types.InstanceStateRunning)
@@ -1914,7 +1914,7 @@ func (s *TestSuite) TestSPDKEngineCreateWithSalvageRequested(c *C) {
 	c.Assert(err, IsNil)
 
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0)
+		net.JoinHostPort(e.IP, strconv.Itoa(int(e.Port))), 0, 0, 0, false)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 
@@ -2057,7 +2057,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica2.Name: types.ModeRW,
 			}
 			endpoint := helperutil.GetLonghornDevicePath(volumeName)
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.ErrorMsg, Equals, "")
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
@@ -2065,7 +2065,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(engine.ReplicaModeMap, DeepEquals, replicaModeMap)
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 			c.Assert(engine.IP, Not(Equals), "")
@@ -2156,7 +2156,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 				replica1.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
 				replica2.Name: net.JoinHostPort(ip, strconv.Itoa(int(replica2.PortStart))),
 			}
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.ErrorMsg, Equals, "")
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
@@ -2164,7 +2164,7 @@ func (s *TestSuite) TestSPDKMultipleThread(c *C) {
 			c.Assert(engine.Port, Not(Equals), int32(0))
 
 			engineFrontend, err = spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
@@ -2444,7 +2444,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 				replica2.Name: types.ModeRW,
 			}
 			endpoint := helperutil.GetLonghornDevicePath(volumeName)
-			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.ErrorMsg, Equals, "")
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
@@ -2454,7 +2454,7 @@ func (s *TestSuite) spdkMultipleThreadSnapshotOpsAndRebuilding(c *C, withBacking
 			c.Assert(engine.Port, Not(Equals), int32(0))
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
@@ -3512,14 +3512,14 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			}
 
 			vol.endpoint = helperutil.GetLonghornDevicePath(vol.volumeName)
-			engine, err := spdkCli.EngineCreate(vol.engineName, vol.volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, vol.replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			engine, err := spdkCli.EngineCreate(vol.engineName, vol.volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, vol.replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 			if err != nil {
 				createErrs[idx] = fmt.Errorf("failed to create engine for vol %d: %w", idx, err)
 				return
 			}
 
 			engineFrontend, err := spdkCli.EngineFrontendCreate(vol.engineFrontendName, vol.volumeName, vol.engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 			if err != nil {
 				createErrs[idx] = fmt.Errorf("failed to create engine frontend for vol %d: %w", idx, err)
 				return
@@ -3801,7 +3801,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 			err = spdkCli.EngineDelete(engineName)
 			c.Assert(err, IsNil)
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaTmpAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaTmpAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaTmpAddressMap)
@@ -3809,7 +3809,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(engine.Port, Not(Equals), int32(0))
 
 			engineFrontend, err = spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
@@ -3954,7 +3954,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(err, IsNil)
 
 			// Relaunch engine with the correct replica
-			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+			engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 			c.Assert(err, IsNil)
 			c.Assert(engine.State, Equals, types.InstanceStateRunning)
 			c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -3962,7 +3962,7 @@ func (s *TestSuite) spdkMultipleThreadFastRebuilding(c *C, withBackingImage bool
 			c.Assert(engine.Port, Not(Equals), int32(0))
 
 			engineFrontend, err = spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLargeLvolSize,
-				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+				net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 			c.Assert(err, IsNil)
 			c.Assert(engineFrontend.Endpoint, Equals, endpoint)
 
@@ -4307,7 +4307,7 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 		c.Assert(err, IsNil)
 		err = spdkCli.EngineDelete(engineName)
 		c.Assert(err, IsNil)
-		engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, volumeSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		engine, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, volumeSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
@@ -4323,14 +4323,14 @@ func revertSnapshot(c *C, spdkCli *client.SPDKClient, snapshotName, volumeName, 
 		c.Assert(err, IsNil)
 		err = spdkCli.EngineDelete(engineName)
 		c.Assert(err, IsNil)
-		engine, err = spdkCli.EngineCreate(engineName, volumeName, prevFrontend, volumeSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		engine, err = spdkCli.EngineCreate(engineName, volumeName, prevFrontend, volumeSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 		c.Assert(err, IsNil)
 		c.Assert(engine.State, Equals, types.InstanceStateRunning)
 		c.Assert(engine.ReplicaAddressMap, DeepEquals, replicaAddressMap)
 		c.Assert(engine.Port, Not(Equals), int32(0))
 
 		engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, prevFrontend, volumeSize,
-			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+			net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 		c.Assert(err, IsNil)
 		c.Assert(engineFrontend.Endpoint, Equals, prevEndpoint)
 	}
@@ -4472,12 +4472,12 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAdd(c *C) {
 	replicaAddressMap[replicaNames[0]] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
 
 	// 2. Create Engine with 1 replica
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 	c.Assert(err, IsNil)
 
 	// 3. Create Engine Frontend
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 
@@ -4617,12 +4617,12 @@ func (s *TestSuite) TestSPDKEngineFrontendReplicaAddErrorHandling(c *C) {
 	replicaAddressMap[replicaNames[0]] = net.JoinHostPort(ip, strconv.Itoa(int(replica.PortStart)))
 
 	// 2. Create Engine with 1 replica
-	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 	c.Assert(err, IsNil)
 
 	// 3. Create Engine Frontend
 	engineFrontend, err := spdkCli.EngineFrontendCreate(engineFrontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 	c.Assert(err, IsNil)
 	c.Assert(engineFrontend.State, Equals, types.InstanceStateRunning)
 
@@ -5192,10 +5192,10 @@ func (s *TestSuite) TestSPDKRebuildParentSwitchDuringEsnapReadLoad(c *C) {
 	c.Assert(err, IsNil)
 	srcAddress := net.JoinHostPort(ip, strconv.Itoa(int(src.PortStart)))
 	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		map[string]string{srcName: srcAddress}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		map[string]string{srcName: srcAddress}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 	c.Assert(err, IsNil)
 	frontend, err := spdkCli.EngineFrontendCreate(frontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
+		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0, false)
 	c.Assert(err, IsNil)
 	c.Assert(frontend.State, Equals, types.InstanceStateRunning)
 	fake.name = frontendName
@@ -5408,7 +5408,7 @@ func (s *TestSuite) TestSPDKEngineReplicaAddWithoutEngineFrontendInfo(c *C) {
 		replicaNames[0]: net.JoinHostPort(ip, strconv.Itoa(int(replica1.PortStart))),
 	}
 
-	_, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+	_, err = spdkCli.EngineCreate(engineName, volumeName, types.FrontendEmpty, defaultTestLvolSize, replicaAddressMap, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, false)
 	c.Assert(err, IsNil)
 
 	replica2, err := spdkCli.ReplicaCreate(replicaNames[1], defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")

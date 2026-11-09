@@ -40,8 +40,9 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	}
 
 	if e == nil {
-		s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine], req.SnapshotMaxCount, s.newServiceClient)
-		e = s.engineMap[req.Name]
+		e = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine], req.SnapshotMaxCount, s.newServiceClient,
+			req.SharedBlock)
+		s.engineMap[req.Name] = e
 	}
 
 	spdkClient := s.spdkClient
@@ -780,7 +781,16 @@ func (s *Server) EngineBackupRestore(ctx context.Context, req *spdkrpc.EngineBac
 	volumeName := e.VolumeName
 	specSize := e.SpecSize
 	replicaCount := len(e.backends)
+	sharedBlock := e.SharedBlock
+	frontend := e.Frontend
 	e.RUnlock()
+
+	// The snapshot of the restored volume suspends the engine frontends of a
+	// shared block engine, which cannot include the restore initiator if the
+	// engine keeps its target. The restore runs with the frontend disabled.
+	if sharedBlock && frontend != types.FrontendEmpty {
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "cannot restore backup to shared block engine %v with frontend %v, as the frontend must be disabled", req.EngineName, frontend)
+	}
 
 	// EngineFrontendCreate checks restoreFrontendMap while holding the volume
 	// host lock and keeps holding it until its frontend is in
@@ -865,6 +875,7 @@ func (s *Server) registerRestoreFrontend(e *Engine, volumeName string, specSize 
 		types.DefaultUblkNumberOfQueue,
 		throwawayUpdateCh,
 		s.newServiceClient,
+		false,
 	)
 	tempEF.unregisterRestoreFrontendFn = func() {
 		s.Lock()

@@ -184,6 +184,7 @@ type Engine struct {
 	LastExpansionError    string                `json:"last_expansion_error"`
 	LastExpansionFailedAt string                `json:"last_expansion_failed_at"`
 	SnapshotMaxCount      int32                 `json:"snapshot_max_count"`
+	SharedBlock           bool                  `json:"shared_block"`
 }
 
 func ProtoEngineToEngine(e *spdkrpc.Engine) *Engine {
@@ -207,6 +208,7 @@ func ProtoEngineToEngine(e *spdkrpc.Engine) *Engine {
 		LastExpansionError:    e.LastExpansionError,
 		LastExpansionFailedAt: e.LastExpansionFailedAt,
 		SnapshotMaxCount:      e.SnapshotMaxCount,
+		SharedBlock:           e.SharedBlock,
 	}
 	for rName, mode := range e.ReplicaModeMap {
 		res.ReplicaModeMap[rName] = types.GRPCReplicaModeToReplicaMode(mode)
@@ -238,6 +240,7 @@ type EngineFrontend struct {
 	IsExpanding           bool                         `json:"is_expanding"`
 	LastExpansionError    string                       `json:"last_expansion_error"`
 	LastExpansionFailedAt string                       `json:"last_expansion_failed_at"`
+	SharedBlock           bool                         `json:"shared_block"`
 }
 
 type EngineFrontendNvmeTCPPath struct {
@@ -270,6 +273,7 @@ func ProtoEngineFrontendToEngineFrontend(ef *spdkrpc.EngineFrontend) *EngineFron
 		IsExpanding:           ef.IsExpanding,
 		LastExpansionError:    ef.LastExpansionError,
 		LastExpansionFailedAt: ef.LastExpansionFailedAt,
+		SharedBlock:           ef.SharedBlock,
 	}
 
 	for _, path := range ef.Paths {

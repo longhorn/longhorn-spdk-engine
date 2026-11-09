@@ -165,7 +165,7 @@ func TestEngineFrontendExpandWaitsForEngineExpansion(t *testing.T) {
 			fake.state = string(types.InstanceStateRunning)
 			address := startFakeEngineExpandServer(t, fake)
 			ef := NewEngineFrontend("ef", "engine", "vol", types.FrontendEmpty, oldSize, 0, 0, make(chan interface{}, 1),
-				func(string) (*client.SPDKClient, error) { return client.NewSPDKClient(address) })
+				func(string) (*client.SPDKClient, error) { return client.NewSPDKClient(address) }, false)
 
 			err := ef.Expand(context.Background(), nil, newSize)
 

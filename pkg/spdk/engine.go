@@ -129,6 +129,11 @@ type Engine struct {
 	ActualSize uint64
 	Frontend   string
 
+	// SharedBlock allows engine frontends on multiple nodes to connect to the
+	// engine target at the same time (RWX block volume). The target then
+	// accepts a range of controller IDs.
+	SharedBlock bool
+
 	ctrlrLossTimeout     int
 	fastIOFailTimeoutSec int
 	// backends maps each peer's name to its Backend. Each one provides a base
@@ -183,10 +188,12 @@ type Engine struct {
 	newServiceClient ServiceClientFactory
 }
 
-func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}, snapshotMaxCount int32, newServiceClient ServiceClientFactory) *Engine {
+func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}, snapshotMaxCount int32, newServiceClient ServiceClientFactory,
+	sharedBlock bool) *Engine {
 	log := logrus.StandardLogger().WithFields(logrus.Fields{
-		"engineName": engineName,
-		"volumeName": volumeName,
+		"engineName":  engineName,
+		"volumeName":  volumeName,
+		"sharedBlock": sharedBlock,
 	})
 
 	roundedSpecSize := util.RoundUp(specSize, helpertypes.MiB)
@@ -209,6 +216,8 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		VolumeName: volumeName,
 		Frontend:   frontend,
 		SpecSize:   specSize,
+
+		SharedBlock: sharedBlock,
 
 		// TODO: support user-defined values
 		ctrlrLossTimeout:     replicaCtrlrLossTimeoutSec,
@@ -246,6 +255,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 		"replicaAddressMap": replicaAddressMap,
 		"salvageRequested":  salvageRequested,
 		"frontend":          e.Frontend,
+		"sharedBlock":       e.SharedBlock,
 	}).Info("Creating engine")
 
 	requireUpdate := true
@@ -261,6 +271,11 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 	if e.State != types.InstanceStatePending {
 		requireUpdate = false
 		return nil, fmt.Errorf("invalid state %s for engine %s creation", e.State, e.Name)
+	}
+
+	if e.SharedBlock && e.Frontend == types.FrontendUBLK {
+		requireUpdate = false
+		return nil, fmt.Errorf("frontend %s is not supported for shared block engine %s", e.Frontend, e.Name)
 	}
 
 	if err := e.validateReplicaSize(replicaAddressMap, backendFactory); err != nil {
@@ -363,8 +378,8 @@ func (e *Engine) createNVMeTCPTarget(spdkClient *spdkclient.Client, superiorPort
 		return errors.Wrapf(err, "failed to blindly stop exposing RAID bdev for engine target %v", e.Name)
 	}
 
-	cntlid := getTargetCntlid(e.NvmeTcpTarget.IP, e.NvmeTcpTarget.Port)
-	if err := e.startExposeNVMeTCPTarget(spdkClient, initialANAState, spdkANAState, cntlid); err != nil {
+	minCntlid, maxCntlid := getTargetCntlidRange(e.NvmeTcpTarget.IP, e.NvmeTcpTarget.Port, e.SharedBlock)
+	if err := e.startExposeNVMeTCPTarget(spdkClient, initialANAState, spdkANAState, minCntlid, maxCntlid); err != nil {
 		// No need to release ports here. The engine will be marked as ERR by
 		// Create's deferred error handler, and Delete will release the ports
 		// when the user cleans up this engine.
@@ -376,12 +391,12 @@ func (e *Engine) createNVMeTCPTarget(spdkClient *spdkclient.Client, superiorPort
 	return nil
 }
 
-func (e *Engine) startExposeNVMeTCPTarget(spdkClient *spdkclient.Client, anaState NvmeTCPANAState, spdkANAState spdktypes.NvmfSubsystemListenerAnaState, cntlid uint16) error {
+func (e *Engine) startExposeNVMeTCPTarget(spdkClient *spdkclient.Client, anaState NvmeTCPANAState, spdkANAState spdktypes.NvmfSubsystemListenerAnaState, minCntlid, maxCntlid uint16) error {
 	nsUUID := getStableVolumeNsUUID(e.VolumeName)
-	e.log.Infof("Starting to expose RAID bdev for engine target %v on %v:%v with ANA state %v, cntlid %v, nsUUID %v",
-		e.Name, e.NvmeTcpTarget.IP, e.NvmeTcpTarget.Port, anaState, cntlid, nsUUID)
+	e.log.Infof("Starting to expose RAID bdev for engine target %v on %v:%v with ANA state %v, cntlid range [%v, %v], nsUUID %v",
+		e.Name, e.NvmeTcpTarget.IP, e.NvmeTcpTarget.Port, anaState, minCntlid, maxCntlid, nsUUID)
 	return spdkClient.StartExposeBdevWithANAState(e.NvmeTcpTarget.Nqn, e.Name, e.NvmeTcpTarget.Nguid, nsUUID,
-		e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)), spdkANAState, cntlid, cntlid)
+		e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)), spdkANAState, minCntlid, maxCntlid)
 }
 
 // connectReplicas connects to each backend's NVMf bdev and populates
@@ -751,6 +766,7 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 		LastExpansionError:    e.lastExpansionError,
 		LastExpansionFailedAt: e.lastExpansionFailedAt,
 		SnapshotMaxCount:      e.SnapshotMaxCount,
+		SharedBlock:           e.SharedBlock,
 	}
 
 	if e.NvmeTcpTarget != nil {

@@ -1192,7 +1192,7 @@ func (s *Server) recoverEngineFrontends(ctx context.Context) {
 		}
 
 		ef := NewEngineFrontend(record.Name, record.EngineName, record.VolumeName,
-			record.Frontend, record.SpecSize, 0, 0, s.updateChs[types.InstanceTypeEngineFrontend], s.newServiceClient)
+			record.Frontend, record.SpecSize, 0, 0, s.updateChs[types.InstanceTypeEngineFrontend], s.newServiceClient, record.SharedBlock)
 		ef.NvmeTcpFrontend.NrIoQueues = record.NrIoQueues
 		ef.metadataDir = s.metadataDir
 		ef.VolumeNQN = record.VolumeNQN

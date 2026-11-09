@@ -14,7 +14,7 @@ import (
 )
 
 func newTransientStateTestEngineFrontend(deviceInfoErr error) *EngineFrontend {
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil, false)
 	ef.State = lhtypes.InstanceStateRunning
 	ef.NvmeTcpFrontend.Nqn = getStableVolumeNQN("vol-a")
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
