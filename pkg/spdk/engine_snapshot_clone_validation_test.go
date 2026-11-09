@@ -15,7 +15,7 @@ import (
 )
 
 func TestSnapshotCloneRejectsEmptyLinkedCloneReplicaMap(t *testing.T) {
-	source := NewEngine("source-engine", "source-volume", types.FrontendSPDKTCPBlockdev, 1<<20, nil, 1, nil, false)
+	source := NewEngine("source-engine", "source-volume", types.FrontendSPDKTCPBlockdev, 1<<20, nil, 1, nil, false, "")
 	t.Cleanup(source.cancelCtx)
 	source.State = types.InstanceStateRunning
 
@@ -46,7 +46,7 @@ func TestSnapshotCloneRejectsEmptyLinkedCloneReplicaMap(t *testing.T) {
 		{name: "empty", replicaMap: map[string]string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			destination := NewEngine("destination-engine", "destination-volume", types.FrontendSPDKTCPBlockdev, 1<<20, nil, 1, client.NewSPDKClient, false)
+			destination := NewEngine("destination-engine", "destination-volume", types.FrontendSPDKTCPBlockdev, 1<<20, nil, 1, client.NewSPDKClient, false, "")
 			t.Cleanup(destination.cancelCtx)
 
 			err := destination.SnapshotClone("snapshot", source.Name, listener.Addr().String(), spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE, tc.replicaMap)

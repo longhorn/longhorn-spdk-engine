@@ -84,7 +84,7 @@ func (s *TestSuite) TestIsShardedEngine(c *C) {
 
 	for name, tc := range testCases {
 		fmt.Println("Testing isShardedEngine:", name)
-		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false)
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 		e.backends = tc.backends
 		c.Assert(isShardedEngine(e), Equals, tc.expected, Commentf("case %q", name))
 	}

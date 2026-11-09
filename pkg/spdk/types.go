@@ -55,6 +55,10 @@ const (
 	// time. It matches SPDK_NVMF_MAX_NUM_REGISTRANTS, the maximum number of NVMe
 	// reservation registrants per namespace.
 	sharedBlockMaxFrontends = 16
+
+	// reservationPtplSubDir is the directory under the metadata directory that
+	// holds the NVMe reservation ptpl files of shared block engine targets.
+	reservationPtplSubDir = "reservations"
 )
 
 const (

@@ -30,6 +30,19 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	if req.SpecSize == 0 {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine spec size is required")
 	}
+	// Without the volume UID, a new volume with the same name would restore the
+	// reservation state of a deleted volume.
+	if req.SharedBlock && (req.Reservation == nil || req.Reservation.VolumeUid == "") {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "reservation state with the volume UID is required for a shared block engine")
+	}
+	// Both are components of the path of the ptpl file.
+	if req.SharedBlock {
+		for _, name := range []string{req.VolumeName, req.Reservation.VolumeUid} {
+			if !isValidReservationPtplPathComponent(name) {
+				return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid volume name or UID %q for a shared block engine", name)
+			}
+		}
+	}
 
 	s.Lock()
 
@@ -41,7 +54,12 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 
 	if e == nil {
 		e = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine], req.SnapshotMaxCount, s.newServiceClient,
-			req.SharedBlock)
+			req.SharedBlock, s.metadataDir)
+		if req.SharedBlock {
+			e.sharedBlockState.reservationEpoch = req.Reservation.Epoch
+			e.sharedBlockState.reservationSeed = req.Reservation
+			e.sharedBlockState.volumeUID = req.Reservation.VolumeUid
+		}
 		s.engineMap[req.Name] = e
 	}
 
@@ -313,6 +331,41 @@ func (s *Server) EngineFrontendSwitchOver(ctx context.Context, req *spdkrpc.Engi
 // TODO: The API is currently not implemented and will be removed in the future as target management will be handled by engine frontends instead of the engine itself.
 func (s *Server) EngineDeleteTarget(ctx context.Context, req *spdkrpc.EngineDeleteTargetRequest) (ret *emptypb.Empty, err error) {
 	return &emptypb.Empty{}, grpcstatus.Error(grpccodes.Unimplemented, "EngineDeleteTarget is not implemented yet and will be removed in the future")
+}
+
+// EngineReservationCleanup removes the persisted NVMe reservation state of a
+// shared block volume on the node. The engine of the volume must be deleted
+// first, as the state is the latest one of the engine.
+func (s *Server) EngineReservationCleanup(ctx context.Context, req *spdkrpc.EngineReservationCleanupRequest) (ret *emptypb.Empty, err error) {
+	volumeName := req.VolumeName
+	if !isValidReservationPtplPathComponent(volumeName) {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid volume name %q for reservation cleanup", volumeName)
+	}
+
+	// Hold the lock through the removal, so that an engine of the volume cannot
+	// be created after the check and lose its ptpl file.
+	s.RLock()
+	defer s.RUnlock()
+
+	metadataDir := s.metadataDir
+	engineName := ""
+	for _, e := range s.engineMap {
+		if e.VolumeName == volumeName {
+			engineName = e.Name
+			break
+		}
+	}
+
+	if engineName != "" {
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "cannot clean up reservation of volume %s since engine %s still exists", volumeName, engineName)
+	}
+	if metadataDir == "" {
+		return &emptypb.Empty{}, nil
+	}
+	if err := cleanupVolumeReservationPtplFiles(metadataDir, volumeName); err != nil {
+		return nil, grpcstatus.Error(grpccodes.Internal, err.Error())
+	}
+	return &emptypb.Empty{}, nil
 }
 
 // EngineSetTargetListenerANAState updates the ANA state of an engine's exported NVMe/TCP listener.

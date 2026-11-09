@@ -200,7 +200,7 @@ func TestEngineFrontendSuspendKeepsFlushByDefault(t *testing.T) {
 // An engine frontend snapshot operation holds the frontend lock while it calls
 // into the Engine, so the frontend must be suspended outside the Engine lock.
 func TestEngineReplicaAddSuspendsFrontendOutsideEngineLock(t *testing.T) {
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 	e.State = lhtypes.InstanceStateRunning
 
 	suspends := 0

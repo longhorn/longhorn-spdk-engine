@@ -137,7 +137,7 @@ func (s *TestSuite) TestHandleVerifyErrorBrokenPipe(c *C) {
 	fmt.Println("Testing handleVerifyError with broken pipe error")
 
 	replica := NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil)
-	engine := NewEngine("e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false)
+	engine := NewEngine("e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 	engineFrontend := NewEngineFrontend("ef1", "e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil, false)
 
 	replica.State = lhtypes.InstanceStateRunning
@@ -215,7 +215,7 @@ func (s *TestSuite) TestHandleVerifyErrorBrokenPipeKeepsStoppedAndError(c *C) {
 	replicaStopped := NewReplica(context.Background(), "r-stopped", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil)
 	replicaStopped.State = lhtypes.InstanceStateStopped
 
-	engineErrored := NewEngine("e-err", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false)
+	engineErrored := NewEngine("e-err", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 	engineErrored.State = lhtypes.InstanceStateError
 
 	engineFrontendRunning := NewEngineFrontend("ef-run", "e-err", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil, false)
@@ -337,7 +337,7 @@ func (s *TestSuite) TestNewVerifyStateLockedCopiesMaps(c *C) {
 			"r1": NewReplica(context.Background(), "r1", "disk-a", "uuid-a", 1024, true, make(chan interface{}, 1), nil),
 		},
 		engineMap: map[string]*Engine{
-			"e1": NewEngine("e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false),
+			"e1": NewEngine("e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, ""),
 		},
 		engineFrontendMap: map[string]*EngineFrontend{
 			"ef1": NewEngineFrontend("ef1", "e1", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil, false),

@@ -20,7 +20,7 @@ import (
 // DATA_LAYOUT_TYPE_SHARDED constructs a single shardGroupBackend (EC).
 // Without forwarding this field, callers would default to the proto3 zero
 // value (REPLICATED), and EC volumes would be silently miscreated as RAID1.
-func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool, snapshotMaxCount int32, dataLayoutType spdkrpc.DataLayoutType, sharedBlock bool) (*api.Engine, error) {
+func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool, snapshotMaxCount int32, dataLayoutType spdkrpc.DataLayoutType, sharedBlock bool, reservation *spdkrpc.ReservationState) (*api.Engine, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to start engine: missing required parameter name")
 	}
@@ -46,6 +46,7 @@ func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize ui
 		SnapshotMaxCount:  snapshotMaxCount,
 		DataLayoutType:    dataLayoutType,
 		SharedBlock:       sharedBlock,
+		Reservation:       reservation,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to start engine")
@@ -124,6 +125,27 @@ func (c *SPDKClient) EngineDeleteTarget(name string) error {
 	})
 	if err != nil {
 		return errors.Wrapf(err, "failed to delete target for engine %v", name)
+	}
+	return nil
+}
+
+// EngineReservationCleanup removes the persisted NVMe reservation state of a
+// shared block volume on the node. It is required only when the volume is
+// deleted, after its engine is deleted.
+func (c *SPDKClient) EngineReservationCleanup(volumeName string) error {
+	if volumeName == "" {
+		return fmt.Errorf("failed to clean up engine reservation: missing required parameter volume name")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineReservationCleanup(ctx, &spdkrpc.EngineReservationCleanupRequest{
+		VolumeName: volumeName,
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to clean up reservation of volume %v", volumeName)
 	}
 	return nil
 }

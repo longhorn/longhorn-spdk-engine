@@ -351,6 +351,10 @@ func getStableVolumeNsUUID(volumeName string) string {
 	return generateNsUUID("volume-" + volumeName)
 }
 
+func getStableVolumeRaidUUID(volumeName string) string {
+	return generateNsUUID("raid-" + volumeName)
+}
+
 func getEffectiveVolumeTargetIdentity(volumeName, volumeNQN, volumeNGUID string) (string, string) {
 	if volumeNQN == "" {
 		volumeNQN = getStableVolumeNQN(volumeName)

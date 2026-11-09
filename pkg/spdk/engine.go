@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -131,8 +133,11 @@ type Engine struct {
 
 	// SharedBlock allows engine frontends on multiple nodes to connect to the
 	// engine target at the same time (RWX block volume). The target then
-	// accepts a range of controller IDs.
+	// accepts a range of controller IDs and persists the NVMe reservation
+	// state.
 	SharedBlock bool
+	// sharedBlockState is only used by a shared block engine.
+	sharedBlockState sharedBlockEngineState
 
 	ctrlrLossTimeout     int
 	fastIOFailTimeoutSec int
@@ -189,7 +194,7 @@ type Engine struct {
 }
 
 func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineUpdateCh chan interface{}, snapshotMaxCount int32, newServiceClient ServiceClientFactory,
-	sharedBlock bool) *Engine {
+	sharedBlock bool, metadataDir string) *Engine {
 	log := logrus.StandardLogger().WithFields(logrus.Fields{
 		"engineName":  engineName,
 		"volumeName":  volumeName,
@@ -217,7 +222,8 @@ func NewEngine(engineName, volumeName, frontend string, specSize uint64, engineU
 		Frontend:   frontend,
 		SpecSize:   specSize,
 
-		SharedBlock: sharedBlock,
+		SharedBlock:      sharedBlock,
+		sharedBlockState: sharedBlockEngineState{metadataDir: metadataDir},
 
 		// TODO: support user-defined values
 		ctrlrLossTimeout:     replicaCtrlrLossTimeoutSec,
@@ -320,7 +326,7 @@ func (e *Engine) Create(spdkClient *spdkclient.Client, replicaAddressMap map[str
 	e.checkAndUpdateInfoFromReplicasNoLock()
 
 	e.log.Infof("Connected all available replicas %+v, then launching raid during engine creation", e.backends)
-	if err := e.createRaidBdevNoLock(spdkClient, replicaBdevList, ""); err != nil {
+	if err := e.createRaidBdevNoLock(spdkClient, replicaBdevList, e.getRaidBdevCreateUUID()); err != nil {
 		return nil, err
 	}
 
@@ -393,10 +399,23 @@ func (e *Engine) createNVMeTCPTarget(spdkClient *spdkclient.Client, superiorPort
 
 func (e *Engine) startExposeNVMeTCPTarget(spdkClient *spdkclient.Client, anaState NvmeTCPANAState, spdkANAState spdktypes.NvmfSubsystemListenerAnaState, minCntlid, maxCntlid uint16) error {
 	nsUUID := getStableVolumeNsUUID(e.VolumeName)
-	e.log.Infof("Starting to expose RAID bdev for engine target %v on %v:%v with ANA state %v, cntlid range [%v, %v], nsUUID %v",
-		e.Name, e.NvmeTcpTarget.IP, e.NvmeTcpTarget.Port, anaState, minCntlid, maxCntlid, nsUUID)
-	return spdkClient.StartExposeBdevWithANAState(e.NvmeTcpTarget.Nqn, e.Name, e.NvmeTcpTarget.Nguid, nsUUID,
-		e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)), spdkANAState, minCntlid, maxCntlid)
+
+	ptplFile := e.getReservationPtplFile()
+	if ptplFile != "" {
+		// SPDK writes the ptpl file but does not create its directory.
+		if err := os.MkdirAll(filepath.Dir(ptplFile), 0755); err != nil {
+			return errors.Wrapf(err, "failed to create reservation ptpl directory for engine target %v", e.Name)
+		}
+		if err := e.prepareReservationPtplFile(ptplFile); err != nil {
+			return err
+		}
+		e.sharedBlockState.reservationPrepared = true
+	}
+
+	e.log.Infof("Starting to expose RAID bdev for engine target %v on %v:%v with ANA state %v, cntlid range [%v, %v], nsUUID %v, ptpl file %q",
+		e.Name, e.NvmeTcpTarget.IP, e.NvmeTcpTarget.Port, anaState, minCntlid, maxCntlid, nsUUID, ptplFile)
+	return spdkClient.StartExposeBdevWithANAStateAndPtplFile(e.NvmeTcpTarget.Nqn, e.Name, e.NvmeTcpTarget.Nguid, nsUUID,
+		e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)), spdkANAState, minCntlid, maxCntlid, ptplFile)
 }
 
 // connectReplicas connects to each backend's NVMf bdev and populates
@@ -767,6 +786,10 @@ func (e *Engine) getWithoutLock() (res *spdkrpc.Engine) {
 		LastExpansionFailedAt: e.lastExpansionFailedAt,
 		SnapshotMaxCount:      e.SnapshotMaxCount,
 		SharedBlock:           e.SharedBlock,
+	}
+
+	if e.sharedBlockState.reservationPrepared {
+		res.Reservation = e.getReservationState()
 	}
 
 	if e.NvmeTcpTarget != nil {
@@ -1889,7 +1912,7 @@ func (e *Engine) snapshotOperationWithoutLock(spdkClient *spdkclient.Client, sna
 			retrygo.LastErrorOnly(true),
 		).Do(
 			func() error {
-				return e.createRaidBdevNoLock(spdkClient, replicaBdevList, "")
+				return e.createRaidBdevNoLock(spdkClient, replicaBdevList, e.getRaidBdevCreateUUID())
 			},
 		)
 	}
@@ -4375,4 +4398,167 @@ func (e *Engine) ensureNvmeTcpTargetForRestore(spdkClient *spdkclient.Client, su
 		return errors.Wrap(err, "failed to create temporary NVMe-TCP target for backup restore")
 	}
 	return nil
+}
+
+// getRaidBdevCreateUUID returns the UUID for creating the RAID bdev. A shared
+// block engine uses a UUID derived from the volume name, since SPDK refuses to
+// restore a ptpl file that was saved for a bdev with a different UUID. Other
+// engines let SPDK generate one.
+func (e *Engine) getRaidBdevCreateUUID() string {
+	if !e.SharedBlock {
+		return ""
+	}
+	return getStableVolumeRaidUUID(e.VolumeName)
+}
+
+// getReservationPtplDir returns the directory holding the ptpl files of a
+// shared block engine target, or empty for other engines.
+func (e *Engine) getReservationPtplDir() string {
+	if !e.SharedBlock || e.sharedBlockState.metadataDir == "" {
+		return ""
+	}
+	return getVolumeReservationPtplDir(e.sharedBlockState.metadataDir, e.VolumeName)
+}
+
+func getVolumeReservationPtplDir(metadataDir, volumeName string) string {
+	return filepath.Join(metadataDir, reservationPtplSubDir, volumeName)
+}
+
+// isValidReservationPtplPathComponent returns whether the name can be used as
+// a single component of the path of a ptpl file without escaping its directory,
+// e.g., it is not empty, "." or "..", and contains no separator such as "/".
+func isValidReservationPtplPathComponent(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsRune(name, filepath.Separator)
+}
+
+// getReservationPtplFile returns the file SPDK persists the NVMe reservation
+// state of a shared block engine target to, or empty for other engines. Each
+// lifetime of the volume and each epoch of the state has its own file.
+func (e *Engine) getReservationPtplFile() string {
+	dir := e.getReservationPtplDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s-%d.json", e.sharedBlockState.volumeUID, e.sharedBlockState.reservationEpoch))
+}
+
+// cleanupVolumeReservationPtplFiles removes the ptpl files of a shared block
+// volume. It is required only when the volume is deleted, as the files are the
+// latest reservation state when the engine is recreated, e.g., after an error.
+func cleanupVolumeReservationPtplFiles(metadataDir, volumeName string) error {
+	dir := getVolumeReservationPtplDir(metadataDir, volumeName)
+	if err := os.RemoveAll(dir); err != nil {
+		return errors.Wrapf(err, "failed to remove reservation ptpl files of volume %s", volumeName)
+	}
+	logrus.Infof("Removed reservation ptpl files of volume %s in %s", volumeName, dir)
+	return nil
+}
+
+// prepareReservationPtplFile gets the ptpl file of a shared block engine target
+// ready for SPDK to restore before the namespace is added.
+//
+// SPDK writes the file first and the state is synced to the cluster later, so a
+// valid local file of the current epoch is never older than the state the
+// manager passes, and is kept. It exists if the engine is recreated on the same
+// node, e.g., after an instance manager crash. Otherwise, the file is rebuilt
+// from the state the manager passes. That includes an empty file: SPDK empties
+// it when the hosts disable persistence, but also truncates it right before
+// writing a new state, so a crash may leave it empty while a persisted
+// reservation is active. The synced state is empty as well once the hosts
+// disabled persistence. A synced state SPDK cannot restore fails the target
+// instead. Files of other epochs are stale and removed.
+func (e *Engine) prepareReservationPtplFile(ptplFile string) error {
+	bdevUUID := getStableVolumeRaidUUID(e.VolumeName)
+
+	if err := e.removeStaleReservationPtplFiles(ptplFile); err != nil {
+		return err
+	}
+
+	data, err := os.ReadFile(ptplFile)
+	if err != nil && !os.IsNotExist(err) {
+		return errors.Wrapf(err, "failed to read reservation ptpl file %s for engine %s", ptplFile, e.Name)
+	}
+	if err == nil {
+		_, parseErr := parseReservationPtplData(data, bdevUUID)
+		if parseErr == nil {
+			e.log.Infof("Restoring reservation state of epoch %v from local ptpl file %s", e.sharedBlockState.reservationEpoch, ptplFile)
+			return nil
+		}
+		// An empty or partial file may be left by a crash in the middle of a
+		// write. Fall back to the synced state, which is better than
+		// discarding the state.
+		e.log.WithError(parseErr).Warnf("Replacing local reservation ptpl file %s that SPDK cannot restore with the synced state", ptplFile)
+	}
+
+	seed, err := reservationStateToPtplData(e.sharedBlockState.reservationSeed, bdevUUID)
+	if err != nil {
+		return errors.Wrapf(err, "failed to encode reservation state for engine %s", e.Name)
+	}
+	if seed != nil {
+		// The synced state is always reported from a valid file, so an invalid
+		// one is corrupted. Exposing the target without it would let hosts the
+		// reservation fences write.
+		if _, err := parseReservationPtplData(seed, bdevUUID); err != nil {
+			return errors.Wrapf(err, "invalid synced reservation state for engine %s", e.Name)
+		}
+	}
+	if seed == nil {
+		if err := os.Remove(ptplFile); err != nil && !os.IsNotExist(err) {
+			return errors.Wrapf(err, "failed to remove reservation ptpl file %s for engine %s", ptplFile, e.Name)
+		}
+		return nil
+	}
+
+	if err := writeFileAtomically(ptplFile, seed); err != nil {
+		return errors.Wrapf(err, "failed to write reservation ptpl file %s for engine %s", ptplFile, e.Name)
+	}
+	e.log.Infof("Restoring reservation state of epoch %v with %d registrants from the synced state", e.sharedBlockState.reservationEpoch, len(e.sharedBlockState.reservationSeed.Registrants))
+	return nil
+}
+
+// removeStaleReservationPtplFiles removes the files of the volume other than
+// the ptpl file of the current lifetime and epoch.
+func (e *Engine) removeStaleReservationPtplFiles(ptplFile string) error {
+	entries, err := os.ReadDir(filepath.Dir(ptplFile))
+	if err != nil {
+		return errors.Wrapf(err, "failed to list reservation ptpl files for engine %s", e.Name)
+	}
+	for _, entry := range entries {
+		file := filepath.Join(filepath.Dir(ptplFile), entry.Name())
+		if file == ptplFile {
+			continue
+		}
+		if err := os.RemoveAll(file); err != nil {
+			return errors.Wrapf(err, "failed to remove stale reservation ptpl file %s for engine %s", file, e.Name)
+		}
+		e.log.Infof("Removed stale reservation ptpl file %s", file)
+	}
+	return nil
+}
+
+// getReservationState returns the reservation state SPDK persists in the ptpl
+// file of a shared block engine target, or nil if it is unknown, e.g., the
+// engine is not a shared block engine or SPDK is writing the file. An unknown
+// state keeps the synced one, which is restored if the engine is recreated.
+func (e *Engine) getReservationState() *spdkrpc.ReservationState {
+	ptplFile := e.getReservationPtplFile()
+	if ptplFile == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(ptplFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &spdkrpc.ReservationState{Epoch: e.sharedBlockState.reservationEpoch, Registrants: []*spdkrpc.ReservationRegistrant{}}
+		}
+		return nil
+	}
+	// An empty file is unknown as well. SPDK empties it when the hosts disable
+	// persistence, but also truncates it right before writing a new state, so
+	// a crash may leave it empty while a persisted reservation is active.
+	record, err := parseReservationPtplData(data, getStableVolumeRaidUUID(e.VolumeName))
+	if err != nil {
+		return nil
+	}
+	return reservationPtplRecordToState(record, e.sharedBlockState.reservationEpoch)
 }
