@@ -45,9 +45,13 @@ const (
 // 3 attempts still absorbs a transient reconnect.
 const salvageConnectMaxRetries = 3
 
-// attachShardBaseBdev connects to the shard over NVMe-oF and returns the
-// NVMe initiator bdev name.
+// attachShardBaseBdev returns the base bdev name for the slot. A shard in
+// this SPDK process is used directly by its lvol alias. Any other shard is
+// connected over NVMe-oF and its NVMe initiator bdev name is returned.
 func (sg *ShardGroup) attachShardBaseBdev(spdkClient *spdkclient.Client, endpoint *ShardEndpoint, connectAttempts int) (string, error) {
+	if endpoint.LocalBdevName != "" {
+		return endpoint.LocalBdevName, nil
+	}
 	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
 	bdevName, err := connectNVMfBdev(spdkClient, controllerName, endpoint.Address,
 		ecShardCtrlrLossTimeoutSec, ecShardFastIOFailTimeoutSec, connectAttempts, retryInterval)
@@ -58,8 +62,12 @@ func (sg *ShardGroup) attachShardBaseBdev(spdkClient *spdkclient.Client, endpoin
 }
 
 // detachShardBaseBdev detaches the shard's NVMe-oF controller. A controller
-// that is already gone is not an error.
+// that is already gone is not an error. A shard in this SPDK process was
+// never attached over NVMe-oF, so there is nothing to detach.
 func (sg *ShardGroup) detachShardBaseBdev(spdkClient *spdkclient.Client, endpoint *ShardEndpoint) error {
+	if endpoint.LocalBdevName != "" {
+		return nil
+	}
 	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
 	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return errors.Wrapf(err, "failed to detach controller %s", controllerName)
@@ -1008,34 +1016,29 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 
 	sg.log.Infof("Expanding shardgroup to size %d", newSize)
 
-	// 1. Refresh each base bdev's cached blockcnt by resetting its NVMe controller.
+	// 1. Refresh the cached size of each remote base bdev by resetting its
+	// NVMe controller.
 	//
-	// Per-shard ShardExpand on each shard node already grew the shard lvol on
-	// disk, but it had to tear down and re-expose the shard's NVMe-oF subsystem
-	// to do so safely - the subsystem teardown is load-bearing to prevent
-	// bdev_lvol_resize hanging on the loopback-attached exposed lvol. The
-	// teardown breaks the AER_NS_ATTR_CHANGED chain that would otherwise
-	// propagate the new size to this process's bdev_nvme initiator. The
-	// local nvmf-shardXn1 bdev therefore still reports its pre-resize
-	// blockcnt cached at initial attach time.
+	// ShardExpand tears down and re-exposes the shard's NVMe-oF subsystem
+	// while resizing the lvol, which drops the AER that would have carried
+	// the new size here. The initiator bdev keeps the blockcnt cached at
+	// attach time. The reset reconnects, and the SPDK reset-refresh patch
+	// (bdev_nvme_reconnect_ctrlr_poll) updates the blockcnt in place. The
+	// bdev stays registered, so bdev_ec sees BDEV_EVENT_RESIZE rather than
+	// BDEV_EVENT_REMOVE and the slot stays NORMAL.
 	//
-	// bdev_nvme_reset_controller, combined with the SPDK reset-refresh patch
-	// in module/bdev/nvme/bdev_nvme.c (function bdev_nvme_reconnect_ctrlr_poll),
-	// is the compensation: the reset destroys and recreates qpairs, reconnects
-	// to the re-exposed subsystem, and the patched reconnect-poll path compares
-	// cached blockcnt against the post-reconnect num_sectors and calls
-	// spdk_bdev_notify_blockcnt_change on the local bdev when they differ.
-	// The local bdev stays registered throughout - bdev_ec sees a
-	// BDEV_EVENT_RESIZE (no-op) instead of BDEV_EVENT_REMOVE (failure cascade),
-	// so the slot stays NORMAL with no spurious rebuild triggered.
+	// Without the patch nothing is refreshed, BdevEcResize below is a
+	// no-op, and the post-grow capacity check rejects the expansion.
 	//
-	// Without the SPDK patch this reset is a no-op for size refresh, the
-	// BdevEcResize below would be a no-op (resized=false), and the
-	// post-grow capacity check would reject the expansion.
-	for slotIndex := uint32(0); slotIndex < sg.DataChunks+sg.ParityChunks; slotIndex++ {
-		controllerName := GetShardLvolName(sg.VolumeName, slotIndex)
+	// A shard in this process needs no reset: its lvol resize already
+	// delivered BDEV_EVENT_RESIZE to bdev_ec.
+	for shardName, endpoint := range sg.Shards {
+		if endpoint.LocalBdevName != "" {
+			continue
+		}
+		controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
 		if _, err := spdkClient.BdevNvmeResetController(controllerName); err != nil {
-			return errors.Wrapf(err, "failed to reset nvme controller %s before EC resize", controllerName)
+			return errors.Wrapf(err, "failed to reset nvme controller %s for shard %s before EC resize", controllerName, shardName)
 		}
 	}
 
