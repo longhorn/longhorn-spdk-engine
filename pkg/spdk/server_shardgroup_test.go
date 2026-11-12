@@ -112,3 +112,23 @@ func (s *TestSuite) TestGetOrCreateShardGroupResolvesLocalShards(c *C) {
 	c.Assert(got.Shards["vol-a-1"].LocalBdevName, Equals, "")
 	c.Assert(got.Shards["vol-a-2"].LocalBdevName, Equals, "")
 }
+
+// Only a Running shard served by this process resolves to its lvol alias.
+// Anything else resolves to "", which means the ShardGroup attaches it over
+// NVMe-oF.
+func (s *TestSuite) TestResolveLocalBdevName(c *C) {
+	fmt.Println("Testing Server.resolveLocalBdevName resolves only Running shards served by this process")
+
+	srv := &Server{
+		shardMap: map[string]*Shard{
+			"vol-a-0": {Name: "vol-a-0", Alias: "vol-a-0-lvs/shard-vol-a-0", State: lhtypes.InstanceStateRunning},
+			"vol-a-1": {Name: "vol-a-1", Alias: "vol-a-1-lvs/shard-vol-a-1", State: lhtypes.InstanceStateStopped},
+			"vol-a-2": {Name: "vol-a-2", Alias: "vol-a-2-lvs/shard-vol-a-2", State: lhtypes.InstanceStateError},
+		},
+	}
+
+	c.Assert(srv.resolveLocalBdevName("vol-a-0"), Equals, "vol-a-0-lvs/shard-vol-a-0")
+	c.Assert(srv.resolveLocalBdevName("vol-a-1"), Equals, "")
+	c.Assert(srv.resolveLocalBdevName("vol-a-2"), Equals, "")
+	c.Assert(srv.resolveLocalBdevName("vol-a-3"), Equals, "")
+}
