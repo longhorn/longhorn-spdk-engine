@@ -217,12 +217,13 @@ func (s *Server) ShardGroupShardReplace(ctx context.Context, req *spdkrpc.ShardG
 	s.RLock()
 	shardGroup := s.shardGroupMap[req.ShardGroupName]
 	spdkClient := s.spdkClient
+	newLocalBdevName := s.resolveLocalBdevName(req.ShardName)
 	s.RUnlock()
 
 	if shardGroup == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find shardgroup %v", req.ShardGroupName)
 	}
-	state, err := shardGroup.ShardReplace(spdkClient, req.ShardName, req.ShardAddress)
+	state, err := shardGroup.ShardReplace(spdkClient, req.ShardName, req.ShardAddress, newLocalBdevName)
 	if err != nil {
 		return nil, err
 	}
@@ -482,25 +483,50 @@ func (s *Server) getOrCreateShardGroup(req *spdkrpc.ShardGroupCreateRequest) (*S
 		}
 
 		shardGroup.SalvageRequested = req.Spec.SalvageRequested
-		shardGroup.Shards = make(map[string]*ShardEndpoint, len(req.Spec.Shards))
-		for shardName, endpoint := range req.Spec.Shards {
-			shardGroup.Shards[shardName] = &ShardEndpoint{
-				Address:   endpoint.Address,
-				SlotIndex: endpoint.SlotIndex,
-			}
-		}
+		shardGroup.Shards = s.resolveShardEndpoints(req.Spec.Shards)
 		return shardGroup, nil
 	}
 
-	shards := map[string]*ShardEndpoint{}
-	for shardName, endpoint := range req.Spec.Shards {
+	return NewShardGroup(s.ctx, req.Name, req.VolumeName, req.SpecSize,
+		req.Spec.DataChunks, req.Spec.ParityChunks, req.Spec.StripSizeKb,
+		s.resolveShardEndpoints(req.Spec.Shards),
+		req.Spec.SalvageRequested, s.updateChs[types.InstanceTypeShardGroup]), nil
+}
+
+// resolveShardEndpoints builds the ShardGroup's endpoint map from the request
+// spec. Caller must hold s.Lock or s.RLock.
+func (s *Server) resolveShardEndpoints(spec map[string]*spdkrpc.ShardEndpoint) map[string]*ShardEndpoint {
+	shards := make(map[string]*ShardEndpoint, len(spec))
+	for shardName, endpoint := range spec {
 		shards[shardName] = &ShardEndpoint{
-			Address:   endpoint.Address,
-			SlotIndex: endpoint.SlotIndex,
+			Address:       endpoint.Address,
+			SlotIndex:     endpoint.SlotIndex,
+			LocalBdevName: s.resolveLocalBdevName(shardName),
 		}
 	}
+	return shards
+}
 
-	return NewShardGroup(s.ctx, req.Name, req.VolumeName, req.SpecSize,
-		req.Spec.DataChunks, req.Spec.ParityChunks, req.Spec.StripSizeKb, shards,
-		req.Spec.SalvageRequested, s.updateChs[types.InstanceTypeShardGroup]), nil
+// resolveLocalBdevName returns the lvol alias of a shard when the shard runs
+// in this Server and is Running. The ShardGroup can then attach the lvol
+// directly instead of over NVMe-oF.
+//
+// It returns "" when the shard runs on another node, or for a local shard that
+// is not Running. In both cases the ShardGroup attaches over NVMe-oF, which
+// fails with a connect error if the shard is not ready.
+//
+// Lock order: the caller holds the Server lock, and this function takes the
+// shard lock. Always take the Server lock before an instance lock to avoid
+// goroutine deadlock.
+func (s *Server) resolveLocalBdevName(shardName string) string {
+	shard := s.shardMap[shardName]
+	if shard == nil {
+		return ""
+	}
+	shard.RLock()
+	defer shard.RUnlock()
+	if shard.State != types.InstanceStateRunning {
+		return ""
+	}
+	return shard.Alias
 }

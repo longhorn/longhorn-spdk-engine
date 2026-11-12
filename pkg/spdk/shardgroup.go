@@ -122,6 +122,15 @@ type ShardGroup struct {
 type ShardEndpoint struct {
 	Address   string // ip:port
 	SlotIndex uint32
+	// LocalBdevName is the lvol alias (<lvs>/<lvol>) of a shard that runs
+	// in this SPDK process. The ShardGroup attaches that lvol directly
+	// instead of over NVMe-oF. Empty means the shard runs on another node
+	// and is attached over NVMe-oF to Address.
+	//
+	// The Server resolves this field at create and replace time. It is
+	// never persisted; a ShardGroup recreated on another node resolves it
+	// again there.
+	LocalBdevName string
 }
 
 // GetShardGroupEcBdevName returns the SPDK bdev name for the per-volume bdev_ec.
@@ -1331,11 +1340,11 @@ func (sg *ShardGroup) SnapshotPurge(spdkClient *spdkclient.Client) error {
 
 // ShardReplace hot-swaps the bdev for a FAILED slot. It looks up the slot by
 // shard name (the Shard CR external name <volumeName>-<slotIndex>),
-// NVMe-connects to the new address, and calls bdev_ec_replace_base_bdev. The
-// slot transitions FAILED -> REPLACING and the new bdev immediately starts
-// receiving foreground writes. ShardRebuildStart must follow to populate the
-// pre-failure data.
-func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, shardAddress string) (slotState string, err error) {
+// NVMe-connects to newAddress, and calls bdev_ec_replace_base_bdev. The slot
+// transitions FAILED -> REPLACING and the new bdev starts receiving new writes
+// right away. Data written before the failure is not on the new shard yet;
+// ShardRebuildStart must follow to reconstruct it from the surviving shards.
+func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, newAddress, newLocalBdevName string) (slotState string, err error) {
 	sg.Lock()
 	defer sg.Unlock()
 
@@ -1354,10 +1363,10 @@ func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, sha
 		sg.log.WithError(err).Warnf("Pre-replace detach of controller %s failed; continuing", controllerName)
 	}
 
-	bdevName, err := connectNVMfBdev(spdkClient, controllerName, shardAddress,
+	bdevName, err := connectNVMfBdev(spdkClient, controllerName, newAddress,
 		ecShardCtrlrLossTimeoutSec, ecShardFastIOFailTimeoutSec, maxRetries, retryInterval)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to connect replacement shard %s at %s", controllerName, shardAddress)
+		return "", errors.Wrapf(err, "failed to connect replacement shard %s at %s", controllerName, newAddress)
 	}
 
 	resp, err := spdkClient.BdevEcReplaceBaseBdev(sg.EcBdevName, endpoint.SlotIndex, bdevName)
@@ -1365,11 +1374,11 @@ func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, sha
 		return "", errors.Wrapf(err, "failed to replace base bdev at slot %d for shardgroup %s", endpoint.SlotIndex, sg.Name)
 	}
 
-	// endpoint is the *ShardEndpoint already in sg.Shards; mutating its Address
-	// updates the map entry in place.
-	endpoint.Address = shardAddress
+	// endpoint points into sg.Shards, so this updates the map entry in place.
+	endpoint.Address = newAddress
+	endpoint.LocalBdevName = newLocalBdevName
 
-	sg.log.Infof("Replaced shard %s at slot %d with %s; slot state=%s", shardName, endpoint.SlotIndex, shardAddress, resp.State)
+	sg.log.Infof("Replaced shard %s at slot %d with %s; slot state=%s", shardName, endpoint.SlotIndex, newAddress, resp.State)
 	return string(resp.State), nil
 }
 
