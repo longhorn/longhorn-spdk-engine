@@ -384,6 +384,18 @@ func (e *Engine) startExposeNVMeTCPTarget(spdkClient *spdkclient.Client, anaStat
 		e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)), spdkANAState, cntlid, cntlid)
 }
 
+// attachBackendBdev connects the backend's head bdev to this SPDK process and
+// returns the bdev name to add to the raid1.
+func (e *Engine) attachBackendBdev(spdkClient *spdkclient.Client, u Backend) (string, error) {
+	return connectNVMfBdev(spdkClient, u.Name(), u.Address(), e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
+}
+
+// detachBackendBdev disconnects the bdev that attachBackendBdev connected.
+// It does nothing when the backend has no bdev recorded.
+func (e *Engine) detachBackendBdev(spdkClient *spdkclient.Client, u Backend) error {
+	return disconnectNVMfBdev(spdkClient, u.BdevName(), disconnectMaxRetries, disconnectRetryInterval)
+}
+
 // connectReplicas connects to each backend's NVMf bdev and populates
 // backends. The backendFactory builds the layout-specific Backend
 // implementation (replicaBackend or shardGroupBackend) - connectReplicas
@@ -394,7 +406,7 @@ func (e *Engine) connectReplicas(spdkClient *spdkclient.Client, replicaAddressMa
 	for replicaName, replicaAddr := range replicaAddressMap {
 		e.backends[replicaName] = backendFactory(replicaName, replicaAddr)
 
-		bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaAddr, e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
+		bdevName, err := e.attachBackendBdev(spdkClient, e.backends[replicaName])
 		if err != nil {
 			e.log.WithError(err).Warnf("Failed to get bdev from replica %s with address %s during engine creation, will mark the mode to ERR and continue", replicaName, replicaAddr)
 			e.backends[replicaName].SetMode(types.ModeERR)
@@ -681,7 +693,7 @@ func (e *Engine) Delete(spdkClient *spdkclient.Client, superiorPortAllocator *co
 
 func (e *Engine) disconnectReplicas(spdkClient *spdkclient.Client) (requireUpdate bool, err error) {
 	for replicaName, replicaStatus := range e.backends {
-		if err := disconnectNVMfBdev(spdkClient, replicaStatus.BdevName(), disconnectMaxRetries, disconnectRetryInterval); err != nil {
+		if err := e.detachBackendBdev(spdkClient, replicaStatus); err != nil {
 			if replicaStatus.Mode() != types.ModeERR {
 				e.log.WithError(err).Errorf("Engine failed to disconnect replica %s with bdev %s during deletion, will update the mode from %v to ERR", replicaName, replicaStatus.BdevName(), replicaStatus.Mode())
 				replicaStatus.SetMode(types.ModeERR)
@@ -1926,7 +1938,7 @@ func (e *Engine) replicaSnapshotOperation(spdkClient *spdkclient.Client, replica
 	case SnapshotOperationDelete:
 		return replicaStatus.SnapshotDelete(snapshotName)
 	case SnapshotOperationRevert:
-		if err := disconnectNVMfBdev(spdkClient, replicaStatus.BdevName(), disconnectMaxRetries, disconnectRetryInterval); err != nil {
+		if err := e.detachBackendBdev(spdkClient, replicaStatus); err != nil {
 			return err
 		}
 		replicaStatus.SetBdevName("")
@@ -1934,7 +1946,7 @@ func (e *Engine) replicaSnapshotOperation(spdkClient *spdkclient.Client, replica
 		if err := replicaStatus.SnapshotRevert(snapshotName); err != nil {
 			return err
 		}
-		bdevName, err := connectNVMfBdev(spdkClient, replicaName, replicaStatus.Address(), e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
+		bdevName, err := e.attachBackendBdev(spdkClient, replicaStatus)
 		if err != nil {
 			return err
 		}
