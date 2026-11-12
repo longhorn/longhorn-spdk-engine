@@ -1406,31 +1406,37 @@ func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, new
 	return string(resp.State), nil
 }
 
-// Bounds for the post-detach poll in ForceFailShard. The slot transition is
-// driven by SPDK_BDEV_EVENT_REMOVE on the local bdev, which fires synchronously
-// from BdevNvmeDetachController, so the wait is short in practice.
+// Poll bounds for ForceFailShard. The slot is marked FAILED immediately;
+// the poll waits for bdev_ec to finish releasing the old base bdev.
 const (
 	ecShardForceFailPollInterval = 100 * time.Millisecond
 	ecShardForceFailPollTimeout  = 5 * time.Second
 )
 
-// ForceFailShard drives a slot to FAILED immediately by detaching the shard's
-// NVMe controller, bypassing bdev_nvme's ctrlr_loss_timeout_sec wait. Used by
-// the manager when it knows the shard is gone for good (intentional Shard CR
-// delete, eviction) so that ShardGroupShardReplace can be issued in seconds
-// instead of minutes.
+// ForceFailShard marks a shard's slot as FAILED immediately, without waiting
+// for bdev_nvme's ctrlr_loss_timeout_sec to expire. The manager calls it when
+// it already knows the shard is gone for good (Shard CR deleted, node
+// evicted), so that a replacement can follow.
 //
-// Idempotency rules - these defend against reconcile retries and stale
-// requests racing past a successful replace:
-//   - slot already FAILED: no-op, return current state.
-//   - slot REPLACING: refuse with FailedPrecondition; a rebuild is in flight
-//     and force-failing now would invalidate in-progress reconstruction.
-//   - shardName unknown: NotFound.
+// A remote shard is failed by detaching its NVMe controller. A shard in this
+// process has no controller, so bdev_ec is told to fail the slot directly;
+// the shard lvol itself is left untouched.
+//
+// Returns once the slot is FAILED and bdev_ec has released the old base bdev.
+// A ShardReplace issued before that point gets EBUSY.
+//
+// The call is safe to retry. A reconcile loop may repeat it, or a stale
+// request may arrive after the slot has already been replaced:
+//   - Slot already FAILED: there is nothing to fail. The call only waits
+//     for bdev_ec to finish releasing the old base bdev, if it has not
+//     yet, and then returns the current state.
+//   - Slot REPLACING: rejected with FailedPrecondition. A rebuild is in
+//     flight and failing the slot again would discard its progress.
+//   - Unknown shard name: NotFound.
 //
 // Failure accounting (failed_count, dirty-region bookkeeping, degraded-mode
 // gating) is NOT touched here; it flows through the standard BDEV_EVENT_REMOVE
-// path that bdev_ec already handles for unintentional failures. The only new
-// behavior is the trigger.
+// path that bdev_ec already handles for unintentional failures.
 func (sg *ShardGroup) ForceFailShard(spdkClient *spdkclient.Client, shardName string) (slotState string, err error) {
 	sg.Lock()
 	defer sg.Unlock()
@@ -1444,53 +1450,62 @@ func (sg *ShardGroup) ForceFailShard(spdkClient *spdkclient.Client, shardName st
 		return "", grpcstatus.Errorf(grpccodes.NotFound, "shard %s not found in shardgroup %s", shardName, sg.Name)
 	}
 
-	currentState, err := sg.readSlotStateNoLock(spdkClient, endpoint.SlotIndex)
+	current, err := sg.readSlotNoLock(spdkClient, endpoint.SlotIndex)
 	if err != nil {
 		return "", err
 	}
-	switch currentState {
+	switch current.State {
 	case spdktypes.BdevEcSlotStateFailed:
-		return string(currentState), nil
+		if !current.CleanupPending {
+			return string(current.State), nil
+		}
+		sg.log.Infof("Slot %d of shard %s is already FAILED; waiting for bdev_ec to release the old base bdev", endpoint.SlotIndex, shardName)
 	case spdktypes.BdevEcSlotStateReplacing:
 		return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"shard %s in shardgroup %s is REPLACING; refuse to force-fail", shardName, sg.Name)
-	}
-
-	if err := sg.detachShardBaseBdev(spdkClient, endpoint); err != nil {
-		return "", errors.Wrapf(err, "failed to force-fail shard %s", shardName)
+	default:
+		if endpoint.LocalBdevName != "" {
+			if _, err := spdkClient.BdevEcFailBaseBdev(sg.EcBdevName, endpoint.SlotIndex); err != nil {
+				return "", errors.Wrapf(err, "failed to fail slot %d for local shard %s", endpoint.SlotIndex, shardName)
+			}
+		} else {
+			if err := sg.detachShardBaseBdev(spdkClient, endpoint); err != nil {
+				return "", errors.Wrapf(err, "failed to detach remote shard %s", shardName)
+			}
+		}
 	}
 
 	deadline := time.Now().Add(ecShardForceFailPollTimeout)
 	for {
-		observed, err := sg.readSlotStateNoLock(spdkClient, endpoint.SlotIndex)
+		observed, err := sg.readSlotNoLock(spdkClient, endpoint.SlotIndex)
 		if err != nil {
 			return "", err
 		}
-		if observed == spdktypes.BdevEcSlotStateFailed {
+		if observed.State == spdktypes.BdevEcSlotStateFailed && !observed.CleanupPending {
 			sg.log.Infof("Force-failed shard %s at slot %d", shardName, endpoint.SlotIndex)
-			return string(observed), nil
+			return string(observed.State), nil
 		}
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("slot %d for shard %s did not transition to FAILED within %s (last state=%s)",
-				endpoint.SlotIndex, shardName, ecShardForceFailPollTimeout, observed)
+			return "", fmt.Errorf("timed out after %s waiting for shard %s at slot %d to fail: state=%s cleanupPending=%v",
+				ecShardForceFailPollTimeout, shardName, endpoint.SlotIndex, observed.State, observed.CleanupPending)
 		}
 		time.Sleep(ecShardForceFailPollInterval)
 	}
 }
 
-// readSlotStateNoLock returns the current EC slot state for the given slot
-// index. Caller must hold sg's lock (or an outer caller's equivalent).
-func (sg *ShardGroup) readSlotStateNoLock(spdkClient *spdkclient.Client, slotIndex uint32) (spdktypes.BdevEcSlotState, error) {
+// readSlotNoLock returns the EC slot record at slotIndex. The caller must
+// hold sg's lock.
+func (sg *ShardGroup) readSlotNoLock(spdkClient *spdkclient.Client, slotIndex uint32) (spdktypes.EcBaseBdev, error) {
 	ecInfo, err := sg.getEcBdevInfoNoLock(spdkClient)
 	if err != nil {
-		return "", err
+		return spdktypes.EcBaseBdev{}, err
 	}
 	for _, base := range ecInfo.BaseBdevs {
 		if base.Slot == slotIndex {
-			return base.State, nil
+			return base, nil
 		}
 	}
-	return "", fmt.Errorf("slot %d not found in EC bdev %s for shardgroup %s", slotIndex, sg.EcBdevName, sg.Name)
+	return spdktypes.EcBaseBdev{}, fmt.Errorf("slot %d not found in EC bdev %s for shardgroup %s", slotIndex, sg.EcBdevName, sg.Name)
 }
 
 // ShardRebuildStart starts the background rebuild poller for all REPLACING
