@@ -526,6 +526,8 @@ func (s *Server) resolveLocalBdevName(shardName string) string {
 	shard.RLock()
 	defer shard.RUnlock()
 	if shard.State != types.InstanceStateRunning {
+		logrus.Warnf("Falling back to NVMe-oF for local shard %s because it is not running (state %s)",
+			shardName, shard.State)
 		return ""
 	}
 	return shard.Alias

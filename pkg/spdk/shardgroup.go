@@ -50,6 +50,7 @@ const salvageConnectMaxRetries = 3
 // connected over NVMe-oF and its NVMe initiator bdev name is returned.
 func (sg *ShardGroup) attachShardBaseBdev(spdkClient *spdkclient.Client, endpoint *ShardEndpoint, connectAttempts int) (string, error) {
 	if endpoint.LocalBdevName != "" {
+		sg.log.Infof("Attaching slot %d directly to local lvol %s", endpoint.SlotIndex, endpoint.LocalBdevName)
 		return endpoint.LocalBdevName, nil
 	}
 	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
@@ -58,6 +59,7 @@ func (sg *ShardGroup) attachShardBaseBdev(spdkClient *spdkclient.Client, endpoin
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to connect shard %s at %s", controllerName, endpoint.Address)
 	}
+	sg.log.Infof("Attached slot %d to remote shard at %s over NVMe-oF as bdev %s", endpoint.SlotIndex, endpoint.Address, bdevName)
 	return bdevName, nil
 }
 
@@ -1402,7 +1404,7 @@ func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, new
 	// matches the shard bdev_ec is serving.
 	sg.Shards[shardName] = replacementEndpoint
 
-	sg.log.Infof("Replaced shard %s at slot %d with %s; slot state=%s", shardName, replacementEndpoint.SlotIndex, newAddress, resp.State)
+	sg.log.Infof("Replaced shard %s at slot %d; the slot now uses base bdev %s and is in state %s", shardName, replacementEndpoint.SlotIndex, bdevName, resp.State)
 	return string(resp.State), nil
 }
 
@@ -1461,10 +1463,12 @@ func (sg *ShardGroup) ForceFailShard(spdkClient *spdkclient.Client, shardName st
 	}
 
 	if endpoint.LocalBdevName != "" {
+		sg.log.Infof("Failing slot %d directly through bdev_ec because shard %s is local", endpoint.SlotIndex, shardName)
 		if _, err := spdkClient.BdevEcFailBaseBdev(sg.EcBdevName, endpoint.SlotIndex); err != nil {
 			return "", errors.Wrapf(err, "failed to fail slot %d for local shard %s", endpoint.SlotIndex, shardName)
 		}
 	} else {
+		sg.log.Infof("Failing slot %d by detaching the NVMe controller of remote shard %s", endpoint.SlotIndex, shardName)
 		if err := sg.detachShardBaseBdev(spdkClient, endpoint); err != nil {
 			return "", errors.Wrapf(err, "failed to detach remote shard %s", shardName)
 		}
