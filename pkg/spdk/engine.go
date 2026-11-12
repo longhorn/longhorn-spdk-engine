@@ -384,15 +384,25 @@ func (e *Engine) startExposeNVMeTCPTarget(spdkClient *spdkclient.Client, anaStat
 		e.NvmeTcpTarget.IP, strconv.Itoa(int(e.NvmeTcpTarget.Port)), spdkANAState, cntlid, cntlid)
 }
 
-// attachBackendBdev connects the backend's head bdev to this SPDK process and
-// returns the bdev name to add to the raid1.
+// attachBackendBdev returns the name of the bdev to add to the raid1 as a
+// base bdev. When the backend runs in the same SPDK process as the engine,
+// the engine uses the backend's head lvol directly and returns its alias.
+// When the backend runs elsewhere, the engine first connects to the backend's
+// head bdev over NVMe-oF and returns the name of the resulting nvme bdev.
 func (e *Engine) attachBackendBdev(spdkClient *spdkclient.Client, u Backend) (string, error) {
+	if u.LocalBdevName() != "" {
+		return u.LocalBdevName(), nil
+	}
 	return connectNVMfBdev(spdkClient, u.Name(), u.Address(), e.ctrlrLossTimeout, e.fastIOFailTimeoutSec, maxRetries, retryInterval)
 }
 
 // detachBackendBdev disconnects the bdev that attachBackendBdev connected.
-// It does nothing when the backend has no bdev recorded.
+// It does nothing for a local backend, or when the backend has no bdev
+// recorded.
 func (e *Engine) detachBackendBdev(spdkClient *spdkclient.Client, u Backend) error {
+	if u.LocalBdevName() != "" {
+		return nil
+	}
 	return disconnectNVMfBdev(spdkClient, u.BdevName(), disconnectMaxRetries, disconnectRetryInterval)
 }
 
@@ -1604,16 +1614,18 @@ func (e *Engine) ReplicaDelete(spdkClient *spdkclient.Client, replicaName, repli
 		return errors.Wrapf(err, "failed to remove base bdev %s for deleting replica %s", replicaStatus.BdevName(), replicaName)
 	}
 
-	controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(replicaStatus.BdevName())
-	// Fallback to use replica name. Make sure there won't be a leftover controller even if somehow `replicaStatus.BdevName()` has no record
-	if controllerName == "" {
-		e.log.Infof("No NVMf controller found for replica %s, so fallback to use replica name %s", replicaName, replicaName)
-		controllerName = replicaName
-	}
-	// Detaching the corresponding NVMf controller to remote replica
-	e.log.Infof("Detaching the corresponding NVMf controller %v during remote replica %s delete", controllerName, replicaName)
-	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return errors.Wrapf(err, "failed to detach controller %s for deleting replica %s", controllerName, replicaName)
+	if replicaStatus.LocalBdevName() == "" {
+		controllerName := helperutil.GetNvmeControllerNameFromNamespaceName(replicaStatus.BdevName())
+		// Fallback to use replica name. Make sure there won't be a leftover controller even if somehow `replicaStatus.BdevName()` has no record
+		if controllerName == "" {
+			e.log.Infof("No NVMf controller found for replica %s, so fallback to use replica name %s", replicaName, replicaName)
+			controllerName = replicaName
+		}
+		// Detaching the corresponding NVMf controller to remote replica
+		e.log.Infof("Detaching the corresponding NVMf controller %v during remote replica %s delete", controllerName, replicaName)
+		if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return errors.Wrapf(err, "failed to detach controller %s for deleting replica %s", controllerName, replicaName)
+		}
 	}
 
 	delete(e.backends, replicaName)
@@ -3017,6 +3029,10 @@ func (e *Engine) findReplicaWithoutUsableIOPath(spdkClient *spdkclient.Client) (
 	candidates := make([]replicaBdev, 0, len(e.backends))
 	for replicaName, backend := range e.backends {
 		if backend.Mode() == types.ModeERR || backend.BdevName() == "" {
+			continue
+		}
+		// A local lvol has no NVMe I/O path to check.
+		if backend.LocalBdevName() != "" {
 			continue
 		}
 		candidates = append(candidates, replicaBdev{replicaName: replicaName, bdevName: backend.BdevName()})

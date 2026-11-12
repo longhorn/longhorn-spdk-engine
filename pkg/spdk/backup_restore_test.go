@@ -1628,6 +1628,23 @@ func (s *TestSuite) TestPreflightReplicaIOPathsForRestoreAttributesBrokenReplica
 	c.Assert(replicaName, Equals, "replica-b")
 }
 
+func (s *TestSuite) TestPreflightReplicaIOPathsForRestoreSkipsLocalBackend(c *C) {
+	fmt.Println("Testing preflightReplicaIOPathsForRestore skips a local backend, which has no NVMe I/O path")
+
+	e, restore := newPreflightTestEngine()
+	defer restore()
+	// replica-a is a local lvol, so SPDK lists no NVMe I/O path for it.
+	e.backends["replica-a"].(*fakeBackend).localBdevName = "bdev-a"
+	listNvmeIOPathsFn = func(*spdkclient.Client) ([]spdktypes.BdevNvmePollGroupIoPaths, error) {
+		return newTestPollGroupIOPaths(map[string]bool{"bdev-b": true}), nil
+	}
+
+	replicaName, err := e.preflightReplicaIOPathsForRestore(nil)
+
+	c.Assert(err, IsNil)
+	c.Assert(replicaName, Equals, "")
+}
+
 func (s *TestSuite) TestNvmeIOPathsOfBdev(c *C) {
 	fmt.Println("Testing nvmeIOPathsOfBdev keeps only the paths of the given bdev in every poll group")
 

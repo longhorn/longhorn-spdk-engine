@@ -28,7 +28,7 @@ func (s *TestSuite) TestSelectBackendFactory(c *C) {
 	for _, tc := range cases {
 		fmt.Println("Testing selectBackendFactory:", tc.name)
 
-		factory, err := selectBackendFactory(tc.layout, nil)
+		factory, err := selectBackendFactory(tc.layout, nil, nil)
 		if tc.wantType == "" {
 			c.Assert(factory, IsNil, Commentf("case=%s", tc.name))
 			c.Assert(err, NotNil, Commentf("case=%s", tc.name))
