@@ -59,20 +59,20 @@ func (s *TestSuite) TestIsShardedEngine(c *C) {
 		expected bool
 	}{
 		"true when a shardGroupBackend is present": {
-			backends: map[string]Backend{"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil)},
+			backends: map[string]Backend{"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil)},
 			expected: true,
 		},
 		"true when a shardGroupBackend is mixed with replicaBackends": {
 			backends: map[string]Backend{
-				"r1":  newReplicaBackend("r1", "10.0.0.1:1234", nil),
-				"sg1": newShardGroupBackend("sg1", "10.0.0.2:1234", nil),
+				"r1":  newReplicaBackend("r1", "10.0.0.1:1234", "", nil),
+				"sg1": newShardGroupBackend("sg1", "10.0.0.2:1234", "", nil),
 			},
 			expected: true,
 		},
 		"false when all backends are replicaBackend": {
 			backends: map[string]Backend{
-				"r1": newReplicaBackend("r1", "10.0.0.1:1234", nil),
-				"r2": newReplicaBackend("r2", "10.0.0.2:1234", nil),
+				"r1": newReplicaBackend("r1", "10.0.0.1:1234", "", nil),
+				"r2": newReplicaBackend("r2", "10.0.0.2:1234", "", nil),
 			},
 			expected: false,
 		},

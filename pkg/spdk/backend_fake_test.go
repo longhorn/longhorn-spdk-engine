@@ -14,10 +14,11 @@ import (
 type fakeBackend struct {
 	mu sync.RWMutex
 
-	name     string
-	address  string
-	mode     types.Mode
-	bdevName string
+	name          string
+	address       string
+	localBdevName string // tests assign this to make the fake act as a local backend
+	mode          types.Mode
+	bdevName      string
 
 	// Preset Get response; ViewErr (if set) is returned instead of View.
 	View    *BackendView
@@ -68,6 +69,8 @@ func newFakeBackend(name, address string) *fakeBackend {
 }
 
 func (u *fakeBackend) Name() string { return u.name }
+
+func (u *fakeBackend) LocalBdevName() string { return u.localBdevName }
 
 func (u *fakeBackend) Address() string {
 	u.mu.RLock()

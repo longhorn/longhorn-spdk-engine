@@ -63,11 +63,11 @@ func selectBackendFactory(layout spdkrpc.DataLayoutType, newServiceClient Servic
 	switch layout {
 	case spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED:
 		return func(name, address string) Backend {
-			return newReplicaBackend(name, address, newServiceClient)
+			return newReplicaBackend(name, address, "", newServiceClient)
 		}, nil
 	case spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_SHARDED:
 		return func(name, address string) Backend {
-			return newShardGroupBackend(name, address, newServiceClient)
+			return newShardGroupBackend(name, address, "", newServiceClient)
 		}, nil
 	default:
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "unsupported data_layout_type %v", layout)
