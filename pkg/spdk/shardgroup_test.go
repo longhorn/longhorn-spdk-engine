@@ -299,3 +299,32 @@ func (s *TestSuite) TestShardGroupSnapshotDeleteRejectsNonRunningState(c *C) {
 		c.Assert(len(sg.UpdateCh), Equals, 0)
 	}
 }
+
+// A shard that runs in this process is attached by its lvol alias without
+// contacting SPDK. The test passes a nil spdkClient on purpose: if the
+// remote path were taken, the first RPC would hit a nil pointer and panic.
+func (s *TestSuite) TestAttachShardBaseBdevUsesLocalAlias(c *C) {
+	fmt.Println("Testing ShardGroup.attachShardBaseBdev returns the lvol alias for a local shard")
+
+	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize,
+		2, 1, 64, map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	endpoint := &ShardEndpoint{Address: "10.0.0.1:20001", SlotIndex: 0, LocalBdevName: "vol-a-0-lvs/shard-vol-a-0"}
+
+	bdevName, err := sg.attachShardBaseBdev(nil, endpoint, maxRetries)
+	c.Assert(err, IsNil)
+	c.Assert(bdevName, Equals, "vol-a-0-lvs/shard-vol-a-0")
+}
+
+// A shard that runs in this process was never attached over NVMe-oF, so
+// detach has nothing to tell SPDK. The test passes a nil spdkClient on
+// purpose: if the remote path were taken, the detach RPC would hit a nil
+// pointer and panic.
+func (s *TestSuite) TestDetachShardBaseBdevSkipsLocalShard(c *C) {
+	fmt.Println("Testing ShardGroup.detachShardBaseBdev is a no-op for a local shard")
+
+	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize,
+		2, 1, 64, map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	endpoint := &ShardEndpoint{Address: "10.0.0.1:20001", SlotIndex: 0, LocalBdevName: "vol-a-0-lvs/shard-vol-a-0"}
+
+	c.Assert(sg.detachShardBaseBdev(nil, endpoint), IsNil)
+}
