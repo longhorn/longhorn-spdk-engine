@@ -722,7 +722,7 @@ func (s *TestSuite) TestCreateRaidBdevKeepsAutoResizeForECEngine(c *C) {
 	defer f.install()()
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.backends = map[string]Backend{"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil)}
+	e.backends = map[string]Backend{"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil)}
 	c.Assert(e.createRaidBdevNoLock(nil, []string{"sg1n1"}, ""), IsNil)
 	c.Assert(f.calls, DeepEquals, map[string]spdktypes.BdevRaidCreateOptions{"engine-a": {}})
 }

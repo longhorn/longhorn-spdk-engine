@@ -27,6 +27,17 @@ type Backend interface {
 	// Identity (immutable for the life of the backend).
 	Name() string
 	Address() string
+	// LocalBdevName is the lvol alias (<lvs>/<lvol>) of the backend's head
+	// bdev when the backend runs in this SPDK process. The engine can then
+	// use that lvol directly as a raid1 base bdev instead of attaching it
+	// over NVMe-oF.
+	//
+	// It is "" when the backend runs on another node, and the engine
+	// attaches it over NVMe-oF.
+	//
+	// The value is set when the backend is created and never changes, so
+	// detach can rely on it to undo exactly what attach did.
+	LocalBdevName() string
 
 	// Mutable state. The engine reads/writes these directly during its
 	// reconciliation loop (e.g., marking ERR on RPC failure during

@@ -935,7 +935,7 @@ func (e *Engine) replicaAdd(spdkClient *spdkclient.Client, dstReplicaName, dstRe
 					e.log.Warnf("Engine backend %s is not a replicaBackend (%T); skipping SetAddress on rebuild failure path", dstReplicaName, e.backends[dstReplicaName])
 				}
 			} else {
-				u := newReplicaBackend(dstReplicaName, dstReplicaAddress, e.newServiceClient)
+				u := newReplicaBackend(dstReplicaName, dstReplicaAddress, "", e.newServiceClient)
 				u.SetMode(types.ModeERR)
 				e.backends[dstReplicaName] = u
 			}
@@ -1093,7 +1093,7 @@ func (e *Engine) replicaAddStart(spdkClient *spdkclient.Client,
 		return nil, startUpdateRequired, nil, errors.Wrapf(err, "failed to adding the rebuilding replica %s head bdev %s to the base bdev list for engine %s", dstReplicaName, dstHeadLvolBdevName, e.Name)
 	}
 
-	u := newReplicaBackend(dstReplicaName, dstReplicaAddress, e.newServiceClient)
+	u := newReplicaBackend(dstReplicaName, dstReplicaAddress, "", e.newServiceClient)
 	// Dst replica is WO until the shallow copy finishes. The constructor
 	// defaults to WO already, but set it here so the rebuild contract is
 	// visible at the call site instead of relying on the default.

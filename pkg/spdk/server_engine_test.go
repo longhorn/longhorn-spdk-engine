@@ -22,7 +22,7 @@ func (s *TestSuite) TestServerEngineReplicaListEmptyForShardedEngine(c *C) {
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
-		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil),
 	}
 
 	srv := &Server{
@@ -49,6 +49,21 @@ func (s *TestSuite) TestServerEngineReplicaListNotFound(c *C) {
 		EngineName: "missing",
 	})
 	c.Assert(err, NotNil)
+}
+
+func (s *TestSuite) TestBackendLocalBdevName(c *C) {
+	fmt.Println("Testing Backend.LocalBdevName is recorded at construction and shown by String")
+
+	for _, u := range []Backend{
+		newReplicaBackend("r1", "10.0.0.1:1234", "lvs/head", nil),
+		newShardGroupBackend("sg1", "10.0.0.1:1234", "lvs/head", nil),
+	} {
+		c.Assert(u.LocalBdevName(), Equals, "lvs/head")
+		c.Assert(strings.Contains(fmt.Sprintf("%+v", u), "LocalBdevName:lvs/head"), Equals, true)
+	}
+
+	remote := newReplicaBackend("r2", "10.0.0.2:1234", "", nil)
+	c.Assert(remote.LocalBdevName(), Equals, "")
 }
 
 func (s *TestSuite) TestRestoreFrontendBlocksRestoreAndFrontendCreate(c *C) {
@@ -326,7 +341,7 @@ func (s *TestSuite) TestServerEngineReplicaAddRejectedOnShardedEngine(c *C) {
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
-		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil),
 	}
 
 	srv := &Server{
@@ -347,7 +362,7 @@ func (s *TestSuite) TestServerEngineReplicaDeleteRejectedOnShardedEngine(c *C) {
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
-		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil),
 	}
 
 	srv := &Server{
@@ -368,7 +383,7 @@ func (s *TestSuite) TestServerEngineSnapshotHashStatusUnimplementedForShardedEng
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
-		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil),
 	}
 
 	srv := &Server{
