@@ -45,9 +45,15 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	}
 
 	spdkClient := s.spdkClient
+	localBdevNames := map[string]string{}
+	if req.DataLayoutType == spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_SHARDED {
+		for shardGroupName := range req.ReplicaAddressMap {
+			localBdevNames[shardGroupName] = s.resolveLocalShardGroupBdevName(shardGroupName)
+		}
+	}
 	s.Unlock()
 
-	backendFactory, err := selectBackendFactory(req.DataLayoutType, s.newServiceClient)
+	backendFactory, err := selectBackendFactory(req.DataLayoutType, localBdevNames, s.newServiceClient)
 	if err != nil {
 		return nil, err
 	}
@@ -55,11 +61,15 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	return e.Create(spdkClient, req.ReplicaAddressMap, req.PortCount, s.portAllocator, req.SalvageRequested, backendFactory)
 }
 
-// selectBackendFactory is the only place the server-layer translates the
-// EngineCreateRequest.DataLayoutType discriminator into an Backend
-// implementation. Once Engine.backends is populated, the engine never
-// re-reads the layout.
-func selectBackendFactory(layout spdkrpc.DataLayoutType, newServiceClient ServiceClientFactory) (BackendFactory, error) {
+// selectBackendFactory is the only place where the server layer turns the
+// EngineCreateRequest.DataLayoutType value into a Backend implementation.
+// Once Engine.backends is populated, the engine never reads the layout again.
+//
+// localBdevNames identifies the backends that run in the same SPDK process as
+// the engine. It maps each such backend to the alias of its head lvol. For
+// any backend that is not in the map, or whose alias is empty, the engine
+// connects over NVMe-oF instead.
+func selectBackendFactory(layout spdkrpc.DataLayoutType, localBdevNames map[string]string, newServiceClient ServiceClientFactory) (BackendFactory, error) {
 	switch layout {
 	case spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED:
 		return func(name, address string) Backend {
@@ -67,11 +77,33 @@ func selectBackendFactory(layout spdkrpc.DataLayoutType, newServiceClient Servic
 		}, nil
 	case spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_SHARDED:
 		return func(name, address string) Backend {
-			return newShardGroupBackend(name, address, "", newServiceClient)
+			return newShardGroupBackend(name, address, localBdevNames[name], newServiceClient)
 		}, nil
 	default:
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "unsupported data_layout_type %v", layout)
 	}
+}
+
+// resolveLocalShardGroupBdevName returns the head lvol alias of the named
+// ShardGroup when that ShardGroup runs in this Server and is in the Running
+// state. It returns "" when the ShardGroup runs on another node or is not
+// yet Running.
+//
+// The caller must hold the Server lock. Lock order is Server, then
+// ShardGroup; taking them in the reverse order deadlocks against this path.
+func (s *Server) resolveLocalShardGroupBdevName(shardGroupName string) string {
+	shardGroup := s.shardGroupMap[shardGroupName]
+	if shardGroup == nil {
+		return ""
+	}
+	shardGroup.RLock()
+	defer shardGroup.RUnlock()
+	if shardGroup.State != types.InstanceStateRunning {
+		logrus.Warnf("Falling back to NVMe-oF for local ShardGroup %s because it is not running (state %s)",
+			shardGroupName, shardGroup.State)
+		return ""
+	}
+	return shardGroup.HeadAlias
 }
 
 func (s *Server) EngineSnapshotMaxCountSet(ctx context.Context, req *spdkrpc.EngineSnapshotMaxCountSetRequest) (ret *emptypb.Empty, err error) {
