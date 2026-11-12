@@ -45,6 +45,28 @@ const (
 // 3 attempts still absorbs a transient reconnect.
 const salvageConnectMaxRetries = 3
 
+// attachShardBaseBdev connects to the shard over NVMe-oF and returns the
+// NVMe initiator bdev name.
+func (sg *ShardGroup) attachShardBaseBdev(spdkClient *spdkclient.Client, endpoint *ShardEndpoint, connectAttempts int) (string, error) {
+	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
+	bdevName, err := connectNVMfBdev(spdkClient, controllerName, endpoint.Address,
+		ecShardCtrlrLossTimeoutSec, ecShardFastIOFailTimeoutSec, connectAttempts, retryInterval)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to connect shard %s at %s", controllerName, endpoint.Address)
+	}
+	return bdevName, nil
+}
+
+// detachShardBaseBdev detaches the shard's NVMe-oF controller. A controller
+// that is already gone is not an error.
+func (sg *ShardGroup) detachShardBaseBdev(spdkClient *spdkclient.Client, endpoint *ShardEndpoint) error {
+	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
+	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+		return errors.Wrapf(err, "failed to detach controller %s", controllerName)
+	}
+	return nil
+}
+
 // ShardGroup is the SPDK-side process state for an EC volume's lvstore + head
 // lvol layer. Each ShardGroup process owns:
 //
@@ -602,20 +624,18 @@ func (sg *ShardGroup) Create(spdkClient *spdkclient.Client, superiorPortAllocato
 		if baseBdevs[endpoint.SlotIndex] != "" {
 			return nil, fmt.Errorf("duplicate slot index %d: shard %s conflicts with an earlier shard", endpoint.SlotIndex, shardName)
 		}
-		controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
 		connectAttempts := maxRetries
 		if sg.SalvageRequested {
 			connectAttempts = salvageConnectMaxRetries
 		}
-		bdevName, connErr := connectNVMfBdev(spdkClient, controllerName, endpoint.Address,
-			ecShardCtrlrLossTimeoutSec, ecShardFastIOFailTimeoutSec, connectAttempts, retryInterval)
+		bdevName, connErr := sg.attachShardBaseBdev(spdkClient, endpoint, connectAttempts)
 		if connErr != nil {
 			if sg.SalvageRequested {
-				sg.log.WithError(connErr).Warnf("Salvage: failed to connect shard %s at %s; marking slot %d as missing", controllerName, endpoint.Address, endpoint.SlotIndex)
+				sg.log.WithError(connErr).Warnf("Salvage: marking slot %d (shard %s) as missing", endpoint.SlotIndex, shardName)
 				baseBdevs[endpoint.SlotIndex] = ""
 				continue
 			}
-			return nil, errors.Wrapf(connErr, "failed to connect shard %s at %s", controllerName, endpoint.Address)
+			return nil, connErr
 		}
 		baseBdevs[endpoint.SlotIndex] = bdevName
 	}
@@ -829,9 +849,8 @@ func (sg *ShardGroup) Delete(spdkClient *spdkclient.Client, cleanupRequired bool
 
 	// 5. Disconnect NVMe-oF controllers from all shards (best-effort).
 	for shardName, endpoint := range sg.Shards {
-		controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
-		if _, detachErr := spdkClient.BdevNvmeDetachController(controllerName); detachErr != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(detachErr) {
-			sg.log.WithError(detachErr).Warnf("Failed to detach NVMe controller %s for shard %s; continuing", controllerName, shardName)
+		if detachErr := sg.detachShardBaseBdev(spdkClient, endpoint); detachErr != nil {
+			sg.log.WithError(detachErr).Warnf("Failed to detach shard %s; continuing", shardName)
 		}
 	}
 
@@ -1352,33 +1371,35 @@ func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, new
 		return "", grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s shard replace", sg.State, sg.Name)
 	}
 
-	endpoint, ok := sg.Shards[shardName]
+	currentEndpoint, ok := sg.Shards[shardName]
 	if !ok {
 		return "", grpcstatus.Errorf(grpccodes.NotFound, "shard %s not found in shardgroup %s", shardName, sg.Name)
 	}
 
-	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
-	// Best-effort detach of any prior controller before re-attaching to the new address.
-	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		sg.log.WithError(err).Warnf("Pre-replace detach of controller %s failed; continuing", controllerName)
+	// Release whatever still backs the FAILED slot. Best-effort; the
+	// controller is usually already gone.
+	if err := sg.detachShardBaseBdev(spdkClient, currentEndpoint); err != nil {
+		sg.log.WithError(err).Warnf("Pre-replace detach of shard %s failed; continuing", shardName)
 	}
 
-	bdevName, err := connectNVMfBdev(spdkClient, controllerName, newAddress,
-		ecShardCtrlrLossTimeoutSec, ecShardFastIOFailTimeoutSec, maxRetries, retryInterval)
+	// Attach the replacement shard as a base bdev.
+	replacementEndpoint := &ShardEndpoint{Address: newAddress, SlotIndex: currentEndpoint.SlotIndex, LocalBdevName: newLocalBdevName}
+	bdevName, err := sg.attachShardBaseBdev(spdkClient, replacementEndpoint, maxRetries)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to connect replacement shard %s at %s", controllerName, newAddress)
+		return "", errors.Wrapf(err, "failed to attach replacement for shard %s", shardName)
 	}
 
-	resp, err := spdkClient.BdevEcReplaceBaseBdev(sg.EcBdevName, endpoint.SlotIndex, bdevName)
+	// Point the EC slot at the new base bdev.
+	resp, err := spdkClient.BdevEcReplaceBaseBdev(sg.EcBdevName, replacementEndpoint.SlotIndex, bdevName)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to replace base bdev at slot %d for shardgroup %s", endpoint.SlotIndex, sg.Name)
+		return "", errors.Wrapf(err, "failed to replace base bdev at slot %d for shardgroup %s", replacementEndpoint.SlotIndex, sg.Name)
 	}
 
-	// endpoint points into sg.Shards, so this updates the map entry in place.
-	endpoint.Address = newAddress
-	endpoint.LocalBdevName = newLocalBdevName
+	// Update sg.Shards last. If attach or replace fails, the record still
+	// matches the shard bdev_ec is serving.
+	sg.Shards[shardName] = replacementEndpoint
 
-	sg.log.Infof("Replaced shard %s at slot %d with %s; slot state=%s", shardName, endpoint.SlotIndex, newAddress, resp.State)
+	sg.log.Infof("Replaced shard %s at slot %d with %s; slot state=%s", shardName, replacementEndpoint.SlotIndex, newAddress, resp.State)
 	return string(resp.State), nil
 }
 
@@ -1432,9 +1453,8 @@ func (sg *ShardGroup) ForceFailShard(spdkClient *spdkclient.Client, shardName st
 			"shard %s in shardgroup %s is REPLACING; refuse to force-fail", shardName, sg.Name)
 	}
 
-	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
-	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return "", errors.Wrapf(err, "failed to detach controller %s for shard %s", controllerName, shardName)
+	if err := sg.detachShardBaseBdev(spdkClient, endpoint); err != nil {
+		return "", errors.Wrapf(err, "failed to force-fail shard %s", shardName)
 	}
 
 	deadline := time.Now().Add(ecShardForceFailPollTimeout)
