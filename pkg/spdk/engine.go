@@ -3395,14 +3395,18 @@ func (e *Engine) ExpandViaBackendReset(spdkClient *spdkclient.Client, size uint6
 		e.finishExpansion(originalSize, size, err)
 	}()
 
-	// Refresh each backend bdev's cached blockcnt by resetting its controller;
-	// the reset, not the AER chain, is what propagates the new size. The backend
-	// map key equals the bdev_nvme controller name, so iterating the map keys
-	// gives the correct controller names directly.
+	// Reset each NVMe-oF backend's controller so its bdev re-reads the
+	// namespace size and the raid1 grows. The backend map key is the
+	// bdev_nvme controller name, so the map keys can be used directly.
 	for backendName, u := range e.backends {
 		// Skip non-dispatchable backends: resetting a dead or address-less
 		// controller would fail the whole expand.
 		if !isBackendDispatchable(u) {
+			continue
+		}
+		// A local lvol notifies the raid of its new size when it is
+		// resized; only an NVMe-oF bdev needs a controller reset.
+		if u.LocalBdevName() != "" {
 			continue
 		}
 		if _, err := spdkClient.BdevNvmeResetController(backendName); err != nil {
