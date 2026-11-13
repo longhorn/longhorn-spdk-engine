@@ -3930,7 +3930,7 @@ func (e *Engine) validateReplicaStatusMapNoLock(bdevMap map[string]*spdktypes.Bd
 
 		if replicaStatus.Mode() != types.ModeERR {
 			e.log.Debugf("Engine validating replica %s with bdev name %s and address %s during ValidateAndUpdate", replicaName, replicaStatus.BdevName(), replicaStatus.Address())
-			mode, err := e.validateAndUpdateReplicaNvme(replicaName, bdevMap[replicaStatus.BdevName()])
+			mode, err := e.validateAndUpdateReplicaBdev(replicaName, bdevMap[replicaStatus.BdevName()])
 			if err != nil {
 				e.log.WithError(err).Errorf("Engine found valid NVMe for replica %v, will update the mode from %s to ERR during ValidateAndUpdate", replicaName, replicaStatus.Mode())
 				replicaStatus.SetMode(types.ModeERR)
@@ -4216,13 +4216,23 @@ func normalizeAncestorNameForLog(e *Engine, name string) string {
 	return backingImageName
 }
 
-func (e *Engine) validateAndUpdateReplicaNvme(replicaName string, bdev *spdktypes.BdevInfo) (types.Mode, error) {
+func (e *Engine) validateAndUpdateReplicaBdev(replicaName string, bdev *spdktypes.BdevInfo) (types.Mode, error) {
 	if bdev == nil {
 		return types.ModeERR, fmt.Errorf("cannot find a bdev for replica %s", replicaName)
 	}
 
 	if err := validateReplicaBdevSize(e, replicaName, bdev); err != nil {
 		return types.ModeERR, err
+	}
+
+	replicaStatus := e.backends[replicaName]
+	// A local base bdev is the head lvol itself, so there is no NVMe
+	// controller for the checks below to look at.
+	if replicaStatus.LocalBdevName() != "" {
+		if err := validateLocalLvolBdev(replicaName, replicaStatus.LocalBdevName(), bdev); err != nil {
+			return types.ModeERR, err
+		}
+		return replicaStatus.Mode(), nil
 	}
 
 	nvmeInfo, err := validateAndGetSingleNvmeInfo(replicaName, bdev)
@@ -4233,7 +4243,6 @@ func (e *Engine) validateAndUpdateReplicaNvme(replicaName string, bdev *spdktype
 		return types.ModeERR, err
 	}
 
-	replicaStatus := e.backends[replicaName]
 	if err := validateReplicaAddress(replicaName, bdev.Name, replicaStatus.Address(), nvmeInfo); err != nil {
 		return types.ModeERR, err
 	}
@@ -4276,6 +4285,24 @@ func validateReplicaBdevSize(e *Engine, replicaName string, bdev *spdktypes.Bdev
 		return fmt.Errorf(
 			"found mismatching between replica bdev %s spec size %d and the engine %s spec size %d during replica %s mode validation",
 			bdev.Name, bdevSpecSize, e.Name, e.SpecSize, replicaName,
+		)
+	}
+	return nil
+}
+
+// validateLocalLvolBdev checks that a local base bdev is an lvol and that
+// it carries the alias the backend was attached with.
+func validateLocalLvolBdev(replicaName, localBdevName string, bdev *spdktypes.BdevInfo) error {
+	if spdktypes.GetBdevType(bdev) != spdktypes.BdevTypeLvol {
+		return fmt.Errorf(
+			"found bdev type %v rather than %v for local base bdev %s during replica %s mode validation",
+			spdktypes.GetBdevType(bdev), spdktypes.BdevTypeLvol, localBdevName, replicaName,
+		)
+	}
+	if bdev.Name != localBdevName && !slices.Contains(bdev.Aliases, localBdevName) {
+		return fmt.Errorf(
+			"found lvol bdev %s (aliases %v) rather than the expected local base bdev %s during replica %s mode validation",
+			bdev.Name, bdev.Aliases, localBdevName, replicaName,
 		)
 	}
 	return nil
