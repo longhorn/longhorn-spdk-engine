@@ -108,8 +108,8 @@ func (s *TestSuite) TestEngineFrontendFinishExpansionFailureWithoutExpansion(c *
 	c.Assert(ef.isExpanding, Equals, false)
 }
 
-func (s *TestSuite) TestEngineFinishExpansionPartialFailureKeepsOriginalSize(c *C) {
-	fmt.Println("Testing Engine finish expansion partial failure keeps original size")
+func (s *TestSuite) TestEngineFinishExpansionPartialFailureMovesToNewSize(c *C) {
+	fmt.Println("Testing Engine finish expansion partial failure moves to the new size and keeps the warning")
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.lastExpansionError = "replica expand failed"
@@ -118,20 +118,9 @@ func (s *TestSuite) TestEngineFinishExpansionPartialFailureKeepsOriginalSize(c *
 
 	c.Assert(e.State, Equals, lhtypes.InstanceState(lhtypes.InstanceStateRunning))
 	c.Assert(e.ErrorMsg, Equals, "")
-	c.Assert(e.SpecSize, Equals, uint64(10))
+	c.Assert(e.SpecSize, Equals, uint64(20))
+	c.Assert(e.lastExpansionError, Equals, "replica expand failed")
 	c.Assert(e.lastExpansionFailedAt, Not(Equals), "")
-}
-
-func (s *TestSuite) TestEngineFinishExpansionPartialFailureRestoresOriginalSize(c *C) {
-	fmt.Println("Testing Engine finish expansion partial failure restores original size when spec size was updated during expand")
-
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	e.SpecSize = 20
-	e.lastExpansionError = "replica expand failed"
-
-	e.finishExpansion(10, 20, nil)
-
-	c.Assert(e.SpecSize, Equals, uint64(10))
 }
 
 func (s *TestSuite) TestEngineFrontendFinishExpansionPartialFailureKeepsOriginalSize(c *C) {
@@ -241,7 +230,10 @@ func (s *TestSuite) TestEngineExpandPrecheck(c *C) {
 func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	fmt.Println("Testing Engine handle replica expand result")
 
-	eAllFailed := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	f := newFakeExpansionSPDK(10, 20, "r1", "r2")
+	defer f.install()()
+
+	eAllFailed := newExpansionTestEngine(10, map[string]uint64{"r1": 10, "r2": 10})
 	replicaClientsAllFailed := map[string]*clientpkg.SPDKClient{
 		"r1": nil,
 		"r2": nil,
@@ -250,15 +242,14 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 		"r1": errors.New("x"),
 		"r2": errors.New("y"),
 	}
-	err := eAllFailed.handleReplicaExpandResult(replicaClientsAllFailed, failedAll)
+	err := eAllFailed.handleReplicaExpandResult(nil, replicaClientsAllFailed, failedAll)
 	c.Assert(err, NotNil)
 	c.Assert(strings.Contains(err.Error(), "all replicas failed to expand"), Equals, true)
+	// Like V1, the replicas that are still members of the RAID bdev keep serving the old size.
+	c.Assert(eAllFailed.backends["r1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeRW))
+	c.Assert(eAllFailed.backends["r2"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeRW))
 
-	ePartial := NewEngine("engine-b", "vol-b", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	ePartial.backends = map[string]Backend{
-		"r1": newTestReplicaBackend("r1", "", lhtypes.ModeRW),
-		"r2": newTestReplicaBackend("r2", "", lhtypes.ModeRW),
-	}
+	ePartial := newExpansionTestEngine(10, map[string]uint64{"r1": 10, "r2": 10})
 	replicaClientsPartial := map[string]*clientpkg.SPDKClient{
 		"r1": nil,
 		"r2": nil,
@@ -266,7 +257,7 @@ func (s *TestSuite) TestHandleReplicaExpandResult(c *C) {
 	failedPartial := map[string]error{
 		"r1": errors.New("x"),
 	}
-	err = ePartial.handleReplicaExpandResult(replicaClientsPartial, failedPartial)
+	err = ePartial.handleReplicaExpandResult(nil, replicaClientsPartial, failedPartial)
 	c.Assert(err, IsNil)
 	c.Assert(ePartial.backends["r1"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeERR))
 	c.Assert(ePartial.backends["r2"].Mode(), Equals, lhtypes.Mode(lhtypes.ModeRW))
