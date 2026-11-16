@@ -72,6 +72,8 @@ func (u *fakeBackend) Name() string { return u.name }
 
 func (u *fakeBackend) LocalBdevName() string { return u.localBdevName }
 
+func (u *fakeBackend) ResizedBeforeEngineExpand() bool { return false }
+
 func (u *fakeBackend) Address() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()

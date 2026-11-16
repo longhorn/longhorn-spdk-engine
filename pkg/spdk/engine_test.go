@@ -170,6 +170,56 @@ func (s *TestSuite) TestValidateAndUpdateReplicaBdevLocalLvol(c *C) {
 	}
 }
 
+func (s *TestSuite) TestValidateAndMaybeAdjustSpecSize(c *C) {
+	const (
+		blockSize   = 512
+		backendName = "backend-0"
+		backendAddr = "10.0.0.1:20001"
+		growErr     = "smaller than actual raid bdev size"
+	)
+
+	cases := []struct {
+		name          string
+		specSize      uint64
+		raidSize      uint64
+		backend       Backend // nil => the engine has no backend
+		wantSpecSize  uint64
+		wantUpdate    bool
+		wantErrSubstr string // "" => no error
+	}{
+		{"sizes match", 4096, 4096, newReplicaBackend(backendName, backendAddr, "", nil), 4096, false, ""},
+		{"raid is smaller, spec size follows", 8192, 4096, newReplicaBackend(backendName, backendAddr, "", nil), 4096, false, ""},
+		// ShardGroupExpand grew the backend before EngineExpand was called.
+		{"raid grew, shardgroup backend", 4096, 8192, newShardGroupBackend(backendName, backendAddr, "", nil), 8192, true, ""},
+		// The engine resizes replicas itself, so this must not happen.
+		{"raid grew, replica backend", 4096, 8192, newReplicaBackend(backendName, backendAddr, "", nil), 4096, false, growErr},
+		{"raid grew, no backend", 4096, 8192, nil, 4096, false, growErr},
+	}
+
+	for _, tc := range cases {
+		c.Logf("testing validateAndMaybeAdjustSpecSizeNoLock.%s", tc.name)
+
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, tc.specSize, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		if tc.backend != nil {
+			e.backends[backendName] = tc.backend
+		}
+
+		updateRequired := false
+		err := e.validateAndMaybeAdjustSpecSizeNoLock(&spdktypes.BdevInfo{
+			BdevInfoBasic: spdktypes.BdevInfoBasic{BlockSize: blockSize, NumBlocks: tc.raidSize / blockSize},
+		}, &updateRequired)
+
+		if tc.wantErrSubstr == "" {
+			c.Assert(err, IsNil, Commentf("case=%s", tc.name))
+		} else {
+			c.Assert(err, NotNil, Commentf("case=%s", tc.name))
+			c.Assert(strings.Contains(err.Error(), tc.wantErrSubstr), Equals, true, Commentf("case=%s err=%v", tc.name, err))
+		}
+		c.Assert(e.SpecSize, Equals, tc.wantSpecSize, Commentf("case=%s", tc.name))
+		c.Assert(updateRequired, Equals, tc.wantUpdate, Commentf("case=%s", tc.name))
+	}
+}
+
 //	. "gopkg.in/check.v1"
 
 // func (s *TestSuite) xxTestcheckInitiatorAndTargetCreationRequirementsForNvmeTcpFrontend(c *C) {

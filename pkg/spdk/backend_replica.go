@@ -49,6 +49,10 @@ func (u *replicaBackend) Name() string { return u.name }
 
 func (u *replicaBackend) LocalBdevName() string { return u.localBdevName }
 
+// ResizedBeforeEngineExpand returns false. The engine resizes each replica
+// as part of EngineExpand.
+func (u *replicaBackend) ResizedBeforeEngineExpand() bool { return false }
+
 func (u *replicaBackend) Address() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()

@@ -3822,7 +3822,7 @@ func (e *Engine) ValidateAndUpdate(spdkClient *spdkclient.Client) (err error) {
 		return err
 	}
 
-	if err := e.validateAndMaybeAdjustSpecSizeNoLock(bdevRaid); err != nil {
+	if err := e.validateAndMaybeAdjustSpecSizeNoLock(bdevRaid, &updateRequired); err != nil {
 		return err
 	}
 
@@ -3893,7 +3893,7 @@ func (e *Engine) getRaidBdevNoLock(bdevMap map[string]*spdktypes.BdevInfo) (*spd
 	return bdevRaid, nil
 }
 
-func (e *Engine) validateAndMaybeAdjustSpecSizeNoLock(bdevRaid *spdktypes.BdevInfo) error {
+func (e *Engine) validateAndMaybeAdjustSpecSizeNoLock(bdevRaid *spdktypes.BdevInfo, updateRequired *bool) error {
 	bdevRaidSize := bdevRaid.NumBlocks * uint64(bdevRaid.BlockSize)
 
 	if e.SpecSize > bdevRaidSize {
@@ -3913,11 +3913,38 @@ func (e *Engine) validateAndMaybeAdjustSpecSizeNoLock(bdevRaid *spdktypes.BdevIn
 	}
 
 	if e.SpecSize < bdevRaidSize {
-		// should not happen
-		return fmt.Errorf("engine spec size %d is smaller than actual raid bdev size %d for engine %s", e.SpecSize, bdevRaidSize, e.Name)
+		// The engine resizes these backends itself, so nothing else should
+		// have grown the raid bdev.
+		if !e.backendsResizedBeforeEngineExpandNoLock() {
+			return fmt.Errorf("engine spec size %d is smaller than actual raid bdev size %d for engine %s", e.SpecSize, bdevRaidSize, e.Name)
+		}
+
+		// The backends were resized before EngineExpand was called, and the
+		// raid bdev grew with them. Record the new size. EngineExpand then
+		// finds the engine at the requested size and returns without an
+		// update, so the update for the new size is sent from here.
+		e.log.Infof("Raid bdev of engine %s grew from spec size %d to %d before EngineExpand was called, recording the new size", e.Name, e.SpecSize, bdevRaidSize)
+		e.SpecSize = bdevRaidSize
+		*updateRequired = true
+		return nil
 	}
 
 	return nil
+}
+
+// backendsResizedBeforeEngineExpandNoLock reports whether every backend is
+// resized before EngineExpand is called. The caller must hold the engine
+// lock.
+func (e *Engine) backendsResizedBeforeEngineExpandNoLock() bool {
+	if len(e.backends) == 0 {
+		return false
+	}
+	for _, u := range e.backends {
+		if !u.ResizedBeforeEngineExpand() {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Engine) validateReplicaStatusMapNoLock(bdevMap map[string]*spdktypes.BdevInfo, updateRequired *bool) bool {
