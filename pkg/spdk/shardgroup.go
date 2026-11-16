@@ -958,23 +958,24 @@ func (sg *ShardGroup) SetErrorState() {
 	}
 }
 
-// Expand grows the EC stack in place after each shard has been
-// resized: bdev_ec_resize -> bdev_lvol_grow_lvstore -> bdev_lvol_resize on the
-// head lvol. The engine's raid1 layer auto-grows via NVMe AER when the
-// exposed namespace size changes; no engine-side SPDK call is needed.
+// Expand grows the EC stack to newSize in place. It resizes bdev_ec, grows
+// the lvstore, and then resizes the head lvol.
 //
-// All k+m shards must be resized via ShardExpand on their nodes before
-// calling this.
+// All k+m shards must already be at the new size. This function does not
+// resize them.
 //
 // creationSize is the volume size when the ShardGroup was created. The
-// lvstore metadata is sized at creation for EcLvstoreMaxGrowthFactor x that
-// size, so expansion beyond the ceiling is rejected. Zero means unknown:
-// the check is skipped and the post-grow capacity check is the backstop.
+// function rejects a newSize above EcLvstoreMaxGrowthFactor times
+// creationSize. A creationSize of zero means unknown and skips this check.
 //
-// Unlike Shard.Expand, a failure here does not set Error on the
-// ShardGroup directly. Sync sees IsExposed=true with no live subsystem
-// and moves the ShardGroup to Error. The two layers recover differently,
-// so do not copy the Shard.Expand error-marking defer here.
+// On failure, Expand returns the error and does not change the state. A
+// failure before the head lvol resize leaves the ShardGroup serving at the
+// old size, and Expand can be called again. A failure during the resize
+// leaves the NVMe-oF subsystem down, and the next Sync sets Error.
+//
+// Do not set Error on every failure as Shard.Expand does. An early failure
+// would then put a working ShardGroup into Error, and Expand could not be
+// called again.
 func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSize uint64) (err error) {
 	sg.Lock()
 	prevSpecSize := sg.SpecSize
@@ -1078,28 +1079,24 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 			sg.LvsName, sg.EcBdevName, lvstoreList[0].TotalDataClusters*lvstoreList[0].ClusterSize, newSize)
 	}
 
-	// 4. Resize the head lvol.
+	// 4. Resize the head lvol with its NVMe-oF subsystem torn down.
 	//
-	// Why the teardown is mandatory: without it, bdev_lvol_resize HANGS on
-	// this topology. The engine and ShardGroup share one SPDK reactor (one
-	// IM pod per node, forced by reconcileShardGroup's NodeID co-location
-	// rule), and the engine's bdev_nvme initiator is loopback-attached to
-	// this head-lvol's NVMe-oF target. When bdev_lvol_resize fires the
-	// freeze barrier inside spdk_blob_resize, the barrier needs every
-	// blobstore channel to acknowledge - but those channels are busy
-	// serving I/O from the loopback initiator on the same reactor. After
-	// ~60s keep-alive timers fire, the controller enters reset mid-flight,
-	// AER processing aborts, and the cleanup paths heap-corrupt the SPDK
-	// process (observed empirically at the shard layer when the same
-	// teardown was removed there).
+	// The teardown is needed when the engine in this SPDK process is
+	// attached to the head lvol over NVMe-oF loopback. With the subsystem
+	// up, bdev_lvol_resize was seen to hang. After about 60s the keep-alive
+	// timers expired, the controller reset, and the SPDK process corrupted
+	// its heap. This was seen at the shard layer when the same teardown was
+	// removed there. The cause in SPDK has not been confirmed.
 	//
-	// Cost paid (compensated in Engine.ExpandViaBackendReset): tearing down
-	// the subsystem destroys the AER source, so the engine's bdev_nvme cache
-	// of the local nvmf-shardgroupn1 bdev's blockcnt is stale after
-	// StartExposeBdev re-establishes the connection.
-	// Engine.ExpandViaBackendReset compensates with an explicit
-	// bdev_nvme_reset_controller that triggers the SPDK reset-refresh
-	// patch's blockcnt comparison.
+	// Expand does not know how the engine is attached, so the teardown
+	// always runs. Its effect depends on the attachment:
+	//   - Direct base bdev, the normal case: the teardown has no effect on
+	//     the engine. The engine keeps sending I/O during the resize. SPDK
+	//     holds new I/O on the lvol while the blob resizes and then runs
+	//     it (blob_freeze_io).
+	//   - NVMe-oF: the teardown drops the size change event (AER) for the
+	//     engine's nvme bdev. The bdev keeps its cached size until the
+	//     controller is reset or reconnects.
 	if err := spdkClient.StopExposeBdev(sg.Nqn); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return errors.Wrapf(err, "failed to stop exposing shardgroup %s before head-lvol resize", sg.Name)
 	}

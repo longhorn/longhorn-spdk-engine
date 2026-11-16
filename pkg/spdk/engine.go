@@ -3334,24 +3334,25 @@ func (e *Engine) startExpansion(spdkClient *spdkclient.Client, size uint64) (exp
 	}, nil
 }
 
-// ExpandViaBackendReset expands the engine by resetting each backend
-// bdev_nvme controller so the SPDK reset-refresh patch propagates the new
-// namespace size to the local nvme bdev, then polling the engine's
-// bdev_raid1 until it grows in response. raid1 resizes automatically on the
-// resulting BDEV_EVENT_RESIZE (see module/bdev/raid/raid1.c:504); the engine
-// issues no other SPDK call.
+// ExpandViaBackendReset expands the engine to size.
 //
-// The reset is load-bearing, not the AER chain. ShardGroup.Expand resizes
-// the head lvol via a Stop/Resize/Start dance (required to avoid a loopback
-// resize hang on the engine's own bdev_nvme initiator), which severs the
-// AER that would otherwise carry the size change to this initiator. The
-// explicit controller reset is the compensation.
+// The backends must already be at the new size. This function does not
+// resize them.
 //
-// This is the path used for EC volumes: ShardGroupController already drove
-// ShardExpand + ShardGroupExpand against the ShardGroup process, so by the
-// time EngineExpand arrives the backend lvol has been resized. RAID1 uses
-// Engine.Expand, which expands the replicas itself and grows its RAID bdev,
-// created with disable_auto_resize, with an explicit bdev_raid_resize.
+// The raid bdev expands automatically when its base bdevs report the new
+// size:
+//   - Local backend: the lvol reports the new size as soon as it is
+//     resized. No action is needed.
+//   - NVMe-oF backend: the nvme bdev caches the old size. The function
+//     resets the controller so that the bdev reads the size again. The
+//     reset requires the SPDK reset-refresh patch.
+//
+// The function returns when the raid bdev reaches size. It returns an
+// error if the raid bdev does not reach size before the timeout.
+//
+// Only EC volumes use this function. RAID1 uses Engine.Expand, which
+// expands the replicas itself. Its raid bdev is created with
+// disable_auto_resize and grows only through bdev_raid_resize.
 func (e *Engine) ExpandViaBackendReset(spdkClient *spdkclient.Client, size uint64) (err error) {
 	const (
 		pollInterval = 500 * time.Millisecond
