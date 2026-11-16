@@ -421,6 +421,11 @@ func (e *Engine) connectReplicas(spdkClient *spdkclient.Client, replicaAddressMa
 			e.backends[replicaName].SetMode(types.ModeRW)
 			e.backends[replicaName].SetBdevName(bdevName)
 			replicaBdevList = append(replicaBdevList, bdevName)
+			if e.backends[replicaName].LocalBdevName() != "" {
+				e.log.Infof("Attached backend %s as local lvol base bdev %s", replicaName, bdevName)
+			} else {
+				e.log.Infof("Attached backend %s at %s as NVMe-oF base bdev %s", replicaName, replicaAddr, bdevName)
+			}
 		}
 	}
 	return replicaBdevList
