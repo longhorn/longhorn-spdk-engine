@@ -60,6 +60,18 @@ func (u *shardGroupBackend) Name() string { return u.name }
 
 func (u *shardGroupBackend) LocalBdevName() string { return u.localBdevName }
 
+// ResizedBeforeEngineExpand returns true. The manager resizes the ShardGroup
+// before it calls EngineExpand. For a ShardGroup in the engine's SPDK
+// process, the order is:
+//  1. ShardGroupExpand resizes the head lvol.
+//  2. SPDK passes the resize event to the raid bdev, and the raid bdev
+//     grows. No Engine method is called.
+//  3. The manager calls EngineExpand.
+//
+// Between steps 2 and 3, the raid bdev is larger than the size the engine
+// has recorded.
+func (u *shardGroupBackend) ResizedBeforeEngineExpand() bool { return true }
+
 func (u *shardGroupBackend) Address() string {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
