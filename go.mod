@@ -9,8 +9,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
 	github.com/longhorn/backupstore v0.0.0-20261106055638-bcc51f569085
-	github.com/longhorn/go-common-libs v0.0.0-20261023023359-4e90b601fcb9
-	github.com/longhorn/go-spdk-helper v0.14.1-0.20261105073243-fc901c166c71
+	github.com/longhorn/go-common-libs v0.0.0-20261028232656-6805a1f65080
+	github.com/longhorn/go-spdk-helper v0.14.1-0.20261117055102-2128d458b38c
 	github.com/longhorn/types v0.0.0-20261030035820-c6ac902022cf
 	github.com/sirupsen/logrus v1.10.2
 	github.com/stretchr/testify v1.12.1
