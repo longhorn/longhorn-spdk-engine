@@ -62,6 +62,11 @@ var (
 	}
 	shardStopExposeBdev = func(cli *spdkclient.Client, nqn string) error { return cli.StopExposeBdev(nqn) }
 
+	shardGroupStartExposeBdev = func(cli *spdkclient.Client, nqn, bdevUUID, nguid, ip, port string) error {
+		return cli.StartExposeBdev(nqn, bdevUUID, nguid, ip, port, helpertypes.InternalHostNQN)
+	}
+	shardGroupStopExposeBdev = func(cli *spdkclient.Client, nqn string) error { return cli.StopExposeBdev(nqn) }
+
 	// nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
 	backingImageGetIPForPod = commonnet.GetIPForPod
 	backingImageNewExecutor = func(hostProc string) (*commonns.Executor, error) {

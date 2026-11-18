@@ -465,3 +465,126 @@ func (s *TestSuite) TestLocalShardExposeRequiresRunning(c *C) {
 	c.Assert(*stopped, HasLen, 0)
 	c.Assert(*started, HasLen, 0)
 }
+
+// newExposedLocalShardGroup returns a Running ShardGroup with an exposed head
+// lvol, as ShardGroup.Create leaves it, without contacting SPDK.
+func newExposedLocalShardGroup() *ShardGroup {
+	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize,
+		2, 1, 64, map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg.HeadLvolUUID = "head-uuid-a"
+	sg.IP = "10.0.0.1"
+	sg.Port = 20002
+	sg.State = types.InstanceStateRunning
+	sg.IsExposed = true
+	return sg
+}
+
+// mockShardGroupExposeBdev replaces shardGroupStopExposeBdev and
+// shardGroupStartExposeBdev with mocks. The mocks do not call SPDK. They
+// record the NQN they are called with and return stopErr and startErr.
+//
+// Call the returned restore function at the end of the test to put the real
+// functions back.
+func mockShardGroupExposeBdev(stopErr, startErr error) (stopped, started *[]string, restore func()) {
+	origStop, origStart := shardGroupStopExposeBdev, shardGroupStartExposeBdev
+	stopped, started = &[]string{}, &[]string{}
+	shardGroupStopExposeBdev = func(_ *spdkclient.Client, nqn string) error {
+		*stopped = append(*stopped, nqn)
+		return stopErr
+	}
+	shardGroupStartExposeBdev = func(_ *spdkclient.Client, nqn, _, _, _, _ string) error {
+		*started = append(*started, nqn)
+		return startErr
+	}
+	return stopped, started, func() {
+		shardGroupStopExposeBdev, shardGroupStartExposeBdev = origStop, origStart
+	}
+}
+
+// Attaching a local engine stops exposing the head lvol and returns its
+// alias. The ShardGroup stays Running and keeps its port and NQN, because the
+// manager needs them to start the engine. Detaching the engine exposes the
+// head lvol again. Repeating either call does not call SPDK a second time.
+func (s *TestSuite) TestLocalHeadLvolUnexposedWhileEngineAttached(c *C) {
+	fmt.Println("Testing a local head lvol is not exposed while an engine uses it directly")
+
+	stopped, started, restore := mockShardGroupExposeBdev(nil, nil)
+	defer restore()
+
+	sg := newExposedLocalShardGroup()
+	nqn, port := sg.Nqn, sg.Port
+
+	headAlias, err := sg.StopExposeForLocalAttach(nil)
+	c.Assert(err, IsNil)
+	c.Assert(headAlias, Not(Equals), "")
+	c.Assert(headAlias, Equals, sg.HeadAlias)
+	c.Assert(sg.IsExposed, Equals, false)
+	c.Assert(sg.State, Equals, types.InstanceState(types.InstanceStateRunning))
+	c.Assert(sg.Nqn, Equals, nqn)
+	c.Assert(sg.Port, Equals, port)
+	c.Assert(*stopped, DeepEquals, []string{nqn})
+
+	_, err = sg.StopExposeForLocalAttach(nil)
+	c.Assert(err, IsNil)
+	c.Assert(*stopped, HasLen, 1)
+
+	c.Assert(sg.StartExposeAfterLocalDetach(nil), IsNil)
+	c.Assert(sg.IsExposed, Equals, true)
+	c.Assert(*started, DeepEquals, []string{nqn})
+
+	c.Assert(sg.StartExposeAfterLocalDetach(nil), IsNil)
+	c.Assert(*started, HasLen, 1)
+}
+
+// A failed stop leaves the head lvol exposed. A failed start leaves the
+// ShardGroup Running and unexposed, and removes the subsystem that the failed
+// expose may have left behind. The ShardGroup must not move to Error, because
+// the manager never recreates a ShardGroup in Error.
+func (s *TestSuite) TestLocalHeadLvolExposeFailure(c *C) {
+	fmt.Println("Testing a failed stop or start of a local head lvol expose")
+
+	_, _, restore := mockShardGroupExposeBdev(fmt.Errorf("stop failed"), nil)
+	sg := newExposedLocalShardGroup()
+	_, err := sg.StopExposeForLocalAttach(nil)
+	restore()
+	c.Assert(err, NotNil)
+	c.Assert(sg.IsExposed, Equals, true)
+	c.Assert(sg.State, Equals, types.InstanceState(types.InstanceStateRunning))
+
+	stopped, _, restore := mockShardGroupExposeBdev(nil, fmt.Errorf("start failed"))
+	defer restore()
+	sg.IsExposed = false
+	c.Assert(sg.StartExposeAfterLocalDetach(nil), NotNil)
+	c.Assert(sg.IsExposed, Equals, false)
+	c.Assert(sg.State, Equals, types.InstanceState(types.InstanceStateRunning))
+	c.Assert(*stopped, DeepEquals, []string{sg.Nqn})
+}
+
+// Only a Running ShardGroup can be attached locally, and only a Running
+// ShardGroup gets its head lvol exposed again.
+func (s *TestSuite) TestLocalHeadLvolExposeRequiresRunning(c *C) {
+	fmt.Println("Testing only a Running ShardGroup can be attached locally and exposed again")
+
+	stopped, started, restore := mockShardGroupExposeBdev(nil, nil)
+	defer restore()
+
+	for _, state := range []types.InstanceState{
+		types.InstanceStatePending,
+		types.InstanceStateStopped,
+		types.InstanceStateError,
+		types.InstanceStateTerminating,
+	} {
+		sg := newExposedLocalShardGroup()
+		sg.State = state
+
+		_, err := sg.StopExposeForLocalAttach(nil)
+		c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+		c.Assert(sg.IsExposed, Equals, true)
+
+		sg.IsExposed = false
+		c.Assert(sg.StartExposeAfterLocalDetach(nil), IsNil)
+		c.Assert(sg.IsExposed, Equals, false)
+	}
+	c.Assert(*stopped, HasLen, 0)
+	c.Assert(*started, HasLen, 0)
+}

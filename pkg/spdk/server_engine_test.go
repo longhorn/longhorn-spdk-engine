@@ -12,6 +12,7 @@ import (
 	"github.com/longhorn/go-spdk-helper/pkg/initiator"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
+	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
 	. "gopkg.in/check.v1"
@@ -396,4 +397,104 @@ func (s *TestSuite) TestServerEngineSnapshotHashStatusUnimplementedForShardedEng
 	})
 	c.Assert(err, NotNil)
 	c.Assert(grpcstatus.Code(err), Equals, grpccodes.Unimplemented)
+}
+
+// The engine uses the head lvol of a Running ShardGroup in this Server
+// directly, when the requested address is the address of that ShardGroup.
+// In every other case it connects over NVMe-oF, and the head lvol stays
+// exposed.
+func (s *TestSuite) TestStopExposeLocalShardGroup(c *C) {
+	fmt.Println("Testing Server.stopExposeLocalShardGroup returns the head lvol alias only for a Running local ShardGroup at the requested address")
+
+	_, _, restore := mockShardGroupExposeBdev(nil, nil)
+	sg := newExposedLocalShardGroup()
+	sgAddress := "10.0.0.1:20002"
+	srv := &Server{shardGroupMap: map[string]*ShardGroup{sg.Name: sg}}
+
+	c.Assert(srv.stopExposeLocalShardGroup(nil, "on-another-node", "10.0.0.2:20002"), Equals, "")
+
+	// Same name, but the request points to a ShardGroup on another node.
+	c.Assert(srv.stopExposeLocalShardGroup(nil, sg.Name, "10.0.0.2:20002"), Equals, "")
+	c.Assert(sg.IsExposed, Equals, true)
+
+	sg.State = lhtypes.InstanceStateStopped
+	c.Assert(srv.stopExposeLocalShardGroup(nil, sg.Name, sgAddress), Equals, "")
+	c.Assert(sg.IsExposed, Equals, true)
+
+	sg.State = lhtypes.InstanceStateRunning
+	c.Assert(srv.stopExposeLocalShardGroup(nil, sg.Name, sgAddress), Equals, sg.HeadAlias)
+	c.Assert(sg.IsExposed, Equals, false)
+	restore()
+
+	_, _, restore = mockShardGroupExposeBdev(fmt.Errorf("stop failed"), nil)
+	defer restore()
+	sg.IsExposed = true
+	c.Assert(srv.stopExposeLocalShardGroup(nil, sg.Name, sgAddress), Equals, "")
+	c.Assert(sg.IsExposed, Equals, true)
+}
+
+// EngineDelete exposes the head lvol again for each ShardGroup the engine
+// used directly. A ShardGroup that was deleted first is skipped.
+func (s *TestSuite) TestStartExposeLocalShardGroups(c *C) {
+	fmt.Println("Testing the head lvols an engine used directly are found and exposed again")
+
+	_, started, restore := mockShardGroupExposeBdev(nil, nil)
+	defer restore()
+
+	sg := newExposedLocalShardGroup()
+	sg.IsExposed = false
+	srv := &Server{shardGroupMap: map[string]*ShardGroup{sg.Name: sg}}
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		sg.Name: newShardGroupBackend(sg.Name, "10.0.0.1:20002", sg.HeadAlias, nil),
+	}
+	c.Assert(getLocalShardGroupNames(e), DeepEquals, []string{sg.Name})
+
+	e.backends = map[string]Backend{
+		sg.Name: newShardGroupBackend(sg.Name, "10.0.0.1:20002", "", nil),
+		"r1":    newReplicaBackend("r1", "10.0.0.1:1234", "lvs/head", nil),
+	}
+	c.Assert(getLocalShardGroupNames(e), HasLen, 0)
+
+	srv.startExposeLocalShardGroups(nil, []string{sg.Name, "deleted-first"})
+	c.Assert(sg.IsExposed, Equals, true)
+	c.Assert(*started, DeepEquals, []string{sg.Nqn})
+}
+
+// EngineCreate stops exposing the head lvol of a local ShardGroup for the
+// engine to use. When the engine does not take it, EngineCreate exposes it
+// again.
+func (s *TestSuite) TestEngineCreateExposesUnusedLocalShardGroupAgain(c *C) {
+	fmt.Println("Testing Server.EngineCreate exposes the head lvol again when the engine does not take it")
+
+	stopped, started, restore := mockShardGroupExposeBdev(nil, nil)
+	defer restore()
+
+	sg := newExposedLocalShardGroup()
+	srv := &Server{
+		engineMap:     map[string]*Engine{},
+		shardGroupMap: map[string]*ShardGroup{sg.Name: sg},
+		updateChs: map[lhtypes.InstanceType]chan interface{}{
+			lhtypes.InstanceTypeEngine: make(chan interface{}, 1),
+		},
+		// The size validation fails, so Create returns before the engine
+		// takes any backend.
+		newServiceClient: func(string) (*client.SPDKClient, error) {
+			return nil, fmt.Errorf("unreachable")
+		},
+	}
+
+	_, err := srv.EngineCreate(context.Background(), &spdkrpc.EngineCreateRequest{
+		Name:              "engine-a",
+		VolumeName:        "vol-a",
+		SpecSize:          10,
+		DataLayoutType:    spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_SHARDED,
+		ReplicaAddressMap: map[string]string{sg.Name: "10.0.0.1:20002"},
+	})
+
+	c.Assert(err, NotNil)
+	c.Assert(*stopped, DeepEquals, []string{sg.Nqn})
+	c.Assert(*started, DeepEquals, []string{sg.Nqn})
+	c.Assert(sg.IsExposed, Equals, true)
 }
