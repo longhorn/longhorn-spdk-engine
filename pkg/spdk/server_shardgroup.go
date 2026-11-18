@@ -2,6 +2,8 @@ package spdk
 
 import (
 	"context"
+	"net"
+	"strconv"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -218,13 +220,13 @@ func (s *Server) ShardGroupShardReplace(ctx context.Context, req *spdkrpc.ShardG
 	s.RLock()
 	shardGroup := s.shardGroupMap[req.ShardGroupName]
 	spdkClient := s.spdkClient
-	newLocalBdevName := s.resolveLocalBdevName(req.ShardName)
+	newLocalShard := s.resolveLocalShard(req.ShardName, req.ShardAddress)
 	s.RUnlock()
 
 	if shardGroup == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find shardgroup %v", req.ShardGroupName)
 	}
-	state, err := shardGroup.ShardReplace(spdkClient, req.ShardName, req.ShardAddress, newLocalBdevName)
+	state, err := shardGroup.ShardReplace(spdkClient, req.ShardName, req.ShardAddress, newLocalShard)
 	if err != nil {
 		return nil, err
 	}
@@ -451,7 +453,8 @@ func bdevEcSlotRoleToProto(role spdktypes.BdevEcSlotRole) spdkrpc.EcSlotRole {
 //
 // When an existing entry is reused (the same-node re-attach path, where Delete
 // kept the record with cleanupRequired=false), request-bound fields that can
-// legitimately change across a detach/re-attach cycle are refreshed:
+// legitimately change across a detach/re-attach cycle are refreshed. This
+// happens only for a Pending or Stopped entry:
 //
 //   - SalvageRequested: re-attach passes true; the cached value is whatever the
 //     last Create observed.
@@ -501,8 +504,14 @@ func (s *Server) getOrCreateShardGroup(req *spdkrpc.ShardGroupCreateRequest) (*S
 			shardGroup.SpecSize = req.SpecSize
 		}
 
-		shardGroup.SalvageRequested = req.Spec.SalvageRequested
-		shardGroup.Shards = s.resolveShardEndpoints(req.Spec.Shards)
+		// A Pending or Stopped ShardGroup is about to be created, so it
+		// takes its shards and salvage flag from the request. In any other
+		// state it keeps its own, because it may still be attached to
+		// those shards.
+		if shardGroup.State == types.InstanceStatePending || shardGroup.State == types.InstanceStateStopped {
+			shardGroup.SalvageRequested = req.Spec.SalvageRequested
+			shardGroup.Shards = s.resolveShardEndpoints(req.Spec.Shards)
+		}
 		return shardGroup, nil
 	}
 
@@ -518,36 +527,45 @@ func (s *Server) resolveShardEndpoints(spec map[string]*spdkrpc.ShardEndpoint) m
 	shards := make(map[string]*ShardEndpoint, len(spec))
 	for shardName, endpoint := range spec {
 		shards[shardName] = &ShardEndpoint{
-			Address:       endpoint.Address,
-			SlotIndex:     endpoint.SlotIndex,
-			LocalBdevName: s.resolveLocalBdevName(shardName),
+			Address:    endpoint.Address,
+			SlotIndex:  endpoint.SlotIndex,
+			LocalShard: s.resolveLocalShard(shardName, endpoint.Address),
 		}
 	}
 	return shards
 }
 
-// resolveLocalBdevName returns the lvol alias of a shard when the shard runs
-// in this Server and is Running. The ShardGroup can then attach the lvol
+// resolveLocalShard returns the shard when it runs in this Server at
+// shardAddress and is Running. The ShardGroup can then attach its lvol
 // directly instead of over NVMe-oF.
 //
-// It returns "" when the shard runs on another node, or for a local shard that
-// is not Running. In both cases the ShardGroup attaches over NVMe-oF, which
-// fails with a connect error if the shard is not ready.
+// It returns nil in these cases, and the ShardGroup attaches over NVMe-oF:
+//   - The shard runs on another node.
+//   - A shard with this name runs in this Server, but shardAddress points
+//     to a different one. A replacement shard keeps the name of the shard
+//     it replaces, so the name alone does not identify the shard.
+//   - The local shard is not Running. The NVMe-oF attach then fails with a
+//     connect error if the shard is not ready.
 //
 // Lock order: the caller holds the Server lock, and this function takes the
 // shard lock. Always take the Server lock before an instance lock to avoid
 // goroutine deadlock.
-func (s *Server) resolveLocalBdevName(shardName string) string {
+func (s *Server) resolveLocalShard(shardName, shardAddress string) *Shard {
 	shard := s.shardMap[shardName]
 	if shard == nil {
-		return ""
+		return nil
 	}
 	shard.RLock()
 	defer shard.RUnlock()
+	if localAddress := net.JoinHostPort(shard.IP, strconv.Itoa(int(shard.Port))); localAddress != shardAddress {
+		logrus.Warnf("Using NVMe-oF for shard %s: the requested address %s is not the address %s of the shard in this process",
+			shardName, shardAddress, localAddress)
+		return nil
+	}
 	if shard.State != types.InstanceStateRunning {
 		logrus.Warnf("Falling back to NVMe-oF for local shard %s because it is not running (state %s)",
 			shardName, shard.State)
-		return ""
+		return nil
 	}
-	return shard.Alias
+	return shard
 }

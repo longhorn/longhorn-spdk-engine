@@ -9,6 +9,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
@@ -338,31 +339,129 @@ func (s *TestSuite) TestShardGroupSnapshotDeleteRejectsNonRunningState(c *C) {
 	}
 }
 
-// A shard that runs in this process is attached by its lvol alias without
-// contacting SPDK. The test passes a nil spdkClient on purpose: if the
-// remote path were taken, the first RPC would hit a nil pointer and panic.
-func (s *TestSuite) TestAttachShardBaseBdevUsesLocalAlias(c *C) {
-	fmt.Println("Testing ShardGroup.attachShardBaseBdev returns the lvol alias for a local shard")
+// newExposedLocalShard returns a Running, exposed shard as Shard.Create leaves
+// it, without contacting SPDK.
+func newExposedLocalShard() *Shard {
+	shard := NewShard("vol-a", 0, "disk-a", "lvs-uuid-a", testCachedSpecSize, make(chan interface{}, 1))
+	shard.UUID = "lvol-uuid-a"
+	shard.IP = "10.0.0.1"
+	shard.Port = 20001
+	shard.State = types.InstanceStateRunning
+	shard.IsExposed = true
+	return shard
+}
+
+// mockShardExposeBdev replaces shardStopExposeBdev and shardStartExposeBdev
+// with mocks. The mocks do not call SPDK. They record the NQN they are
+// called with and return stopErr and startErr.
+//
+// Call the returned restore function at the end of the test to put the real
+// functions back.
+func mockShardExposeBdev(stopErr, startErr error) (stopped, started *[]string, restore func()) {
+	origStop, origStart := shardStopExposeBdev, shardStartExposeBdev
+	stopped, started = &[]string{}, &[]string{}
+	shardStopExposeBdev = func(_ *spdkclient.Client, nqn string) error {
+		*stopped = append(*stopped, nqn)
+		return stopErr
+	}
+	shardStartExposeBdev = func(_ *spdkclient.Client, nqn, _, _, _, _ string) error {
+		*started = append(*started, nqn)
+		return startErr
+	}
+	return stopped, started, func() {
+		shardStopExposeBdev, shardStartExposeBdev = origStop, origStart
+	}
+}
+
+// Attaching a local shard stops exposing it over NVMe-oF and returns its lvol
+// alias. Detaching it exposes it again. Repeating either call does not call
+// SPDK a second time.
+//
+// The test passes a nil spdkClient on purpose. If the code took the remote
+// path, the first SPDK call would panic on the nil client.
+func (s *TestSuite) TestLocalShardUnexposedWhileAttached(c *C) {
+	fmt.Println("Testing a local shard is not exposed while it is attached to the ShardGroup")
+
+	stopped, started, restore := mockShardExposeBdev(nil, nil)
+	defer restore()
 
 	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize,
 		2, 1, 64, map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
-	endpoint := &ShardEndpoint{Address: "10.0.0.1:20001", SlotIndex: 0, LocalBdevName: "vol-a-0-lvs/shard-vol-a-0"}
+	shard := newExposedLocalShard()
+	endpoint := &ShardEndpoint{Address: "10.0.0.1:20001", SlotIndex: 0, LocalShard: shard}
 
 	bdevName, err := sg.attachShardBaseBdev(nil, endpoint, maxRetries)
 	c.Assert(err, IsNil)
-	c.Assert(bdevName, Equals, "vol-a-0-lvs/shard-vol-a-0")
-}
+	c.Assert(bdevName, Equals, "disk-a/shard-vol-a-0")
+	c.Assert(shard.IsExposed, Equals, false)
+	c.Assert(shard.State, Equals, types.InstanceState(types.InstanceStateRunning))
+	c.Assert(*stopped, DeepEquals, []string{shard.Nqn})
 
-// A shard that runs in this process was never attached over NVMe-oF, so
-// detach has nothing to tell SPDK. The test passes a nil spdkClient on
-// purpose: if the remote path were taken, the detach RPC would hit a nil
-// pointer and panic.
-func (s *TestSuite) TestDetachShardBaseBdevSkipsLocalShard(c *C) {
-	fmt.Println("Testing ShardGroup.detachShardBaseBdev is a no-op for a local shard")
-
-	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize,
-		2, 1, 64, map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
-	endpoint := &ShardEndpoint{Address: "10.0.0.1:20001", SlotIndex: 0, LocalBdevName: "vol-a-0-lvs/shard-vol-a-0"}
+	// A second attach finds the export already removed and does not ask
+	// SPDK again.
+	_, err = sg.attachShardBaseBdev(nil, endpoint, maxRetries)
+	c.Assert(err, IsNil)
+	c.Assert(*stopped, HasLen, 1)
 
 	c.Assert(sg.detachShardBaseBdev(nil, endpoint), IsNil)
+	c.Assert(shard.IsExposed, Equals, true)
+	c.Assert(*started, DeepEquals, []string{shard.Nqn})
+
+	// A second detach finds the export already restored.
+	c.Assert(sg.detachShardBaseBdev(nil, endpoint), IsNil)
+	c.Assert(*started, HasLen, 1)
+}
+
+// A failed stop or start must leave IsExposed matching what SPDK still has.
+// A failed stop leaves the shard Running and exposed. A failed start moves
+// the shard to Error, because it would otherwise look healthy while
+// unreachable.
+func (s *TestSuite) TestLocalShardExposeFailure(c *C) {
+	fmt.Println("Testing a failed stop or start of a local shard expose")
+
+	stopped, _, restore := mockShardExposeBdev(fmt.Errorf("stop failed"), fmt.Errorf("start failed"))
+	defer restore()
+
+	shard := newExposedLocalShard()
+	_, err := shard.StopExposeForLocalAttach(nil)
+	c.Assert(err, NotNil)
+	c.Assert(shard.IsExposed, Equals, true)
+	c.Assert(shard.State, Equals, types.InstanceState(types.InstanceStateRunning))
+
+	shard.IsExposed = false
+	c.Assert(shard.StartExposeAfterLocalDetach(nil), NotNil)
+	c.Assert(shard.IsExposed, Equals, false)
+	c.Assert(shard.State, Equals, types.InstanceState(types.InstanceStateError))
+	c.Assert(shard.ErrorMsg, Not(Equals), "")
+	// The failed start removes the subsystem it may have left behind.
+	c.Assert(*stopped, DeepEquals, []string{shard.Nqn, shard.Nqn})
+}
+
+// Only a Running shard can be attached locally, and only a Running shard gets
+// its export restored: a stopped or failed shard has no port to expose on.
+func (s *TestSuite) TestLocalShardExposeRequiresRunning(c *C) {
+	fmt.Println("Testing only a Running local shard can be attached and exposed again")
+
+	stopped, started, restore := mockShardExposeBdev(nil, nil)
+	defer restore()
+
+	for _, state := range []types.InstanceState{
+		types.InstanceStatePending,
+		types.InstanceStateStopped,
+		types.InstanceStateError,
+		types.InstanceStateTerminating,
+	} {
+		shard := newExposedLocalShard()
+		shard.State = state
+
+		_, err := shard.StopExposeForLocalAttach(nil)
+		c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+		c.Assert(shard.IsExposed, Equals, true)
+
+		shard.IsExposed = false
+		c.Assert(shard.StartExposeAfterLocalDetach(nil), IsNil)
+		c.Assert(shard.IsExposed, Equals, false)
+	}
+	c.Assert(*stopped, HasLen, 0)
+	c.Assert(*started, HasLen, 0)
 }

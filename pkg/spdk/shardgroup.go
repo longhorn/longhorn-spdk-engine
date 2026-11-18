@@ -45,13 +45,23 @@ const (
 // 3 attempts still absorbs a transient reconnect.
 const salvageConnectMaxRetries = 3
 
-// attachShardBaseBdev returns the base bdev name for the slot. A shard in
-// this SPDK process is used directly by its lvol alias. Any other shard is
-// connected over NVMe-oF and its NVMe initiator bdev name is returned.
+// attachShardBaseBdev returns the base bdev name for the slot:
+//   - Remote shard: connects to it over NVMe-oF and returns the NVMe
+//     initiator bdev name.
+//   - Local shard: stops exposing it over NVMe-oF, so that bdev_ec can open
+//     its lvol for writing, and returns the lvol alias.
+//
+// Lock order: the caller already holds the ShardGroup lock, and for a local
+// shard this function also takes the shard lock. Always take the ShardGroup
+// lock before a shard lock, never the other way around, to avoid a deadlock.
 func (sg *ShardGroup) attachShardBaseBdev(spdkClient *spdkclient.Client, endpoint *ShardEndpoint, connectAttempts int) (string, error) {
-	if endpoint.LocalBdevName != "" {
-		sg.log.Infof("Attaching slot %d directly to local lvol %s", endpoint.SlotIndex, endpoint.LocalBdevName)
-		return endpoint.LocalBdevName, nil
+	if endpoint.LocalShard != nil {
+		bdevName, err := endpoint.LocalShard.StopExposeForLocalAttach(spdkClient)
+		if err != nil {
+			return "", errors.Wrapf(err, "failed to attach slot %d to local shard %s", endpoint.SlotIndex, endpoint.LocalShard.Name)
+		}
+		sg.log.Infof("Attaching slot %d directly to local lvol %s", endpoint.SlotIndex, bdevName)
+		return bdevName, nil
 	}
 	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
 	bdevName, err := connectNVMfBdev(spdkClient, controllerName, endpoint.Address,
@@ -63,12 +73,15 @@ func (sg *ShardGroup) attachShardBaseBdev(spdkClient *spdkclient.Client, endpoin
 	return bdevName, nil
 }
 
-// detachShardBaseBdev detaches the shard's NVMe-oF controller. A controller
-// that is already gone is not an error. A shard in this SPDK process was
-// never attached over NVMe-oF, so there is nothing to detach.
+// detachShardBaseBdev releases the base bdev of a slot. It is the reverse of
+// attachShardBaseBdev:
+//   - Remote shard: detaches its NVMe-oF controller. A controller that is
+//     already gone is not an error.
+//   - Local shard: exposes the shard over NVMe-oF again. Call it only when
+//     bdev_ec is not using the shard.
 func (sg *ShardGroup) detachShardBaseBdev(spdkClient *spdkclient.Client, endpoint *ShardEndpoint) error {
-	if endpoint.LocalBdevName != "" {
-		return nil
+	if endpoint.LocalShard != nil {
+		return endpoint.LocalShard.StartExposeAfterLocalDetach(spdkClient)
 	}
 	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
 	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
@@ -154,15 +167,16 @@ type ShardGroup struct {
 type ShardEndpoint struct {
 	Address   string // ip:port
 	SlotIndex uint32
-	// LocalBdevName is the lvol alias (<lvs>/<lvol>) of a shard that runs
-	// in this SPDK process. The ShardGroup attaches that lvol directly
-	// instead of over NVMe-oF. Empty means the shard runs on another node
-	// and is attached over NVMe-oF to Address.
+	// LocalShard is the shard when it runs in this SPDK process. The
+	// ShardGroup attaches its lvol directly instead of over NVMe-oF, and
+	// the shard is not exposed over NVMe-oF for as long as bdev_ec uses the
+	// lvol. Nil means the shard runs on another node and is attached over
+	// NVMe-oF to Address.
 	//
 	// The Server resolves this field at create and replace time. It is
 	// never persisted; a ShardGroup recreated on another node resolves it
 	// again there.
-	LocalBdevName string
+	LocalShard *Shard
 }
 
 // GetShardGroupEcBdevName returns the SPDK bdev name for the per-volume bdev_ec.
@@ -645,9 +659,24 @@ func (sg *ShardGroup) Create(spdkClient *spdkclient.Client, superiorPortAllocato
 		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "invalid state %s for shardgroup %s creation", sg.State, sg.Name)
 	}
 
+	// Create stops exposing the local shards so that bdev_ec can use them.
+	// If Create then fails, the ShardGroup goes to Error and nothing
+	// retries it, so the shards have to be exposed again.
+	//
+	// shardsInUse decides who does that:
+	//   - false: no bdev_ec is using the shards, so Create exposes them
+	//     again right away.
+	//   - true: the bdev_ec created by this call is using the shards, and
+	//     exposing them now would give them a second writer. Delete exposes
+	//     them again after it removes the bdev_ec.
+	shardsInUse := false
+
 	defer func() {
 		if err != nil {
 			sg.log.WithError(err).Errorf("Failed to create shardgroup %s", sg.Name)
+			if !shardsInUse {
+				sg.exposeLocalShardsNoLock(spdkClient)
+			}
 			sg.State = types.InstanceStateError
 			sg.ErrorMsg = err.Error()
 			ret = ServiceShardGroupToProtoShardGroup(sg)
@@ -717,6 +746,8 @@ func (sg *ShardGroup) Create(spdkClient *spdkclient.Client, superiorPortAllocato
 		sg.SalvageRequested); err != nil {
 		return nil, errors.Wrapf(err, "failed to create EC bdev %s", sg.EcBdevName)
 	}
+	// The new bdev_ec is now using the shards.
+	shardsInUse = true
 
 	// Always try to discover an existing lvstore/head first. This makes
 	// clean detach -> recreate idempotent even when salvage_requested=false.
@@ -810,6 +841,22 @@ func (sg *ShardGroup) Create(spdkClient *spdkclient.Client, superiorPortAllocato
 	return ServiceShardGroupToProtoShardGroup(sg), nil
 }
 
+// exposeLocalShardsNoLock exposes every local shard over NVMe-oF again. A
+// failure is logged and the remaining shards are still handled.
+//
+// The caller must hold the ShardGroup lock. Call it only when bdev_ec is not
+// using the shards, because an exposed shard must not have a second writer.
+func (sg *ShardGroup) exposeLocalShardsNoLock(spdkClient *spdkclient.Client) {
+	for shardName, endpoint := range sg.Shards {
+		if endpoint.LocalShard == nil {
+			continue
+		}
+		if err := endpoint.LocalShard.StartExposeAfterLocalDetach(spdkClient); err != nil {
+			sg.log.WithError(err).Warnf("Failed to expose local shard %s again", shardName)
+		}
+	}
+}
+
 // Delete tears down the EC stack with cleanupRequired discipline.
 //
 // cleanupRequired=true (volume deletion path): full teardown - delete head
@@ -899,7 +946,10 @@ func (sg *ShardGroup) Delete(spdkClient *spdkclient.Client, cleanupRequired bool
 		return errors.Wrapf(err, "failed to delete EC bdev %s for shardgroup %s", sg.EcBdevName, sg.Name)
 	}
 
-	// 5. Disconnect NVMe-oF controllers from all shards (best-effort).
+	// 5. Detach all shards: disconnect the NVMe-oF controller of each
+	//    remote shard, and expose each local shard again. A failure is
+	//    logged and does not fail Delete. A local shard that cannot be
+	//    exposed moves to the Error state.
 	for shardName, endpoint := range sg.Shards {
 		if detachErr := sg.detachShardBaseBdev(spdkClient, endpoint); detachErr != nil {
 			sg.log.WithError(detachErr).Warnf("Failed to detach shard %s; continuing", shardName)
@@ -1078,7 +1128,7 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 	// A shard in this process needs no reset: its lvol resize already
 	// delivered BDEV_EVENT_RESIZE to bdev_ec.
 	for shardName, endpoint := range sg.Shards {
-		if endpoint.LocalBdevName != "" {
+		if endpoint.LocalShard != nil {
 			continue
 		}
 		controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
@@ -1401,13 +1451,20 @@ func (sg *ShardGroup) SnapshotPurge(spdkClient *spdkclient.Client) error {
 	return nil
 }
 
-// ShardReplace hot-swaps the bdev for a FAILED slot. It looks up the slot by
-// shard name (the Shard CR external name <volumeName>-<slotIndex>),
-// NVMe-connects to newAddress, and calls bdev_ec_replace_base_bdev. The slot
-// transitions FAILED -> REPLACING and the new bdev starts receiving new writes
-// right away. Data written before the failure is not on the new shard yet;
-// ShardRebuildStart must follow to reconstruct it from the surviving shards.
-func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, newAddress, newLocalBdevName string) (slotState string, err error) {
+// ShardReplace replaces the shard in a FAILED slot with a new shard.
+//
+// The slot moves from FAILED to REPLACING, and the new shard starts
+// receiving writes immediately. It does not yet contain the data written
+// before the failure. Call ShardRebuildStart afterwards to rebuild that data
+// from the remaining shards.
+//
+// Parameters:
+//   - shardName: the Shard CR name, <volumeName>-<slotIndex>. It identifies
+//     the slot.
+//   - newAddress: the NVMe-oF address of the new shard.
+//   - newLocalShard: the new shard if it runs in this SPDK process, otherwise
+//     nil. A local shard is attached directly, not through newAddress.
+func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, newAddress string, newLocalShard *Shard) (slotState string, err error) {
 	sg.Lock()
 	defer sg.Unlock()
 
@@ -1420,28 +1477,52 @@ func (sg *ShardGroup) ShardReplace(spdkClient *spdkclient.Client, shardName, new
 		return "", grpcstatus.Errorf(grpccodes.NotFound, "shard %s not found in shardgroup %s", shardName, sg.Name)
 	}
 
-	// Release whatever still backs the FAILED slot. Best-effort; the
-	// controller is usually already gone.
-	if err := sg.detachShardBaseBdev(spdkClient, currentEndpoint); err != nil {
-		sg.log.WithError(err).Warnf("Pre-replace detach of shard %s failed; continuing", shardName)
+	// Remote shard: detach the NVMe-oF controller that backs the FAILED
+	// slot. The controller is usually already gone. A failure is logged and
+	// does not stop the replace.
+	//
+	// Local shard: there is no controller to detach. The shard is exposed
+	// again after the replace succeeds.
+	if currentEndpoint.LocalShard == nil {
+		if err := sg.detachShardBaseBdev(spdkClient, currentEndpoint); err != nil {
+			sg.log.WithError(err).Warnf("Pre-replace detach of shard %s failed; continuing", shardName)
+		}
 	}
 
 	// Attach the replacement shard as a base bdev.
-	replacementEndpoint := &ShardEndpoint{Address: newAddress, SlotIndex: currentEndpoint.SlotIndex, LocalBdevName: newLocalBdevName}
+	replacementEndpoint := &ShardEndpoint{Address: newAddress, SlotIndex: currentEndpoint.SlotIndex, LocalShard: newLocalShard}
 	bdevName, err := sg.attachShardBaseBdev(spdkClient, replacementEndpoint, maxRetries)
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to attach replacement for shard %s", shardName)
 	}
 
+	// A slot can be replaced by the local shard it already uses. That shard
+	// is not exposed afterwards: on success bdev_ec uses it again, and on
+	// failure bdev_ec may still have it open.
+	sameLocalShard := currentEndpoint.LocalShard != nil && currentEndpoint.LocalShard == replacementEndpoint.LocalShard
+
 	// Point the EC slot at the new base bdev.
 	resp, err := spdkClient.BdevEcReplaceBaseBdev(sg.EcBdevName, replacementEndpoint.SlotIndex, bdevName)
 	if err != nil {
+		if replacementEndpoint.LocalShard != nil && !sameLocalShard {
+			if exposeErr := replacementEndpoint.LocalShard.StartExposeAfterLocalDetach(spdkClient); exposeErr != nil {
+				sg.log.WithError(exposeErr).Warnf("Failed to expose replacement shard %s again after a failed replace", shardName)
+			}
+		}
 		return "", errors.Wrapf(err, "failed to replace base bdev at slot %d for shardgroup %s", replacementEndpoint.SlotIndex, sg.Name)
 	}
 
 	// Update sg.Shards last. If attach or replace fails, the record still
 	// matches the shard bdev_ec is serving.
 	sg.Shards[shardName] = replacementEndpoint
+
+	// The old shard was local and the slot now uses a different shard.
+	// bdev_ec has closed the old shard, so expose it again.
+	if currentEndpoint.LocalShard != nil && !sameLocalShard {
+		if exposeErr := currentEndpoint.LocalShard.StartExposeAfterLocalDetach(spdkClient); exposeErr != nil {
+			sg.log.WithError(exposeErr).Warnf("Failed to expose replaced local shard %s again", shardName)
+		}
+	}
 
 	sg.log.Infof("Replaced shard %s at slot %d; the slot now uses base bdev %s and is in state %s", shardName, replacementEndpoint.SlotIndex, bdevName, resp.State)
 	return string(resp.State), nil
@@ -1505,7 +1586,7 @@ func (sg *ShardGroup) ForceFailShard(spdkClient *spdkclient.Client, shardName st
 		return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"shard %s in shardgroup %s is REPLACING; refuse to force-fail", shardName, sg.Name)
 	default:
-		if endpoint.LocalBdevName != "" {
+		if endpoint.LocalShard != nil {
 			sg.log.Infof("Failing slot %d directly through bdev_ec because shard %s is local", endpoint.SlotIndex, shardName)
 			if _, err := spdkClient.BdevEcFailBaseBdev(sg.EcBdevName, endpoint.SlotIndex); err != nil {
 				return "", errors.Wrapf(err, "failed to fail slot %d for local shard %s", endpoint.SlotIndex, shardName)
