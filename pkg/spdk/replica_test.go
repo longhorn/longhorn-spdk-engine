@@ -2,6 +2,8 @@ package spdk
 
 import (
 	. "gopkg.in/check.v1"
+
+	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
 // ---------------------------------------------------------------------------
@@ -73,4 +75,56 @@ func (s *TestSuite) TestPrepareHeadIsolatesBackingImageChildren(c *C) {
 	// Neither replica copy should see the original's mutation.
 	c.Assert(len(replicaABase.Children), Equals, 1)
 	c.Assert(len(replicaBBase.Children), Equals, 0)
+}
+
+// TestClearStaleSnapshotCloneDstError checks that a clone error from an earlier attempt is dropped,
+// so the next clone attempt is not reported as failed before it starts.
+// Ref: https://github.com/longhorn/longhorn/issues/14530
+func (s *TestSuite) TestClearStaleSnapshotCloneDstError(c *C) {
+	testCases := map[string]struct {
+		isSnapshotCloning bool
+		cloningState      string
+		cloningError      string
+		expectCleared     bool
+	}{
+		"error of a finished attempt is cleared": {
+			cloningState:  types.ProgressStateError,
+			cloningError:  "failed to do ReplicaSnapshotCloneSrcStart",
+			expectCleared: true,
+		},
+		"error of a clone that is still running is kept": {
+			isSnapshotCloning: true,
+			cloningState:      types.ProgressStateError,
+			cloningError:      "failed to check ReplicaSnapshotCloneSrcStatusCheck",
+		},
+		"completed clone is kept": {
+			cloningState: types.ProgressStateComplete,
+		},
+	}
+
+	for name, tc := range testCases {
+		c.Logf("testing %v", name)
+
+		r := &Replica{Name: "replica", isSnapshotCloning: tc.isSnapshotCloning}
+		r.snapshotCloningDstCache.cloningState = tc.cloningState
+		r.snapshotCloningDstCache.cloningError = tc.cloningError
+		r.snapshotCloningDstCache.processedClusters = 3
+		r.snapshotCloningDstCache.totalClusters = 10
+
+		staleErr, cleared := r.clearStaleSnapshotCloneDstError()
+		c.Assert(cleared, Equals, tc.expectCleared)
+
+		status, err := r.SnapshotCloneDstStatusCheck()
+		c.Assert(err, IsNil)
+		if tc.expectCleared {
+			c.Assert(staleErr, Equals, tc.cloningError)
+			c.Assert(status.State, Equals, "")
+			c.Assert(status.Error, Equals, "")
+			c.Assert(status.Progress, Equals, uint32(0))
+		} else {
+			c.Assert(staleErr, Equals, "")
+			c.Assert(status.State, Equals, tc.cloningState)
+			c.Assert(status.Error, Equals, tc.cloningError)
+		}
+	}
 }
