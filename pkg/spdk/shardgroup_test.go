@@ -96,6 +96,44 @@ func (s *TestSuite) TestCopyEcCountersFromBdevInfoZeroValues(c *C) {
 	c.Assert(status.FullStripeWrites, Equals, uint64(0))
 }
 
+// TestCopyEcHealthFromBdevInfo verifies that a failed slot reaches the proto
+// response. The controller only marks a shard failed when it sees the slot
+// state here.
+func (s *TestSuite) TestCopyEcHealthFromBdevInfo(c *C) {
+	fmt.Println("Testing copyEcHealthFromBdevInfo maps EC state and slot states")
+
+	info := &spdktypes.BdevEcInfo{
+		State:             spdktypes.BdevEcStateDegraded,
+		RebuildInProgress: true,
+		BaseBdevs: []spdktypes.EcBaseBdev{
+			{Slot: 0, Role: spdktypes.BdevEcSlotRoleData, State: spdktypes.BdevEcSlotStateNormal, Name: "shard-0n1"},
+			{Slot: 1, Role: spdktypes.BdevEcSlotRoleData, State: spdktypes.BdevEcSlotStateFailed, Name: "<failed>"},
+			{Slot: 2, Role: spdktypes.BdevEcSlotRoleParity, State: spdktypes.BdevEcSlotStateReplacing, Name: "shard-2n1"},
+		},
+	}
+
+	status := &spdkrpc.EcStatus{}
+	copyEcHealthFromBdevInfo(status, info)
+
+	c.Assert(status.State, Equals, spdkrpc.EcState_EC_STATE_DEGRADED)
+	c.Assert(status.RebuildInProgress, Equals, true)
+	c.Assert(status.RebuildProgress, IsNil)
+	c.Assert(status.Slots, HasLen, 3)
+
+	c.Assert(status.Slots[0].SlotIndex, Equals, uint32(0))
+	c.Assert(status.Slots[0].Role, Equals, spdkrpc.EcSlotRole_EC_SLOT_ROLE_DATA)
+	c.Assert(status.Slots[0].State, Equals, spdkrpc.EcSlotState_EC_SLOT_STATE_NORMAL)
+	c.Assert(status.Slots[0].BdevName, Equals, "shard-0n1")
+
+	c.Assert(status.Slots[1].SlotIndex, Equals, uint32(1))
+	c.Assert(status.Slots[1].Role, Equals, spdkrpc.EcSlotRole_EC_SLOT_ROLE_DATA)
+	c.Assert(status.Slots[1].State, Equals, spdkrpc.EcSlotState_EC_SLOT_STATE_FAILED)
+
+	c.Assert(status.Slots[2].SlotIndex, Equals, uint32(2))
+	c.Assert(status.Slots[2].Role, Equals, spdkrpc.EcSlotRole_EC_SLOT_ROLE_PARITY)
+	c.Assert(status.Slots[2].State, Equals, spdkrpc.EcSlotState_EC_SLOT_STATE_REPLACING)
+}
+
 // TestEcUsableFitsSpecBoundary pins the exact equality boundary of the
 // create-time capacity guard: usable == spec must pass (zero slack is the
 // correctly-provisioned case), and any shortfall must fail.

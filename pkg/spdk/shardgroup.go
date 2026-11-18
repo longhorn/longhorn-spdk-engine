@@ -342,6 +342,25 @@ func copyEcCountersFromBdevInfo(status *spdkrpc.EcStatus, info *spdktypes.BdevEc
 	status.WritesIntoUnmappedFailed = info.WritesIntoUnmappedFailed
 }
 
+// copyEcHealthFromBdevInfo copies the health of the EC bdev into the
+// response: its overall state, whether a rebuild is running, and the state
+// of each slot. The controller finds a failed shard by reading the slot
+// states. Without them, a failed shard looks healthy.
+func copyEcHealthFromBdevInfo(status *spdkrpc.EcStatus, info *spdktypes.BdevEcInfo) {
+	status.State = bdevEcStateToProto(info.State)
+	status.RebuildInProgress = info.RebuildInProgress
+
+	status.Slots = make([]*spdkrpc.EcSlot, 0, len(info.BaseBdevs))
+	for _, baseBdev := range info.BaseBdevs {
+		status.Slots = append(status.Slots, &spdkrpc.EcSlot{
+			SlotIndex: baseBdev.Slot,
+			Role:      bdevEcSlotRoleToProto(baseBdev.Role),
+			State:     bdevEcSlotStateToProto(string(baseBdev.State)),
+			BdevName:  baseBdev.Name,
+		})
+	}
+}
+
 // getEcBdevInfoNoLock returns the single EC bdev backing this shardgroup,
 // erroring if SPDK reports zero or multiple. The caller must hold sg's lock.
 func (sg *ShardGroup) getEcBdevInfoNoLock(spdkClient *spdkclient.Client) (*spdktypes.BdevEcInfo, error) {
@@ -457,6 +476,29 @@ func (sg *ShardGroup) Get(spdkClient *spdkclient.Client) (*spdkrpc.ShardGroup, e
 		return nil, err
 	}
 	copyEcCountersFromBdevInfo(ecStatus, ecInfo)
+	copyEcHealthFromBdevInfo(ecStatus, ecInfo)
+
+	// bdev_ec_get_bdevs does not return the rebuild percentage, so read
+	// the progress from bdev_ec_get_rebuild_progress.
+	if ecInfo.RebuildInProgress {
+		progress, err := spdkClient.BdevEcGetRebuildProgress(sg.EcBdevName)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to get rebuild progress for shardgroup %s", sg.Name)
+		}
+		// The rebuild can finish between the two SPDK calls. SPDK then
+		// reports no rebuild, the progress is empty, and the state is
+		// idle. Leave RebuildProgress unset in that case.
+		if progress.RebuildState != spdktypes.BdevEcRebuildStateIdle {
+			ecStatus.RebuildProgress = &spdkrpc.EcRebuildProgress{
+				CurrentSlot:     progress.CurrentSlot,
+				CurrentStripe:   progress.CurrentStripe,
+				NumStripes:      progress.NumStripes,
+				StripesRebuilt:  progress.StripesRebuilt,
+				SlotsToRebuild:  progress.SlotsToRebuild,
+				PercentComplete: progress.PercentComplete,
+			}
+		}
+	}
 
 	unmapStatus, err := spdkClient.BdevEcGetUnmapStatus(sg.EcBdevName)
 	if err != nil {

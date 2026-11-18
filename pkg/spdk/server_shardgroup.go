@@ -11,6 +11,7 @@ import (
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
@@ -424,6 +425,24 @@ func bdevEcSlotStateToProto(state string) spdkrpc.EcSlotState {
 	default:
 		return spdkrpc.EcSlotState_EC_SLOT_STATE_NORMAL
 	}
+}
+
+func bdevEcStateToProto(state spdktypes.BdevEcState) spdkrpc.EcState {
+	switch state {
+	case spdktypes.BdevEcStateDegraded:
+		return spdkrpc.EcState_EC_STATE_DEGRADED
+	case spdktypes.BdevEcStateOffline:
+		return spdkrpc.EcState_EC_STATE_OFFLINE
+	default:
+		return spdkrpc.EcState_EC_STATE_ONLINE
+	}
+}
+
+func bdevEcSlotRoleToProto(role spdktypes.BdevEcSlotRole) spdkrpc.EcSlotRole {
+	if role == spdktypes.BdevEcSlotRoleParity {
+		return spdkrpc.EcSlotRole_EC_SLOT_ROLE_PARITY
+	}
+	return spdkrpc.EcSlotRole_EC_SLOT_ROLE_DATA
 }
 
 // getOrCreateShardGroup returns the existing in-memory ShardGroup keyed by
