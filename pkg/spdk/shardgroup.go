@@ -857,6 +857,70 @@ func (sg *ShardGroup) exposeLocalShardsNoLock(spdkClient *spdkclient.Client) {
 	}
 }
 
+// StopExposeForLocalAttach stops exposing the head lvol over NVMe-oF and
+// returns its alias. An engine in the same SPDK process can then use the
+// head lvol directly as a base bdev of its raid bdev.
+//
+// The head lvol has to be unexposed before the engine creates the raid
+// bdev. While it is exposed, the NVMe-oF target holds an exclusive write
+// claim on it, and the raid bdev cannot open it.
+//
+// The ShardGroup keeps its IP, port, and NQN, so
+// StartExposeAfterLocalDetach can expose the head lvol again at the same
+// address. The ShardGroup stays Running, and only IsExposed changes.
+func (sg *ShardGroup) StopExposeForLocalAttach(spdkClient *spdkclient.Client) (string, error) {
+	sg.Lock()
+	defer sg.Unlock()
+
+	if sg.State != types.InstanceStateRunning {
+		return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"cannot attach shardgroup %s locally in state %s (local attach requires a running shardgroup)", sg.Name, sg.State)
+	}
+
+	if sg.IsExposed {
+		if err := shardGroupStopExposeBdev(spdkClient, sg.Nqn); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return "", errors.Wrapf(err, "failed to stop exposing shardgroup %s for local attach", sg.Name)
+		}
+		sg.IsExposed = false
+		sg.log.Info("Stopped exposing head lvol for local attach")
+	}
+
+	return sg.HeadAlias, nil
+}
+
+// StartExposeAfterLocalDetach exposes the head lvol over NVMe-oF again,
+// undoing StopExposeForLocalAttach. Call it only after the local engine has
+// deleted its raid bdev.
+//
+// If the head lvol cannot be exposed, the ShardGroup stays Running and
+// unexposed. It does not move to the Error state, because the manager never
+// recreates a ShardGroup in the Error state. An engine in this SPDK process
+// can still attach. An engine on another node cannot connect until a later
+// call exposes the head lvol.
+func (sg *ShardGroup) StartExposeAfterLocalDetach(spdkClient *spdkclient.Client) error {
+	sg.Lock()
+	defer sg.Unlock()
+
+	if sg.State != types.InstanceStateRunning || sg.IsExposed {
+		return nil
+	}
+
+	if err := shardGroupStartExposeBdev(spdkClient, sg.Nqn, sg.HeadLvolUUID, generateNGUID(sg.HeadLvolName),
+		sg.IP, strconv.Itoa(int(sg.Port))); err != nil {
+		// A failed expose can leave the subsystem behind without a
+		// namespace. Remove it, or the next expose fails because the
+		// subsystem already exists.
+		if stopErr := shardGroupStopExposeBdev(spdkClient, sg.Nqn); stopErr != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(stopErr) {
+			sg.log.WithError(stopErr).Warn("Failed to remove the NVMe-oF subsystem after a failed expose")
+		}
+		return errors.Wrapf(err, "failed to expose shardgroup %s after local detach", sg.Name)
+	}
+	sg.IsExposed = true
+	sg.log.Info("Exposed head lvol again after local detach")
+
+	return nil
+}
+
 // Delete tears down the EC stack with cleanupRequired discipline.
 //
 // cleanupRequired=true (volume deletion path): full teardown - delete head
@@ -1062,8 +1126,9 @@ func (sg *ShardGroup) SetErrorState() {
 //
 // On failure, Expand returns the error and does not change the state. A
 // failure before the head lvol resize leaves the ShardGroup serving at the
-// old size, and Expand can be called again. A failure during the resize
-// leaves the NVMe-oF subsystem down, and the next Sync sets Error.
+// old size, and Expand can be called again. A failure during the resize of
+// an exposed head lvol leaves the NVMe-oF subsystem down, and the next Sync
+// sets Error.
 //
 // Do not set Error on every failure as Shard.Expand does. An early failure
 // would then put a working ShardGroup into Error, and Expand could not be
@@ -1171,26 +1236,28 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 			sg.LvsName, sg.EcBdevName, lvstoreList[0].TotalDataClusters*lvstoreList[0].ClusterSize, newSize)
 	}
 
-	// 4. Resize the head lvol with its NVMe-oF subsystem torn down.
+	// 4. Resize the head lvol. If the head lvol is exposed, its NVMe-oF
+	// subsystem is torn down for the resize.
 	//
-	// The teardown is needed when the engine in this SPDK process is
-	// attached to the head lvol over NVMe-oF loopback. With the subsystem
-	// up, bdev_lvol_resize was seen to hang. After about 60s the keep-alive
-	// timers expired, the controller reset, and the SPDK process corrupted
-	// its heap. This was seen at the shard layer when the same teardown was
-	// removed there. The cause in SPDK has not been confirmed.
+	// The teardown is needed when an engine is attached to the head lvol
+	// over NVMe-oF. With the subsystem up, bdev_lvol_resize was seen to
+	// hang. After about 60s the keep-alive timers expired, the controller
+	// reset, and the SPDK process corrupted its heap. This was seen at the
+	// shard layer when the same teardown was removed there. The cause in
+	// SPDK has not been confirmed.
 	//
-	// Expand does not know how the engine is attached, so the teardown
-	// always runs. Its effect depends on the attachment:
-	//   - Direct base bdev, the normal case: the teardown has no effect on
-	//     the engine. The engine keeps sending I/O during the resize. SPDK
-	//     holds new I/O on the lvol while the blob resizes and then runs
-	//     it (blob_freeze_io).
+	// What the engine sees depends on how it is attached:
+	//   - Direct base bdev, the normal case: the head lvol is not exposed,
+	//     so there is no teardown. The engine keeps sending I/O during the
+	//     resize. SPDK holds new I/O on the lvol while the blob resizes and
+	//     then runs it (blob_freeze_io).
 	//   - NVMe-oF: the teardown drops the size change event (AER) for the
 	//     engine's nvme bdev. The bdev keeps its cached size until the
 	//     controller is reset or reconnects.
-	if err := spdkClient.StopExposeBdev(sg.Nqn); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
-		return errors.Wrapf(err, "failed to stop exposing shardgroup %s before head-lvol resize", sg.Name)
+	if sg.IsExposed {
+		if err := spdkClient.StopExposeBdev(sg.Nqn); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+			return errors.Wrapf(err, "failed to stop exposing shardgroup %s before head-lvol resize", sg.Name)
+		}
 	}
 
 	resized, err := spdkClient.BdevLvolResize(sg.HeadAlias, util.BytesToMiB(newSize))
@@ -1201,9 +1268,11 @@ func (sg *ShardGroup) Expand(spdkClient *spdkclient.Client, newSize, creationSiz
 		return fmt.Errorf("head lvol %s was not resized", sg.HeadAlias)
 	}
 
-	if err := spdkClient.StartExposeBdev(sg.Nqn, sg.HeadLvolUUID, generateNGUID(sg.HeadLvolName),
-		sg.IP, strconv.Itoa(int(sg.Port)), helpertypes.InternalHostNQN); err != nil {
-		return errors.Wrapf(err, "failed to re-expose shardgroup %s after head-lvol resize", sg.Name)
+	if sg.IsExposed {
+		if err := spdkClient.StartExposeBdev(sg.Nqn, sg.HeadLvolUUID, generateNGUID(sg.HeadLvolName),
+			sg.IP, strconv.Itoa(int(sg.Port)), helpertypes.InternalHostNQN); err != nil {
+			return errors.Wrapf(err, "failed to re-expose shardgroup %s after head-lvol resize", sg.Name)
+		}
 	}
 
 	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
@@ -1339,6 +1408,11 @@ func (sg *ShardGroup) SnapshotDelete(spdkClient *spdkclient.Client, snapshotName
 //
 // Sequence: unexpose head -> delete head lvol -> clone from snapshot ->
 // re-expose with the new head lvol UUID.
+//
+// The new head lvol is exposed only if the old one was. An unexposed head
+// lvol means that an engine in this SPDK process uses it directly. After
+// the revert, the engine adds the new head lvol to its raid bdev, and a
+// raid bdev cannot use an exposed lvol.
 func (sg *ShardGroup) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName string) error {
 	sg.Lock()
 	prevHeadLvolUUID, prevIsExposed := sg.HeadLvolUUID, sg.IsExposed
@@ -1385,11 +1459,13 @@ func (sg *ShardGroup) SnapshotRevert(spdkClient *spdkclient.Client, snapshotName
 	}
 	sg.HeadLvolUUID = newHeadUUID
 
-	if err := spdkClient.StartExposeBdev(sg.Nqn, sg.HeadLvolUUID, generateNGUID(sg.HeadLvolName),
-		sg.IP, strconv.Itoa(int(sg.Port)), helpertypes.InternalHostNQN); err != nil {
-		return errors.Wrapf(err, "failed to re-expose head lvol after revert")
+	if prevIsExposed {
+		if err := spdkClient.StartExposeBdev(sg.Nqn, sg.HeadLvolUUID, generateNGUID(sg.HeadLvolName),
+			sg.IP, strconv.Itoa(int(sg.Port)), helpertypes.InternalHostNQN); err != nil {
+			return errors.Wrapf(err, "failed to re-expose head lvol after revert")
+		}
+		sg.IsExposed = true
 	}
-	sg.IsExposed = true
 
 	if err := sg.refreshECSnapshotMapNoLock(spdkClient); err != nil {
 		return errors.Wrapf(err, "failed to refresh shardgroup snapshot/head cache after snapshot revert for %s", sg.Name)
