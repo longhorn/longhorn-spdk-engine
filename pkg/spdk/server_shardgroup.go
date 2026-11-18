@@ -218,13 +218,13 @@ func (s *Server) ShardGroupShardReplace(ctx context.Context, req *spdkrpc.ShardG
 	s.RLock()
 	shardGroup := s.shardGroupMap[req.ShardGroupName]
 	spdkClient := s.spdkClient
-	newLocalBdevName := s.resolveLocalBdevName(req.ShardName)
+	newLocalShard := s.resolveLocalShard(req.ShardName)
 	s.RUnlock()
 
 	if shardGroup == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find shardgroup %v", req.ShardGroupName)
 	}
-	state, err := shardGroup.ShardReplace(spdkClient, req.ShardName, req.ShardAddress, newLocalBdevName)
+	state, err := shardGroup.ShardReplace(spdkClient, req.ShardName, req.ShardAddress, newLocalShard)
 	if err != nil {
 		return nil, err
 	}
@@ -518,36 +518,36 @@ func (s *Server) resolveShardEndpoints(spec map[string]*spdkrpc.ShardEndpoint) m
 	shards := make(map[string]*ShardEndpoint, len(spec))
 	for shardName, endpoint := range spec {
 		shards[shardName] = &ShardEndpoint{
-			Address:       endpoint.Address,
-			SlotIndex:     endpoint.SlotIndex,
-			LocalBdevName: s.resolveLocalBdevName(shardName),
+			Address:    endpoint.Address,
+			SlotIndex:  endpoint.SlotIndex,
+			LocalShard: s.resolveLocalShard(shardName),
 		}
 	}
 	return shards
 }
 
-// resolveLocalBdevName returns the lvol alias of a shard when the shard runs
-// in this Server and is Running. The ShardGroup can then attach the lvol
-// directly instead of over NVMe-oF.
+// resolveLocalShard returns the shard when it runs in this Server and is
+// Running. The ShardGroup can then attach its lvol directly instead of over
+// NVMe-oF.
 //
-// It returns "" when the shard runs on another node, or for a local shard that
-// is not Running. In both cases the ShardGroup attaches over NVMe-oF, which
-// fails with a connect error if the shard is not ready.
+// It returns nil when the shard runs on another node, or for a local shard
+// that is not Running. In both cases the ShardGroup attaches over NVMe-oF,
+// which fails with a connect error if the shard is not ready.
 //
 // Lock order: the caller holds the Server lock, and this function takes the
 // shard lock. Always take the Server lock before an instance lock to avoid
 // goroutine deadlock.
-func (s *Server) resolveLocalBdevName(shardName string) string {
+func (s *Server) resolveLocalShard(shardName string) *Shard {
 	shard := s.shardMap[shardName]
 	if shard == nil {
-		return ""
+		return nil
 	}
 	shard.RLock()
 	defer shard.RUnlock()
 	if shard.State != types.InstanceStateRunning {
 		logrus.Warnf("Falling back to NVMe-oF for local shard %s because it is not running (state %s)",
 			shardName, shard.State)
-		return ""
+		return nil
 	}
-	return shard.Alias
+	return shard
 }

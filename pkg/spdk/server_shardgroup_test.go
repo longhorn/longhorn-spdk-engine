@@ -84,9 +84,9 @@ func (s *TestSuite) TestGetOrCreateShardGroupRunningReuseRejectsGrownSpecSize(c 
 	c.Assert(sg.SpecSize, Equals, testCachedSpecSize)
 }
 
-// A shard that runs in this Server and is Running gets its lvol alias
-// recorded as LocalBdevName. A shard that is absent or not Running keeps
-// LocalBdevName empty, so the ShardGroup attaches it over NVMe-oF.
+// A shard that runs in this Server and is Running is recorded as LocalShard.
+// A shard that is absent or not Running keeps LocalShard nil, so the
+// ShardGroup attaches it over NVMe-oF.
 func (s *TestSuite) TestGetOrCreateShardGroupResolvesLocalShards(c *C) {
 	fmt.Println("Testing Server.getOrCreateShardGroup marks shards served by this process as local")
 
@@ -106,18 +106,17 @@ func (s *TestSuite) TestGetOrCreateShardGroupResolvesLocalShards(c *C) {
 	got, err := srv.getOrCreateShardGroup(req)
 	c.Assert(err, IsNil)
 	c.Assert(got.Shards, HasLen, 3)
-	c.Assert(got.Shards["vol-a-0"].LocalBdevName, Equals, "vol-a-0-lvs/shard-vol-a-0")
+	c.Assert(got.Shards["vol-a-0"].LocalShard, Equals, srv.shardMap["vol-a-0"])
 	c.Assert(got.Shards["vol-a-0"].Address, Equals, "10.0.0.1:20001")
 	c.Assert(got.Shards["vol-a-0"].SlotIndex, Equals, uint32(0))
-	c.Assert(got.Shards["vol-a-1"].LocalBdevName, Equals, "")
-	c.Assert(got.Shards["vol-a-2"].LocalBdevName, Equals, "")
+	c.Assert(got.Shards["vol-a-1"].LocalShard, IsNil)
+	c.Assert(got.Shards["vol-a-2"].LocalShard, IsNil)
 }
 
-// Only a Running shard served by this process resolves to its lvol alias.
-// Anything else resolves to "", which means the ShardGroup attaches it over
-// NVMe-oF.
-func (s *TestSuite) TestResolveLocalBdevName(c *C) {
-	fmt.Println("Testing Server.resolveLocalBdevName resolves only Running shards served by this process")
+// Only a Running shard served by this process resolves to itself. Anything
+// else resolves to nil, which means the ShardGroup attaches it over NVMe-oF.
+func (s *TestSuite) TestResolveLocalShard(c *C) {
+	fmt.Println("Testing Server.resolveLocalShard resolves only Running shards served by this process")
 
 	srv := &Server{
 		shardMap: map[string]*Shard{
@@ -127,8 +126,8 @@ func (s *TestSuite) TestResolveLocalBdevName(c *C) {
 		},
 	}
 
-	c.Assert(srv.resolveLocalBdevName("vol-a-0"), Equals, "vol-a-0-lvs/shard-vol-a-0")
-	c.Assert(srv.resolveLocalBdevName("vol-a-1"), Equals, "")
-	c.Assert(srv.resolveLocalBdevName("vol-a-2"), Equals, "")
-	c.Assert(srv.resolveLocalBdevName("vol-a-3"), Equals, "")
+	c.Assert(srv.resolveLocalShard("vol-a-0"), Equals, srv.shardMap["vol-a-0"])
+	c.Assert(srv.resolveLocalShard("vol-a-1"), IsNil)
+	c.Assert(srv.resolveLocalShard("vol-a-2"), IsNil)
+	c.Assert(srv.resolveLocalShard("vol-a-3"), IsNil)
 }
