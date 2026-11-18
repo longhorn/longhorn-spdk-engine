@@ -938,7 +938,10 @@ func (s *TestSuite) TestSPDKEngineFrontendSuspendAndResume(c *C) {
 	// but it should no longer be stuck). We wait up to 60 seconds to account for
 	// the dd's Execute timeout plus residual IO after resume.
 	select {
-	case <-ddDone:
+	case ddErr := <-ddDone:
+		if ddErr != nil {
+			c.Logf("background dd completed with error after resume: %v", ddErr)
+		}
 	case <-time.After(60 * time.Second):
 		c.Fatal("background dd did not complete after resume")
 	}
