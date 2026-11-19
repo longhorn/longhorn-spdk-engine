@@ -5148,11 +5148,11 @@ func (s *TestSuite) TestSPDKRebuildParentSwitchDuringEsnapReadLoad(c *C) {
 		_ = spdkCli.ReplicaDelete(srcName, true)
 	}()
 
-	src, err := spdkCli.ReplicaCreate(srcName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	src, err := spdkCli.ReplicaCreate(srcName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", enginerpc.TransportType_TRANSPORT_TYPE_TCP)
 	c.Assert(err, IsNil)
 	srcAddress := net.JoinHostPort(ip, strconv.Itoa(int(src.PortStart)))
 	engine, err := spdkCli.EngineCreate(engineName, volumeName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
-		map[string]string{srcName: srcAddress}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED)
+		map[string]string{srcName: srcAddress}, 1, false, 0, spdkrpc.DataLayoutType_DATA_LAYOUT_TYPE_REPLICATED, enginerpc.TransportType_TRANSPORT_TYPE_TCP)
 	c.Assert(err, IsNil)
 	frontend, err := spdkCli.EngineFrontendCreate(frontendName, volumeName, engineName, types.FrontendSPDKTCPBlockdev, defaultTestLvolSize,
 		net.JoinHostPort(engine.IP, strconv.Itoa(int(engine.Port))), 0, 0, 0)
@@ -5162,7 +5162,7 @@ func (s *TestSuite) TestSPDKRebuildParentSwitchDuringEsnapReadLoad(c *C) {
 	endpoint := helperutil.GetLonghornDevicePath(volumeName)
 	expected := writePatternToBlockDevice(c, endpoint, 'A', 0, int64(defaultTestBlockSize))
 
-	dst, err := spdkCli.ReplicaCreate(dstName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "")
+	dst, err := spdkCli.ReplicaCreate(dstName, defaultTestDiskName, disk.Uuid, defaultTestLvolSize, defaultTestReplicaPortCount, "", enginerpc.TransportType_TRANSPORT_TYPE_TCP)
 	c.Assert(err, IsNil)
 	dstAddress := net.JoinHostPort(ip, strconv.Itoa(int(dst.PortStart)))
 	var releaseFinishOnce sync.Once
