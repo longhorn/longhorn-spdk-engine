@@ -189,7 +189,7 @@ func (f *fakeExpansionSPDK) install() (restore func()) {
 }
 
 func newExpansionTestEngine(size uint64, replicaSizes map[string]uint64) *Engine {
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, size, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, size, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.State = lhtypes.InstanceStateRunning
 	backends := map[string]Backend{}
 	i := 1
@@ -721,7 +721,7 @@ func (s *TestSuite) TestCreateRaidBdevKeepsAutoResizeForECEngine(c *C) {
 	f := &fakeRaidCreate{}
 	defer f.install()()
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil)}
 	c.Assert(e.createRaidBdevNoLock(nil, []string{"sg1n1"}, ""), IsNil)
 	c.Assert(f.calls, DeepEquals, map[string]spdktypes.BdevRaidCreateOptions{"engine-a": {}})

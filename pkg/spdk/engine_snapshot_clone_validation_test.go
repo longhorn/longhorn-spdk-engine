@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
@@ -15,7 +16,7 @@ import (
 )
 
 func TestSnapshotCloneRejectsEmptyLinkedCloneReplicaMap(t *testing.T) {
-	source := NewEngine("source-engine", "source-volume", types.FrontendSPDKTCPBlockdev, 1<<20, nil, 1, nil)
+	source := NewEngine("source-engine", "source-volume", types.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 1<<20, nil, 1, nil)
 	t.Cleanup(source.cancelCtx)
 	source.State = types.InstanceStateRunning
 
@@ -46,7 +47,7 @@ func TestSnapshotCloneRejectsEmptyLinkedCloneReplicaMap(t *testing.T) {
 		{name: "empty", replicaMap: map[string]string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			destination := NewEngine("destination-engine", "destination-volume", types.FrontendSPDKTCPBlockdev, 1<<20, nil, 1, client.NewSPDKClient)
+			destination := NewEngine("destination-engine", "destination-volume", types.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 1<<20, nil, 1, client.NewSPDKClient)
 			t.Cleanup(destination.cancelCtx)
 
 			err := destination.SnapshotClone("snapshot", source.Name, listener.Addr().String(), spdkrpc.CloneMode_CLONE_MODE_LINKED_CLONE, tc.replicaMap)
