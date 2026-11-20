@@ -9,6 +9,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	spdkclient "github.com/longhorn/go-spdk-helper/pkg/spdk/client"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
@@ -94,6 +95,44 @@ func (s *TestSuite) TestCopyEcCountersFromBdevInfoZeroValues(c *C) {
 	c.Assert(status.DegradedReadEioDirty, Equals, uint64(0))
 	c.Assert(status.RmwTotal, Equals, uint64(0))
 	c.Assert(status.FullStripeWrites, Equals, uint64(0))
+}
+
+// TestCopyEcHealthFromBdevInfo verifies that a failed slot reaches the proto
+// response. The controller only marks a shard failed when it sees the slot
+// state here.
+func (s *TestSuite) TestCopyEcHealthFromBdevInfo(c *C) {
+	fmt.Println("Testing copyEcHealthFromBdevInfo maps EC state and slot states")
+
+	info := &spdktypes.BdevEcInfo{
+		State:             spdktypes.BdevEcStateDegraded,
+		RebuildInProgress: true,
+		BaseBdevs: []spdktypes.EcBaseBdev{
+			{Slot: 0, Role: spdktypes.BdevEcSlotRoleData, State: spdktypes.BdevEcSlotStateNormal, Name: "shard-0n1"},
+			{Slot: 1, Role: spdktypes.BdevEcSlotRoleData, State: spdktypes.BdevEcSlotStateFailed, Name: "<failed>"},
+			{Slot: 2, Role: spdktypes.BdevEcSlotRoleParity, State: spdktypes.BdevEcSlotStateReplacing, Name: "shard-2n1"},
+		},
+	}
+
+	status := &spdkrpc.EcStatus{}
+	copyEcHealthFromBdevInfo(status, info)
+
+	c.Assert(status.State, Equals, spdkrpc.EcState_EC_STATE_DEGRADED)
+	c.Assert(status.RebuildInProgress, Equals, true)
+	c.Assert(status.RebuildProgress, IsNil)
+	c.Assert(status.Slots, HasLen, 3)
+
+	c.Assert(status.Slots[0].SlotIndex, Equals, uint32(0))
+	c.Assert(status.Slots[0].Role, Equals, spdkrpc.EcSlotRole_EC_SLOT_ROLE_DATA)
+	c.Assert(status.Slots[0].State, Equals, spdkrpc.EcSlotState_EC_SLOT_STATE_NORMAL)
+	c.Assert(status.Slots[0].BdevName, Equals, "shard-0n1")
+
+	c.Assert(status.Slots[1].SlotIndex, Equals, uint32(1))
+	c.Assert(status.Slots[1].Role, Equals, spdkrpc.EcSlotRole_EC_SLOT_ROLE_DATA)
+	c.Assert(status.Slots[1].State, Equals, spdkrpc.EcSlotState_EC_SLOT_STATE_FAILED)
+
+	c.Assert(status.Slots[2].SlotIndex, Equals, uint32(2))
+	c.Assert(status.Slots[2].Role, Equals, spdkrpc.EcSlotRole_EC_SLOT_ROLE_PARITY)
+	c.Assert(status.Slots[2].State, Equals, spdkrpc.EcSlotState_EC_SLOT_STATE_REPLACING)
 }
 
 // TestEcUsableFitsSpecBoundary pins the exact equality boundary of the
@@ -298,4 +337,252 @@ func (s *TestSuite) TestShardGroupSnapshotDeleteRejectsNonRunningState(c *C) {
 		c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
 		c.Assert(len(sg.UpdateCh), Equals, 0)
 	}
+}
+
+// newExposedLocalShard returns a Running, exposed shard as Shard.Create leaves
+// it, without contacting SPDK.
+func newExposedLocalShard() *Shard {
+	shard := NewShard("vol-a", 0, "disk-a", "lvs-uuid-a", testCachedSpecSize, make(chan interface{}, 1))
+	shard.UUID = "lvol-uuid-a"
+	shard.IP = "10.0.0.1"
+	shard.Port = 20001
+	shard.State = types.InstanceStateRunning
+	shard.IsExposed = true
+	return shard
+}
+
+// mockShardExposeBdev replaces shardStopExposeBdev and shardStartExposeBdev
+// with mocks. The mocks do not call SPDK. They record the NQN they are
+// called with and return stopErr and startErr.
+//
+// Call the returned restore function at the end of the test to put the real
+// functions back.
+func mockShardExposeBdev(stopErr, startErr error) (stopped, started *[]string, restore func()) {
+	origStop, origStart := shardStopExposeBdev, shardStartExposeBdev
+	stopped, started = &[]string{}, &[]string{}
+	shardStopExposeBdev = func(_ *spdkclient.Client, nqn string) error {
+		*stopped = append(*stopped, nqn)
+		return stopErr
+	}
+	shardStartExposeBdev = func(_ *spdkclient.Client, nqn, _, _, _, _ string) error {
+		*started = append(*started, nqn)
+		return startErr
+	}
+	return stopped, started, func() {
+		shardStopExposeBdev, shardStartExposeBdev = origStop, origStart
+	}
+}
+
+// Attaching a local shard stops exposing it over NVMe-oF and returns its lvol
+// alias. Detaching it exposes it again. Repeating either call does not call
+// SPDK a second time.
+//
+// The test passes a nil spdkClient on purpose. If the code took the remote
+// path, the first SPDK call would panic on the nil client.
+func (s *TestSuite) TestLocalShardUnexposedWhileAttached(c *C) {
+	fmt.Println("Testing a local shard is not exposed while it is attached to the ShardGroup")
+
+	stopped, started, restore := mockShardExposeBdev(nil, nil)
+	defer restore()
+
+	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize,
+		2, 1, 64, map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	shard := newExposedLocalShard()
+	endpoint := &ShardEndpoint{Address: "10.0.0.1:20001", SlotIndex: 0, LocalShard: shard}
+
+	bdevName, err := sg.attachShardBaseBdev(nil, endpoint, maxRetries)
+	c.Assert(err, IsNil)
+	c.Assert(bdevName, Equals, "disk-a/shard-vol-a-0")
+	c.Assert(shard.IsExposed, Equals, false)
+	c.Assert(shard.State, Equals, types.InstanceState(types.InstanceStateRunning))
+	c.Assert(*stopped, DeepEquals, []string{shard.Nqn})
+
+	// A second attach finds the export already removed and does not ask
+	// SPDK again.
+	_, err = sg.attachShardBaseBdev(nil, endpoint, maxRetries)
+	c.Assert(err, IsNil)
+	c.Assert(*stopped, HasLen, 1)
+
+	c.Assert(sg.detachShardBaseBdev(nil, endpoint), IsNil)
+	c.Assert(shard.IsExposed, Equals, true)
+	c.Assert(*started, DeepEquals, []string{shard.Nqn})
+
+	// A second detach finds the export already restored.
+	c.Assert(sg.detachShardBaseBdev(nil, endpoint), IsNil)
+	c.Assert(*started, HasLen, 1)
+}
+
+// A failed stop or start must leave IsExposed matching what SPDK still has.
+// A failed stop leaves the shard Running and exposed. A failed start moves
+// the shard to Error, because it would otherwise look healthy while
+// unreachable.
+func (s *TestSuite) TestLocalShardExposeFailure(c *C) {
+	fmt.Println("Testing a failed stop or start of a local shard expose")
+
+	_, _, restore := mockShardExposeBdev(fmt.Errorf("stop failed"), fmt.Errorf("start failed"))
+	defer restore()
+
+	shard := newExposedLocalShard()
+	_, err := shard.StopExposeForLocalAttach(nil)
+	c.Assert(err, NotNil)
+	c.Assert(shard.IsExposed, Equals, true)
+	c.Assert(shard.State, Equals, types.InstanceState(types.InstanceStateRunning))
+
+	shard.IsExposed = false
+	c.Assert(shard.StartExposeAfterLocalDetach(nil), NotNil)
+	c.Assert(shard.IsExposed, Equals, false)
+	c.Assert(shard.State, Equals, types.InstanceState(types.InstanceStateError))
+	c.Assert(shard.ErrorMsg, Not(Equals), "")
+}
+
+// Only a Running shard can be attached locally, and only a Running shard gets
+// its export restored: a stopped or failed shard has no port to expose on.
+func (s *TestSuite) TestLocalShardExposeRequiresRunning(c *C) {
+	fmt.Println("Testing only a Running local shard can be attached and exposed again")
+
+	stopped, started, restore := mockShardExposeBdev(nil, nil)
+	defer restore()
+
+	for _, state := range []types.InstanceState{
+		types.InstanceStatePending,
+		types.InstanceStateStopped,
+		types.InstanceStateError,
+		types.InstanceStateTerminating,
+	} {
+		shard := newExposedLocalShard()
+		shard.State = state
+
+		_, err := shard.StopExposeForLocalAttach(nil)
+		c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+		c.Assert(shard.IsExposed, Equals, true)
+
+		shard.IsExposed = false
+		c.Assert(shard.StartExposeAfterLocalDetach(nil), IsNil)
+		c.Assert(shard.IsExposed, Equals, false)
+	}
+	c.Assert(*stopped, HasLen, 0)
+	c.Assert(*started, HasLen, 0)
+}
+
+// newExposedLocalShardGroup returns a Running ShardGroup with an exposed head
+// lvol, as ShardGroup.Create leaves it, without contacting SPDK.
+func newExposedLocalShardGroup() *ShardGroup {
+	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize,
+		2, 1, 64, map[string]*ShardEndpoint{}, false, make(chan interface{}, 1))
+	sg.HeadLvolUUID = "head-uuid-a"
+	sg.IP = "10.0.0.1"
+	sg.Port = 20002
+	sg.State = types.InstanceStateRunning
+	sg.IsExposed = true
+	return sg
+}
+
+// mockShardGroupExposeBdev replaces shardGroupStopExposeBdev and
+// shardGroupStartExposeBdev with mocks. The mocks do not call SPDK. They
+// record the NQN they are called with and return stopErr and startErr.
+//
+// Call the returned restore function at the end of the test to put the real
+// functions back.
+func mockShardGroupExposeBdev(stopErr, startErr error) (stopped, started *[]string, restore func()) {
+	origStop, origStart := shardGroupStopExposeBdev, shardGroupStartExposeBdev
+	stopped, started = &[]string{}, &[]string{}
+	shardGroupStopExposeBdev = func(_ *spdkclient.Client, nqn string) error {
+		*stopped = append(*stopped, nqn)
+		return stopErr
+	}
+	shardGroupStartExposeBdev = func(_ *spdkclient.Client, nqn, _, _, _, _ string) error {
+		*started = append(*started, nqn)
+		return startErr
+	}
+	return stopped, started, func() {
+		shardGroupStopExposeBdev, shardGroupStartExposeBdev = origStop, origStart
+	}
+}
+
+// Attaching a local engine stops exposing the head lvol and returns its
+// alias. The ShardGroup stays Running and keeps its port and NQN, because the
+// manager needs them to start the engine. Detaching the engine exposes the
+// head lvol again. Repeating either call does not call SPDK a second time.
+func (s *TestSuite) TestLocalHeadLvolUnexposedWhileEngineAttached(c *C) {
+	fmt.Println("Testing a local head lvol is not exposed while an engine uses it directly")
+
+	stopped, started, restore := mockShardGroupExposeBdev(nil, nil)
+	defer restore()
+
+	sg := newExposedLocalShardGroup()
+	nqn, port := sg.Nqn, sg.Port
+
+	headAlias, err := sg.StopExposeForLocalAttach(nil)
+	c.Assert(err, IsNil)
+	c.Assert(headAlias, Not(Equals), "")
+	c.Assert(headAlias, Equals, sg.HeadAlias)
+	c.Assert(sg.IsExposed, Equals, false)
+	c.Assert(sg.State, Equals, types.InstanceState(types.InstanceStateRunning))
+	c.Assert(sg.Nqn, Equals, nqn)
+	c.Assert(sg.Port, Equals, port)
+	c.Assert(*stopped, DeepEquals, []string{nqn})
+
+	_, err = sg.StopExposeForLocalAttach(nil)
+	c.Assert(err, IsNil)
+	c.Assert(*stopped, HasLen, 1)
+
+	c.Assert(sg.StartExposeAfterLocalDetach(nil), IsNil)
+	c.Assert(sg.IsExposed, Equals, true)
+	c.Assert(*started, DeepEquals, []string{nqn})
+
+	c.Assert(sg.StartExposeAfterLocalDetach(nil), IsNil)
+	c.Assert(*started, HasLen, 1)
+}
+
+// A failed stop leaves the head lvol exposed. A failed start leaves the
+// ShardGroup Running and unexposed, and removes the subsystem that the failed
+// expose may have left behind. The ShardGroup must not move to Error, because
+// the manager never recreates a ShardGroup in Error.
+func (s *TestSuite) TestLocalHeadLvolExposeFailure(c *C) {
+	fmt.Println("Testing a failed stop or start of a local head lvol expose")
+
+	_, _, restore := mockShardGroupExposeBdev(fmt.Errorf("stop failed"), nil)
+	sg := newExposedLocalShardGroup()
+	_, err := sg.StopExposeForLocalAttach(nil)
+	restore()
+	c.Assert(err, NotNil)
+	c.Assert(sg.IsExposed, Equals, true)
+	c.Assert(sg.State, Equals, types.InstanceState(types.InstanceStateRunning))
+
+	stopped, _, restore := mockShardGroupExposeBdev(nil, fmt.Errorf("start failed"))
+	defer restore()
+	sg.IsExposed = false
+	c.Assert(sg.StartExposeAfterLocalDetach(nil), NotNil)
+	c.Assert(sg.IsExposed, Equals, false)
+	c.Assert(sg.State, Equals, types.InstanceState(types.InstanceStateRunning))
+	c.Assert(*stopped, DeepEquals, []string{sg.Nqn})
+}
+
+// Only a Running ShardGroup can be attached locally, and only a Running
+// ShardGroup gets its head lvol exposed again.
+func (s *TestSuite) TestLocalHeadLvolExposeRequiresRunning(c *C) {
+	fmt.Println("Testing only a Running ShardGroup can be attached locally and exposed again")
+
+	stopped, started, restore := mockShardGroupExposeBdev(nil, nil)
+	defer restore()
+
+	for _, state := range []types.InstanceState{
+		types.InstanceStatePending,
+		types.InstanceStateStopped,
+		types.InstanceStateError,
+		types.InstanceStateTerminating,
+	} {
+		sg := newExposedLocalShardGroup()
+		sg.State = state
+
+		_, err := sg.StopExposeForLocalAttach(nil)
+		c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+		c.Assert(sg.IsExposed, Equals, true)
+
+		sg.IsExposed = false
+		c.Assert(sg.StartExposeAfterLocalDetach(nil), IsNil)
+		c.Assert(sg.IsExposed, Equals, false)
+	}
+	c.Assert(*stopped, HasLen, 0)
+	c.Assert(*started, HasLen, 0)
 }

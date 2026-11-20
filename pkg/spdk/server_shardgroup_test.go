@@ -83,3 +83,51 @@ func (s *TestSuite) TestGetOrCreateShardGroupRunningReuseRejectsGrownSpecSize(c 
 	c.Assert(err, NotNil)
 	c.Assert(sg.SpecSize, Equals, testCachedSpecSize)
 }
+
+// A shard that runs in this Server and is Running is recorded as LocalShard.
+// A shard that is absent or not Running keeps LocalShard nil, so the
+// ShardGroup attaches it over NVMe-oF.
+func (s *TestSuite) TestGetOrCreateShardGroupResolvesLocalShards(c *C) {
+	fmt.Println("Testing Server.getOrCreateShardGroup marks shards served by this process as local")
+
+	srv, _ := newShardGroupReuseFixture(lhtypes.InstanceStateStopped)
+	srv.shardMap = map[string]*Shard{
+		"vol-a-0": {Name: "vol-a-0", Alias: "vol-a-0-lvs/shard-vol-a-0", State: lhtypes.InstanceStateRunning},
+		"vol-a-1": {Name: "vol-a-1", Alias: "vol-a-1-lvs/shard-vol-a-1", State: lhtypes.InstanceStateStopped},
+	}
+
+	req := newShardGroupCreateRequest(testCachedSpecSize)
+	req.Spec.Shards = map[string]*spdkrpc.ShardEndpoint{
+		"vol-a-0": {Address: "10.0.0.1:20001", SlotIndex: 0},
+		"vol-a-1": {Address: "10.0.0.1:20002", SlotIndex: 1},
+		"vol-a-2": {Address: "10.0.0.2:20003", SlotIndex: 2},
+	}
+
+	got, err := srv.getOrCreateShardGroup(req)
+	c.Assert(err, IsNil)
+	c.Assert(got.Shards, HasLen, 3)
+	c.Assert(got.Shards["vol-a-0"].LocalShard, Equals, srv.shardMap["vol-a-0"])
+	c.Assert(got.Shards["vol-a-0"].Address, Equals, "10.0.0.1:20001")
+	c.Assert(got.Shards["vol-a-0"].SlotIndex, Equals, uint32(0))
+	c.Assert(got.Shards["vol-a-1"].LocalShard, IsNil)
+	c.Assert(got.Shards["vol-a-2"].LocalShard, IsNil)
+}
+
+// Only a Running shard served by this process resolves to itself. Anything
+// else resolves to nil, which means the ShardGroup attaches it over NVMe-oF.
+func (s *TestSuite) TestResolveLocalShard(c *C) {
+	fmt.Println("Testing Server.resolveLocalShard resolves only Running shards served by this process")
+
+	srv := &Server{
+		shardMap: map[string]*Shard{
+			"vol-a-0": {Name: "vol-a-0", Alias: "vol-a-0-lvs/shard-vol-a-0", State: lhtypes.InstanceStateRunning},
+			"vol-a-1": {Name: "vol-a-1", Alias: "vol-a-1-lvs/shard-vol-a-1", State: lhtypes.InstanceStateStopped},
+			"vol-a-2": {Name: "vol-a-2", Alias: "vol-a-2-lvs/shard-vol-a-2", State: lhtypes.InstanceStateError},
+		},
+	}
+
+	c.Assert(srv.resolveLocalShard("vol-a-0"), Equals, srv.shardMap["vol-a-0"])
+	c.Assert(srv.resolveLocalShard("vol-a-1"), IsNil)
+	c.Assert(srv.resolveLocalShard("vol-a-2"), IsNil)
+	c.Assert(srv.resolveLocalShard("vol-a-3"), IsNil)
+}

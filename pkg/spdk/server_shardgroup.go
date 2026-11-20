@@ -11,6 +11,7 @@ import (
 
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
@@ -217,12 +218,13 @@ func (s *Server) ShardGroupShardReplace(ctx context.Context, req *spdkrpc.ShardG
 	s.RLock()
 	shardGroup := s.shardGroupMap[req.ShardGroupName]
 	spdkClient := s.spdkClient
+	newLocalShard := s.resolveLocalShard(req.ShardName)
 	s.RUnlock()
 
 	if shardGroup == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find shardgroup %v", req.ShardGroupName)
 	}
-	state, err := shardGroup.ShardReplace(spdkClient, req.ShardName, req.ShardAddress)
+	state, err := shardGroup.ShardReplace(spdkClient, req.ShardName, req.ShardAddress, newLocalShard)
 	if err != nil {
 		return nil, err
 	}
@@ -425,6 +427,24 @@ func bdevEcSlotStateToProto(state string) spdkrpc.EcSlotState {
 	}
 }
 
+func bdevEcStateToProto(state spdktypes.BdevEcState) spdkrpc.EcState {
+	switch state {
+	case spdktypes.BdevEcStateDegraded:
+		return spdkrpc.EcState_EC_STATE_DEGRADED
+	case spdktypes.BdevEcStateOffline:
+		return spdkrpc.EcState_EC_STATE_OFFLINE
+	default:
+		return spdkrpc.EcState_EC_STATE_ONLINE
+	}
+}
+
+func bdevEcSlotRoleToProto(role spdktypes.BdevEcSlotRole) spdkrpc.EcSlotRole {
+	if role == spdktypes.BdevEcSlotRoleParity {
+		return spdkrpc.EcSlotRole_EC_SLOT_ROLE_PARITY
+	}
+	return spdkrpc.EcSlotRole_EC_SLOT_ROLE_DATA
+}
+
 // getOrCreateShardGroup returns the existing in-memory ShardGroup keyed by
 // req.Name, or constructs a fresh one in InstanceStatePending. Subsequent
 // Create on the returned ShardGroup materializes the SPDK stack.
@@ -482,25 +502,52 @@ func (s *Server) getOrCreateShardGroup(req *spdkrpc.ShardGroupCreateRequest) (*S
 		}
 
 		shardGroup.SalvageRequested = req.Spec.SalvageRequested
-		shardGroup.Shards = make(map[string]*ShardEndpoint, len(req.Spec.Shards))
-		for shardName, endpoint := range req.Spec.Shards {
-			shardGroup.Shards[shardName] = &ShardEndpoint{
-				Address:   endpoint.Address,
-				SlotIndex: endpoint.SlotIndex,
-			}
-		}
+		shardGroup.Shards = s.resolveShardEndpoints(req.Spec.Shards)
 		return shardGroup, nil
 	}
 
-	shards := map[string]*ShardEndpoint{}
-	for shardName, endpoint := range req.Spec.Shards {
+	return NewShardGroup(s.ctx, req.Name, req.VolumeName, req.SpecSize,
+		req.Spec.DataChunks, req.Spec.ParityChunks, req.Spec.StripSizeKb,
+		s.resolveShardEndpoints(req.Spec.Shards),
+		req.Spec.SalvageRequested, s.updateChs[types.InstanceTypeShardGroup]), nil
+}
+
+// resolveShardEndpoints builds the ShardGroup's endpoint map from the request
+// spec. Caller must hold s.Lock or s.RLock.
+func (s *Server) resolveShardEndpoints(spec map[string]*spdkrpc.ShardEndpoint) map[string]*ShardEndpoint {
+	shards := make(map[string]*ShardEndpoint, len(spec))
+	for shardName, endpoint := range spec {
 		shards[shardName] = &ShardEndpoint{
-			Address:   endpoint.Address,
-			SlotIndex: endpoint.SlotIndex,
+			Address:    endpoint.Address,
+			SlotIndex:  endpoint.SlotIndex,
+			LocalShard: s.resolveLocalShard(shardName),
 		}
 	}
+	return shards
+}
 
-	return NewShardGroup(s.ctx, req.Name, req.VolumeName, req.SpecSize,
-		req.Spec.DataChunks, req.Spec.ParityChunks, req.Spec.StripSizeKb, shards,
-		req.Spec.SalvageRequested, s.updateChs[types.InstanceTypeShardGroup]), nil
+// resolveLocalShard returns the shard when it runs in this Server and is
+// Running. The ShardGroup can then attach its lvol directly instead of over
+// NVMe-oF.
+//
+// It returns nil when the shard runs on another node, or for a local shard
+// that is not Running. In both cases the ShardGroup attaches over NVMe-oF,
+// which fails with a connect error if the shard is not ready.
+//
+// Lock order: the caller holds the Server lock, and this function takes the
+// shard lock. Always take the Server lock before an instance lock to avoid
+// goroutine deadlock.
+func (s *Server) resolveLocalShard(shardName string) *Shard {
+	shard := s.shardMap[shardName]
+	if shard == nil {
+		return nil
+	}
+	shard.RLock()
+	defer shard.RUnlock()
+	if shard.State != types.InstanceStateRunning {
+		logrus.Warnf("Falling back to NVMe-oF for local shard %s because it is not running (state %s)",
+			shardName, shard.State)
+		return nil
+	}
+	return shard
 }

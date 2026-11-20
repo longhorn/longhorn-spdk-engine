@@ -26,7 +26,7 @@ import (
 // with explicit mode/address so the tests can exercise mode-state branches in
 // engine helpers without going through connectNVMfBdev.
 func newTestReplicaBackend(name, address string, mode lhtypes.Mode) *replicaBackend {
-	u := newReplicaBackend(name, address, nil)
+	u := newReplicaBackend(name, address, "", nil)
 	u.SetMode(mode)
 	return u
 }

@@ -22,7 +22,7 @@ func (s *TestSuite) TestServerEngineReplicaListEmptyForShardedEngine(c *C) {
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
-		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil),
 	}
 
 	srv := &Server{
@@ -49,6 +49,21 @@ func (s *TestSuite) TestServerEngineReplicaListNotFound(c *C) {
 		EngineName: "missing",
 	})
 	c.Assert(err, NotNil)
+}
+
+func (s *TestSuite) TestBackendLocalBdevName(c *C) {
+	fmt.Println("Testing Backend.LocalBdevName is recorded at construction and shown by String")
+
+	for _, u := range []Backend{
+		newReplicaBackend("r1", "10.0.0.1:1234", "lvs/head", nil),
+		newShardGroupBackend("sg1", "10.0.0.1:1234", "lvs/head", nil),
+	} {
+		c.Assert(u.LocalBdevName(), Equals, "lvs/head")
+		c.Assert(strings.Contains(fmt.Sprintf("%+v", u), "LocalBdevName:lvs/head"), Equals, true)
+	}
+
+	remote := newReplicaBackend("r2", "10.0.0.2:1234", "", nil)
+	c.Assert(remote.LocalBdevName(), Equals, "")
 }
 
 func (s *TestSuite) TestRestoreFrontendBlocksRestoreAndFrontendCreate(c *C) {
@@ -326,7 +341,7 @@ func (s *TestSuite) TestServerEngineReplicaAddRejectedOnShardedEngine(c *C) {
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
-		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil),
 	}
 
 	srv := &Server{
@@ -347,7 +362,7 @@ func (s *TestSuite) TestServerEngineReplicaDeleteRejectedOnShardedEngine(c *C) {
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
-		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil),
 	}
 
 	srv := &Server{
@@ -368,7 +383,7 @@ func (s *TestSuite) TestServerEngineSnapshotHashStatusUnimplementedForShardedEng
 
 	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
-		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
+		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", "", nil),
 	}
 
 	srv := &Server{
@@ -381,4 +396,61 @@ func (s *TestSuite) TestServerEngineSnapshotHashStatusUnimplementedForShardedEng
 	})
 	c.Assert(err, NotNil)
 	c.Assert(grpcstatus.Code(err), Equals, grpccodes.Unimplemented)
+}
+
+// The engine uses the head lvol of a Running ShardGroup in this Server
+// directly. In every other case it connects over NVMe-oF, and the head lvol
+// stays exposed.
+func (s *TestSuite) TestStopExposeLocalShardGroup(c *C) {
+	fmt.Println("Testing Server.stopExposeLocalShardGroup returns the head lvol alias only for a Running local ShardGroup")
+
+	_, _, restore := mockShardGroupExposeBdev(nil, nil)
+	sg := newExposedLocalShardGroup()
+	srv := &Server{shardGroupMap: map[string]*ShardGroup{sg.Name: sg}}
+
+	c.Assert(srv.stopExposeLocalShardGroup(nil, "on-another-node"), Equals, "")
+
+	sg.State = lhtypes.InstanceStateStopped
+	c.Assert(srv.stopExposeLocalShardGroup(nil, sg.Name), Equals, "")
+	c.Assert(sg.IsExposed, Equals, true)
+
+	sg.State = lhtypes.InstanceStateRunning
+	c.Assert(srv.stopExposeLocalShardGroup(nil, sg.Name), Equals, sg.HeadAlias)
+	c.Assert(sg.IsExposed, Equals, false)
+	restore()
+
+	_, _, restore = mockShardGroupExposeBdev(fmt.Errorf("stop failed"), nil)
+	defer restore()
+	sg.IsExposed = true
+	c.Assert(srv.stopExposeLocalShardGroup(nil, sg.Name), Equals, "")
+	c.Assert(sg.IsExposed, Equals, true)
+}
+
+// EngineDelete exposes the head lvol again for each ShardGroup the engine
+// used directly. A ShardGroup that was deleted first is skipped.
+func (s *TestSuite) TestStartExposeLocalShardGroups(c *C) {
+	fmt.Println("Testing the head lvols an engine used directly are found and exposed again")
+
+	_, started, restore := mockShardGroupExposeBdev(nil, nil)
+	defer restore()
+
+	sg := newExposedLocalShardGroup()
+	sg.IsExposed = false
+	srv := &Server{shardGroupMap: map[string]*ShardGroup{sg.Name: sg}}
+
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.backends = map[string]Backend{
+		sg.Name: newShardGroupBackend(sg.Name, "10.0.0.1:20002", sg.HeadAlias, nil),
+	}
+	c.Assert(getLocalShardGroupNames(e), DeepEquals, []string{sg.Name})
+
+	e.backends = map[string]Backend{
+		sg.Name: newShardGroupBackend(sg.Name, "10.0.0.1:20002", "", nil),
+		"r1":    newReplicaBackend("r1", "10.0.0.1:1234", "lvs/head", nil),
+	}
+	c.Assert(getLocalShardGroupNames(e), HasLen, 0)
+
+	srv.startExposeLocalShardGroups(nil, []string{sg.Name, "deleted-first"})
+	c.Assert(sg.IsExposed, Equals, true)
+	c.Assert(*started, DeepEquals, []string{sg.Nqn})
 }

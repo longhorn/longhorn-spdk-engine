@@ -1,9 +1,13 @@
 package spdk
 
 import (
+	"strings"
+
 	. "gopkg.in/check.v1"
 
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
+
+	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
 // A re-created target must not reuse the controller ID of the stale controller a host
@@ -87,6 +91,129 @@ func (s *TestSuite) TestGetExposedPort(c *C) {
 			c.Assert(port, Equals, tc.expectedPort,
 				Commentf("Test case '%s': unexpected port", tc.name))
 		}
+	}
+}
+
+func (s *TestSuite) TestValidateAndUpdateReplicaBdevLocalLvol(c *C) {
+	const (
+		backendName = "sg-0"
+		headAlias   = "lvs/head"
+		specSize    = 4096
+	)
+
+	newLvolBdev := func() *spdktypes.BdevInfo {
+		return &spdktypes.BdevInfo{
+			BdevInfoBasic: spdktypes.BdevInfoBasic{
+				Name:        "uuid-head",
+				Aliases:     []string{headAlias},
+				ProductName: spdktypes.BdevProductNameLvol,
+				BlockSize:   512,
+				NumBlocks:   specSize / 512,
+			},
+			DriverSpecific: &spdktypes.BdevDriverSpecific{Lvol: &spdktypes.BdevDriverSpecificLvol{}},
+		}
+	}
+
+	cases := []struct {
+		name          string
+		localBdevName string
+		bdev          *spdktypes.BdevInfo
+		wantMode      lhtypes.Mode
+		wantErrSubstr string // "" => no error
+	}{
+		{"local lvol accepted", headAlias, newLvolBdev(), lhtypes.ModeRW, ""},
+		{"local lvol matched by name", headAlias, func() *spdktypes.BdevInfo {
+			b := newLvolBdev()
+			b.Name, b.Aliases = headAlias, nil
+			return b
+		}(), lhtypes.ModeRW, ""},
+		{"nil bdev", headAlias, nil, lhtypes.ModeERR, "cannot find a bdev"},
+		{"size mismatch", headAlias, func() *spdktypes.BdevInfo {
+			b := newLvolBdev()
+			b.NumBlocks = 4
+			return b
+		}(), lhtypes.ModeERR, "mismatching"},
+		{"not an lvol", headAlias, func() *spdktypes.BdevInfo {
+			b := newLvolBdev()
+			b.ProductName = spdktypes.BdevProductNameNvme
+			b.DriverSpecific = &spdktypes.BdevDriverSpecific{Nvme: &spdktypes.BdevDriverSpecificNvme{}}
+			return b
+		}(), lhtypes.ModeERR, "bdev type"},
+		{"alias mismatch", headAlias, func() *spdktypes.BdevInfo {
+			b := newLvolBdev()
+			b.Aliases = []string{"lvs/other"}
+			return b
+		}(), lhtypes.ModeERR, "expected local base bdev"},
+		// An NVMe-oF backend must still take the NVMe checks even when the
+		// bdev happens to be an lvol.
+		{"NVMe-oF backend keeps NVMe checks", "", newLvolBdev(), lhtypes.ModeERR, "bdev type"},
+	}
+
+	for _, tc := range cases {
+		c.Logf("testing validateAndUpdateReplicaBdev.%s", tc.name)
+
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, specSize, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		u := newFakeBackend(backendName, "10.0.0.1:20001")
+		u.localBdevName = tc.localBdevName
+		u.SetMode(lhtypes.ModeRW)
+		e.backends[backendName] = u
+
+		mode, err := e.validateAndUpdateReplicaBdev(backendName, tc.bdev)
+
+		c.Assert(mode, Equals, tc.wantMode, Commentf("case=%s", tc.name))
+		if tc.wantErrSubstr == "" {
+			c.Assert(err, IsNil, Commentf("case=%s", tc.name))
+		} else {
+			c.Assert(err, NotNil, Commentf("case=%s", tc.name))
+			c.Assert(strings.Contains(err.Error(), tc.wantErrSubstr), Equals, true, Commentf("case=%s err=%v", tc.name, err))
+		}
+	}
+}
+
+func (s *TestSuite) TestValidateAndMaybeAdjustSpecSize(c *C) {
+	const (
+		blockSize   = 512
+		backendName = "backend-0"
+		backendAddr = "10.0.0.1:20001"
+		growErr     = "smaller than actual raid bdev size"
+	)
+
+	cases := []struct {
+		name          string
+		specSize      uint64
+		raidSize      uint64
+		backend       Backend // nil => the engine has no backend
+		wantSpecSize  uint64
+		wantErrSubstr string // "" => no error
+	}{
+		{"sizes match", 4096, 4096, newReplicaBackend(backendName, backendAddr, "", nil), 4096, ""},
+		{"raid is smaller, spec size follows", 8192, 4096, newReplicaBackend(backendName, backendAddr, "", nil), 4096, ""},
+		// ShardGroupExpand grew the backend before EngineExpand was called.
+		{"raid grew, shardgroup backend", 4096, 8192, newShardGroupBackend(backendName, backendAddr, "", nil), 8192, ""},
+		// The engine resizes replicas itself, so this must not happen.
+		{"raid grew, replica backend", 4096, 8192, newReplicaBackend(backendName, backendAddr, "", nil), 4096, growErr},
+		{"raid grew, no backend", 4096, 8192, nil, 4096, growErr},
+	}
+
+	for _, tc := range cases {
+		c.Logf("testing validateAndMaybeAdjustSpecSizeNoLock.%s", tc.name)
+
+		e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, tc.specSize, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+		if tc.backend != nil {
+			e.backends[backendName] = tc.backend
+		}
+
+		err := e.validateAndMaybeAdjustSpecSizeNoLock(&spdktypes.BdevInfo{
+			BdevInfoBasic: spdktypes.BdevInfoBasic{BlockSize: blockSize, NumBlocks: tc.raidSize / blockSize},
+		})
+
+		if tc.wantErrSubstr == "" {
+			c.Assert(err, IsNil, Commentf("case=%s", tc.name))
+		} else {
+			c.Assert(err, NotNil, Commentf("case=%s", tc.name))
+			c.Assert(strings.Contains(err.Error(), tc.wantErrSubstr), Equals, true, Commentf("case=%s err=%v", tc.name, err))
+		}
+		c.Assert(e.SpecSize, Equals, tc.wantSpecSize, Commentf("case=%s", tc.name))
 	}
 }
 
