@@ -588,3 +588,147 @@ func (s *TestSuite) TestLocalHeadLvolExposeRequiresRunning(c *C) {
 	c.Assert(*stopped, HasLen, 0)
 	c.Assert(*started, HasLen, 0)
 }
+
+// fakeEcSlots stands in for bdev_ec in ForceFailShard tests. It records the
+// SPDK calls ForceFailShard makes and lets a test script what the slot looks
+// like on each read, so the CleanupPending transition can be driven without
+// a real bdev_ec.
+type fakeEcSlots struct {
+	reads     []spdktypes.EcBaseBdev // returned by successive reads; the last one repeats
+	readCount int
+	failed    []uint32 // slots passed to bdev_ec_fail_base_bdev
+	detached  []string // controllers passed to bdev_nvme_detach_controller
+	failErr   error
+}
+
+// mockForceFailSPDK replaces the SPDK calls ForceFailShard makes with f.
+// Call the returned restore function at the end of the test to put the real
+// functions back.
+func mockForceFailSPDK(f *fakeEcSlots) (restore func()) {
+	origGet, origFail, origDetach := shardGroupGetEcBdevs, shardGroupFailEcBaseBdev, shardGroupDetachNvmeController
+	shardGroupGetEcBdevs = func(_ *spdkclient.Client, _ string) ([]spdktypes.BdevEcInfo, error) {
+		i := f.readCount
+		if i >= len(f.reads) {
+			i = len(f.reads) - 1
+		}
+		f.readCount++
+		return []spdktypes.BdevEcInfo{{BaseBdevs: []spdktypes.EcBaseBdev{f.reads[i]}}}, nil
+	}
+	shardGroupFailEcBaseBdev = func(_ *spdkclient.Client, _ string, slot uint32) error {
+		f.failed = append(f.failed, slot)
+		return f.failErr
+	}
+	shardGroupDetachNvmeController = func(_ *spdkclient.Client, name string) error {
+		f.detached = append(f.detached, name)
+		return nil
+	}
+	return func() {
+		shardGroupGetEcBdevs, shardGroupFailEcBaseBdev, shardGroupDetachNvmeController = origGet, origFail, origDetach
+	}
+}
+
+// newRunningShardGroupWithSlot returns a Running ShardGroup whose only shard,
+// vol-a-0, sits at slot 0 and uses endpoint.
+func newRunningShardGroupWithSlot(endpoint *ShardEndpoint) *ShardGroup {
+	sg := NewShardGroup(context.Background(), "vol-a", "vol-a", testCachedSpecSize,
+		2, 1, 64, map[string]*ShardEndpoint{"vol-a-0": endpoint}, false, make(chan interface{}, 1))
+	sg.State = types.InstanceStateRunning
+	return sg
+}
+
+// A local shard has no NVMe controller to detach, so ForceFailShard asks
+// bdev_ec to fail the slot directly. It returns only after bdev_ec has
+// released the base bdev (CleanupPending=false); a ShardReplace before that
+// gets EBUSY.
+func (s *TestSuite) TestForceFailLocalShardWaitsForCleanup(c *C) {
+	fmt.Println("Testing ForceFailShard fails a local slot through bdev_ec and waits for cleanup")
+
+	f := &fakeEcSlots{reads: []spdktypes.EcBaseBdev{
+		{Slot: 0, State: spdktypes.BdevEcSlotStateNormal},
+		{Slot: 0, State: spdktypes.BdevEcSlotStateFailed, CleanupPending: true},
+		{Slot: 0, State: spdktypes.BdevEcSlotStateFailed, CleanupPending: false},
+	}}
+	restore := mockForceFailSPDK(f)
+	defer restore()
+
+	sg := newRunningShardGroupWithSlot(&ShardEndpoint{Address: "10.0.0.1:20001", SlotIndex: 0, LocalShard: newExposedLocalShard()})
+	state, err := sg.ForceFailShard(nil, "vol-a-0")
+	c.Assert(err, IsNil)
+	c.Assert(state, Equals, string(spdktypes.BdevEcSlotStateFailed))
+	c.Assert(f.failed, DeepEquals, []uint32{0})
+	c.Assert(f.detached, HasLen, 0)
+	c.Assert(f.readCount, Equals, 3)
+}
+
+// A remote shard is still failed by detaching its NVMe controller.
+func (s *TestSuite) TestForceFailRemoteShardDetachesController(c *C) {
+	fmt.Println("Testing ForceFailShard detaches the NVMe controller of a remote slot")
+
+	f := &fakeEcSlots{reads: []spdktypes.EcBaseBdev{
+		{Slot: 0, State: spdktypes.BdevEcSlotStateNormal},
+		{Slot: 0, State: spdktypes.BdevEcSlotStateFailed},
+	}}
+	restore := mockForceFailSPDK(f)
+	defer restore()
+
+	sg := newRunningShardGroupWithSlot(&ShardEndpoint{Address: "10.0.0.2:20001", SlotIndex: 0})
+	_, err := sg.ForceFailShard(nil, "vol-a-0")
+	c.Assert(err, IsNil)
+	c.Assert(f.failed, HasLen, 0)
+	c.Assert(f.detached, DeepEquals, []string{GetShardLvolName("vol-a", 0)})
+}
+
+// Calling ForceFailShard again on the same slot is safe. If the slot is
+// already FAILED, the call does nothing except wait for bdev_ec to release
+// the old base bdev, if that is still in progress. If the slot is
+// REPLACING, the call is refused so the rebuild in flight is not lost.
+func (s *TestSuite) TestForceFailShardRetrySemantics(c *C) {
+	fmt.Println("Testing ForceFailShard on an already FAILED or REPLACING slot")
+
+	endpoint := &ShardEndpoint{Address: "10.0.0.1:20001", SlotIndex: 0, LocalShard: newExposedLocalShard()}
+
+	f := &fakeEcSlots{reads: []spdktypes.EcBaseBdev{{Slot: 0, State: spdktypes.BdevEcSlotStateFailed}}}
+	restore := mockForceFailSPDK(f)
+	state, err := newRunningShardGroupWithSlot(endpoint).ForceFailShard(nil, "vol-a-0")
+	restore()
+	c.Assert(err, IsNil)
+	c.Assert(state, Equals, string(spdktypes.BdevEcSlotStateFailed))
+	c.Assert(f.failed, HasLen, 0)
+	c.Assert(f.readCount, Equals, 1)
+
+	f = &fakeEcSlots{reads: []spdktypes.EcBaseBdev{
+		{Slot: 0, State: spdktypes.BdevEcSlotStateFailed, CleanupPending: true},
+		{Slot: 0, State: spdktypes.BdevEcSlotStateFailed},
+	}}
+	restore = mockForceFailSPDK(f)
+	_, err = newRunningShardGroupWithSlot(endpoint).ForceFailShard(nil, "vol-a-0")
+	restore()
+	c.Assert(err, IsNil)
+	c.Assert(f.failed, HasLen, 0)
+	c.Assert(f.readCount, Equals, 2)
+
+	f = &fakeEcSlots{reads: []spdktypes.EcBaseBdev{{Slot: 0, State: spdktypes.BdevEcSlotStateReplacing}}}
+	restore = mockForceFailSPDK(f)
+	_, err = newRunningShardGroupWithSlot(endpoint).ForceFailShard(nil, "vol-a-0")
+	restore()
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+	c.Assert(f.failed, HasLen, 0)
+}
+
+// A failure from bdev_ec_fail_base_bdev is returned as is. The slot is not
+// polled, so a transient RPC error does not burn the poll budget.
+func (s *TestSuite) TestForceFailLocalShardRPCError(c *C) {
+	fmt.Println("Testing ForceFailShard returns a bdev_ec_fail_base_bdev error")
+
+	f := &fakeEcSlots{
+		reads:   []spdktypes.EcBaseBdev{{Slot: 0, State: spdktypes.BdevEcSlotStateNormal}},
+		failErr: fmt.Errorf("fail base bdev failed"),
+	}
+	restore := mockForceFailSPDK(f)
+	defer restore()
+
+	sg := newRunningShardGroupWithSlot(&ShardEndpoint{Address: "10.0.0.1:20001", SlotIndex: 0, LocalShard: newExposedLocalShard()})
+	_, err := sg.ForceFailShard(nil, "vol-a-0")
+	c.Assert(err, ErrorMatches, ".*fail base bdev failed.*")
+	c.Assert(f.readCount, Equals, 1)
+}

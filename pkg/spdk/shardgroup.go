@@ -84,7 +84,7 @@ func (sg *ShardGroup) detachShardBaseBdev(spdkClient *spdkclient.Client, endpoin
 		return endpoint.LocalShard.StartExposeAfterLocalDetach(spdkClient)
 	}
 	controllerName := GetShardLvolName(sg.VolumeName, endpoint.SlotIndex)
-	if _, err := spdkClient.BdevNvmeDetachController(controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
+	if err := shardGroupDetachNvmeController(spdkClient, controllerName); err != nil && !jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err) {
 		return errors.Wrapf(err, "failed to detach controller %s", controllerName)
 	}
 	return nil
@@ -378,7 +378,7 @@ func copyEcHealthFromBdevInfo(status *spdkrpc.EcStatus, info *spdktypes.BdevEcIn
 // getEcBdevInfoNoLock returns the single EC bdev backing this shardgroup,
 // erroring if SPDK reports zero or multiple. The caller must hold sg's lock.
 func (sg *ShardGroup) getEcBdevInfoNoLock(spdkClient *spdkclient.Client) (*spdktypes.BdevEcInfo, error) {
-	bdevList, err := spdkClient.BdevEcGetBdevs(sg.EcBdevName)
+	bdevList, err := shardGroupGetEcBdevs(spdkClient, sg.EcBdevName)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get EC bdev info for shardgroup %s", sg.Name)
 	}
@@ -1665,7 +1665,7 @@ func (sg *ShardGroup) ForceFailShard(spdkClient *spdkclient.Client, shardName st
 	default:
 		if endpoint.LocalShard != nil {
 			sg.log.Infof("Failing slot %d directly through bdev_ec because shard %s is local", endpoint.SlotIndex, shardName)
-			if _, err := spdkClient.BdevEcFailBaseBdev(sg.EcBdevName, endpoint.SlotIndex); err != nil {
+			if err := shardGroupFailEcBaseBdev(spdkClient, sg.EcBdevName, endpoint.SlotIndex); err != nil {
 				return "", errors.Wrapf(err, "failed to fail slot %d for local shard %s", endpoint.SlotIndex, shardName)
 			}
 		} else {

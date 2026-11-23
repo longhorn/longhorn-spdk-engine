@@ -67,6 +67,18 @@ var (
 	}
 	shardGroupStopExposeBdev = func(cli *spdkclient.Client, nqn string) error { return cli.StopExposeBdev(nqn) }
 
+	shardGroupGetEcBdevs = func(cli *spdkclient.Client, name string) ([]spdktypes.BdevEcInfo, error) {
+		return cli.BdevEcGetBdevs(name)
+	}
+	shardGroupFailEcBaseBdev = func(cli *spdkclient.Client, name string, slot uint32) error {
+		_, err := cli.BdevEcFailBaseBdev(name, slot)
+		return err
+	}
+	shardGroupDetachNvmeController = func(cli *spdkclient.Client, name string) error {
+		_, err := cli.BdevNvmeDetachController(name)
+		return err
+	}
+
 	// nolint: staticcheck // Keep legacy IP selection until callers migrate to the new helpers.
 	backingImageGetIPForPod = commonnet.GetIPForPod
 	backingImageNewExecutor = func(hostProc string) (*commonns.Executor, error) {
