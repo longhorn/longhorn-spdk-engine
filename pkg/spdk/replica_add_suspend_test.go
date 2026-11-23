@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
@@ -16,6 +18,8 @@ import (
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/client"
+
+	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
 
 type fakeEngineFrontendSuspendServer struct {
@@ -80,6 +84,7 @@ func TestReplicaAddFrontendSuspendResumeWrapper(t *testing.T) {
 	switchingOver := grpcstatus.Error(grpccodes.FailedPrecondition, "engine frontend is switching over target")
 	unimplemented := grpcstatus.Error(grpccodes.Unimplemented, "suspend frontend ublk is unimplemented")
 	timedOut := grpcstatus.Error(grpccodes.Internal, "failed to suspend linear dm device: timeout")
+	deadlineExceeded := grpcstatus.Error(grpccodes.DeadlineExceeded, "context deadline exceeded")
 
 	for _, tc := range []struct {
 		name            string
@@ -92,6 +97,8 @@ func TestReplicaAddFrontendSuspendResumeWrapper(t *testing.T) {
 		{name: "snapshot step, suspended", suspendRequired: true, wantWork: true, wantResume: true},
 		{name: "snapshot step, switching over", suspendErr: switchingOver, suspendRequired: true, wantErr: true},
 		{name: "snapshot step, suspend failed", suspendErr: timedOut, suspendRequired: true, wantErr: true},
+		// The suspend may still complete on the frontend after the RPC timed out.
+		{name: "snapshot step, suspend RPC timed out", suspendErr: deadlineExceeded, suspendRequired: true, wantErr: true, wantResume: true},
 		{name: "snapshot step, cannot be suspended", suspendErr: unimplemented, suspendRequired: true, wantWork: true},
 		{name: "finish step, suspended", wantWork: true, wantResume: true},
 		{name: "finish step, switching over", suspendErr: switchingOver, wantWork: true},
@@ -186,5 +193,81 @@ func TestEngineFrontendSuspendKeepsFlushByDefault(t *testing.T) {
 	}
 	if len(names) != 2 || names[0] != "ef" || names[1] != "ef" {
 		t.Fatalf("suspend names = %v, want [ef ef]", names)
+	}
+}
+
+// An engine frontend snapshot operation holds the frontend lock while it calls
+// into the Engine, so the frontend must be suspended outside the Engine lock.
+func TestEngineReplicaAddSuspendsFrontendOutsideEngineLock(t *testing.T) {
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e.State = lhtypes.InstanceStateRunning
+
+	suspends := 0
+	wrapper := func(work func() error, suspendRequired bool) error {
+		if !suspendRequired {
+			return work()
+		}
+		suspends++
+		if !e.TryLock() {
+			t.Fatal("frontend is suspended under the Engine lock")
+		}
+		e.Unlock()
+		return work()
+	}
+
+	// The engine has no replica to rebuild from, so the replica add fails
+	// after the suspension.
+	if err := e.ReplicaAdd(nil, "replica-new", "10.0.0.2:20000", false, "", "", "", wrapper); err == nil {
+		t.Fatal("replica add without a source replica succeeded")
+	}
+	if suspends != 1 {
+		t.Fatalf("suspends = %d, want 1", suspends)
+	}
+}
+
+// A snapshot taken while the frontend is suspended by another operation, e.g. a
+// replica add, would skip the filesystem sync and freeze, so it is rejected.
+func TestEngineFrontendSnapshotCreateRejectedWhileSuspended(t *testing.T) {
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.Endpoint = "/dev/longhorn/vol-a"
+	ef.State = lhtypes.InstanceStateSuspended
+
+	if _, err := ef.snapshotOperation("snap-a", SnapshotOperationCreate, nil); err == nil || !strings.Contains(err.Error(), "is suspended") {
+		t.Fatalf("snapshot create error = %v, want the frontend to be rejected as suspended", err)
+	}
+	if ef.State != lhtypes.InstanceStateSuspended {
+		t.Fatalf("engine frontend state = %v, want %v", ef.State, lhtypes.InstanceStateSuspended)
+	}
+}
+
+// Expanding a suspended frontend would resume it under the suspender.
+func TestEngineFrontendExpandRejectedWhileSuspended(t *testing.T) {
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.State = lhtypes.InstanceStateSuspended
+
+	if err := ef.Expand(context.Background(), nil, 2048); err == nil || !strings.Contains(err.Error(), "is suspended") {
+		t.Fatalf("expansion error = %v, want the frontend to be rejected as suspended", err)
+	}
+	if ef.State != lhtypes.InstanceStateSuspended || ef.isExpanding {
+		t.Fatalf("engine frontend state = %v, expanding = %v, want %v and not expanding", ef.State, ef.isExpanding, lhtypes.InstanceStateSuspended)
+	}
+}
+
+// A suspend request that timed out while waiting for the volume host lock must
+// not suspend the frontend after the caller has resumed it.
+func TestEngineFrontendSuspendRejectedAfterRequestExpired(t *testing.T) {
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef.State = lhtypes.InstanceStateRunning
+	s := &Server{engineFrontendMap: map[string]*EngineFrontend{ef.Name: ef}}
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	_, err := s.EngineFrontendSuspend(ctx, &spdkrpc.EngineFrontendSuspendRequest{Name: ef.Name, NoFlush: true, NoLockFs: true})
+	if grpcstatus.Code(err) != grpccodes.DeadlineExceeded {
+		t.Fatalf("suspend error = %v, want %v", err, grpccodes.DeadlineExceeded)
+	}
+	if ef.State != lhtypes.InstanceStateRunning || ef.ErrorMsg != "" {
+		t.Fatalf("engine frontend state = %v, error = %q, want %v without error", ef.State, ef.ErrorMsg, lhtypes.InstanceStateRunning)
 	}
 }
