@@ -87,6 +87,13 @@ var (
 	checkReplicaSnapshotsWaitInterval = 10 * time.Second
 
 	SPDKTGTBinary = "spdk_tgt"
+
+	// Like longhorn-instance-manager with --spdk-cpumask 0x3, the admin (main) reactor runs
+	// alone on core 0, and the NVMe-oF target poll groups and the ublk target run on core 1.
+	spdkTestCPUMask           = "0x3"
+	spdkTestMainCore          = "0"
+	spdkTestPollerCPUMask     = "0x2"
+	spdkTestStartupConfigPath = "/tmp/spdk-startup.json"
 )
 
 const (
@@ -121,6 +128,29 @@ func startTarget(spdkDir string, args []string, execute func(envs []string, bina
 	// Use a larger timeout for the test to avoid timeout issues while enabling debugger such as valgrind.
 	_, err = execute(nil, "sh", tgtOpts, 180*time.Minute)
 	return err
+}
+
+// writeSPDKTestStartupConfig writes the spdk_tgt startup JSON config that places the NVMe-oF
+// target poll groups on pollGroupsMask, which can only be set at startup.
+func writeSPDKTestStartupConfig(path, pollGroupsMask string) error {
+	config := map[string]any{
+		"subsystems": []any{
+			map[string]any{
+				"subsystem": "nvmf",
+				"config": []any{
+					map[string]any{
+						"method": "nvmf_set_config",
+						"params": map[string]any{"poll_groups_mask": pollGroupsMask},
+					},
+				},
+			},
+		},
+	}
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }
 
 func probeSPDKTargetReady(timeout time.Duration) bool {
@@ -178,10 +208,21 @@ func LaunchTestSPDKTargetDaemon(c *C, execute func(envs []string, name string, a
 	err := ensureSPDKTargetDaemonStopped(spdkTargetStopGracePeriod)
 	c.Assert(err, IsNil)
 
+	err = writeSPDKTestStartupConfig(spdkTestStartupConfigPath, spdkTestPollerCPUMask)
+	c.Assert(err, IsNil)
+	err = os.Setenv(types.EnvSPDKPollerCPUMask, spdkTestPollerCPUMask)
+	c.Assert(err, IsNil)
+
 	targetReady := false
 	go func() {
 		logrus.Info("Starting SPDK target daemon")
-		err := startTarget("", []string{"--logflag all", "2>&1 | tee /tmp/spdk_tgt.log"}, execute)
+		err := startTarget("", []string{
+			"-m", spdkTestCPUMask,
+			"--main-core", spdkTestMainCore,
+			"--json", spdkTestStartupConfigPath,
+			"--logflag all",
+			"2>&1 | tee /tmp/spdk_tgt.log",
+		}, execute)
 		c.Assert(err, IsNil)
 	}()
 
