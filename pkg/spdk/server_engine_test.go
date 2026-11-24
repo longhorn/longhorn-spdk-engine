@@ -10,6 +10,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/longhorn/go-spdk-helper/pkg/initiator"
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
@@ -20,7 +21,7 @@ import (
 func (s *TestSuite) TestServerEngineReplicaListEmptyForShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaList returns an empty replica map for EC engines")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -54,7 +55,7 @@ func (s *TestSuite) TestServerEngineReplicaListNotFound(c *C) {
 func (s *TestSuite) TestRestoreFrontendBlocksRestoreAndFrontendCreate(c *C) {
 	fmt.Println("Testing a registered restore frontend rejects a new restore and an engine frontend create, and the rejection carries the teardown error once the teardown has given up")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
 	prevEF.State = lhtypes.InstanceStateRunning
 
@@ -141,7 +142,7 @@ func (s *TestSuite) TestRegisterRestoreFrontendRejectsOccupiedEngineName(c *C) {
 	// not match, so only the engine-name slot protects vol-a's guard.
 	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
 	prevEF.State = lhtypes.InstanceStateRunning
-	e := NewEngine("engine-a", "vol-b", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-b", lhtypes.FrontendEmpty, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 
 	srv := &Server{
 		engineMap:          map[string]*Engine{e.Name: e},
@@ -324,7 +325,7 @@ func (s *TestSuite) TestServerEngineDeleteWaitTimeoutLeavesRestoreEntryRegistere
 func (s *TestSuite) TestServerEngineReplicaAddRejectedOnShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaAdd rejects EC engines with FailedPrecondition")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -345,7 +346,7 @@ func (s *TestSuite) TestServerEngineReplicaAddRejectedOnShardedEngine(c *C) {
 func (s *TestSuite) TestServerEngineReplicaDeleteRejectedOnShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaDelete rejects EC engines with FailedPrecondition")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -366,7 +367,7 @@ func (s *TestSuite) TestServerEngineReplicaDeleteRejectedOnShardedEngine(c *C) {
 func (s *TestSuite) TestServerEngineSnapshotHashStatusUnimplementedForShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineSnapshotHashStatus returns Unimplemented for EC engines")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, spdktypes.NvmeTransportTypeTCP, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}

@@ -8,6 +8,8 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
+
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 )
@@ -124,6 +126,8 @@ func (u *shardGroupBackend) Get() (*BackendView, error) {
 		// EC volumes do not surface backing-image state at the engine layer.
 		BackingImageName: "",
 		LvsUUID:          shardGroup.LvsUuid,
+		// TODO: ShardGroups are always exposed over NVMe-TCP for now.
+		TransportType: spdktypes.NvmeTransportTypeTCP,
 	}, nil
 }
 
