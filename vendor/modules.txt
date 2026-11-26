@@ -64,7 +64,7 @@ github.com/fxamacker/cbor/v2
 # github.com/gammazero/deque v1.2.2
 ## explicit; go 1.26
 github.com/gammazero/deque
-# github.com/gammazero/workerpool v1.2.2
+# github.com/gammazero/workerpool v1.3.0
 ## explicit; go 1.26
 github.com/gammazero/workerpool
 # github.com/getsentry/sentry-go v0.46.0
@@ -107,7 +107,7 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20261106055638-bcc51f569085
+# github.com/longhorn/backupstore v0.0.0-20261126014319-1a59e1ebb9d9
 ## explicit; go 1.26.0
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging

@@ -8,7 +8,7 @@ require (
 	github.com/cockroachdb/errors v1.14.0
 	github.com/google/uuid v1.6.0
 	github.com/jinzhu/copier v0.4.0
-	github.com/longhorn/backupstore v0.0.0-20261106055638-bcc51f569085
+	github.com/longhorn/backupstore v0.0.0-20261126014319-1a59e1ebb9d9
 	github.com/longhorn/go-common-libs v0.0.0-20261028232656-6805a1f65080
 	github.com/longhorn/go-spdk-helper v0.14.1-0.20261117055102-2128d458b38c
 	github.com/longhorn/types v0.0.0-20261030035820-c6ac902022cf
@@ -45,7 +45,7 @@ require (
 	github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/gammazero/deque v1.2.2 // indirect
-	github.com/gammazero/workerpool v1.2.2 // indirect
+	github.com/gammazero/workerpool v1.3.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
