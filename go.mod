@@ -74,4 +74,4 @@ require (
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect
 )
 
-replace github.com/longhorn/backupstore => ../backupstore
+replace github.com/longhorn/backupstore => github.com/carterli0407-cell/backupstore v0.0.0-20261126140508-45df4e9b845f

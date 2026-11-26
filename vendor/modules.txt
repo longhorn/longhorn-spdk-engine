@@ -107,7 +107,7 @@ github.com/kr/pretty
 # github.com/kr/text v0.2.0
 ## explicit
 github.com/kr/text
-# github.com/longhorn/backupstore v0.0.0-20261126014319-1a59e1ebb9d9 => ../backupstore
+# github.com/longhorn/backupstore v0.0.0-20261126014319-1a59e1ebb9d9 => github.com/carterli0407-cell/backupstore v0.0.0-20261126140508-45df4e9b845f
 ## explicit; go 1.26.0
 github.com/longhorn/backupstore
 github.com/longhorn/backupstore/logging
@@ -421,4 +421,4 @@ k8s.io/utils/net
 ## explicit; go 1.23
 sigs.k8s.io/json
 sigs.k8s.io/json/internal/golang/encoding/json
-# github.com/longhorn/backupstore => ../backupstore
+# github.com/longhorn/backupstore => github.com/carterli0407-cell/backupstore v0.0.0-20261126140508-45df4e9b845f
