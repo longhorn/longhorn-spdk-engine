@@ -200,7 +200,7 @@ func TestEngineFrontendSuspendKeepsFlushByDefault(t *testing.T) {
 // An engine frontend snapshot operation holds the frontend lock while it calls
 // into the Engine, so the frontend must be suspended outside the Engine lock.
 func TestEngineReplicaAddSuspendsFrontendOutsideEngineLock(t *testing.T) {
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 	e.State = lhtypes.InstanceStateRunning
 
 	suspends := 0
@@ -229,7 +229,7 @@ func TestEngineReplicaAddSuspendsFrontendOutsideEngineLock(t *testing.T) {
 // A snapshot taken while the frontend is suspended by another operation, e.g. a
 // replica add, would skip the filesystem sync and freeze, so it is rejected.
 func TestEngineFrontendSnapshotCreateRejectedWhileSuspended(t *testing.T) {
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil, false)
 	ef.Endpoint = "/dev/longhorn/vol-a"
 	ef.State = lhtypes.InstanceStateSuspended
 
@@ -243,7 +243,7 @@ func TestEngineFrontendSnapshotCreateRejectedWhileSuspended(t *testing.T) {
 
 // Expanding a suspended frontend would resume it under the suspender.
 func TestEngineFrontendExpandRejectedWhileSuspended(t *testing.T) {
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil, false)
 	ef.State = lhtypes.InstanceStateSuspended
 
 	if err := ef.Expand(context.Background(), nil, 2048); err == nil || !strings.Contains(err.Error(), "is suspended") {
@@ -257,7 +257,7 @@ func TestEngineFrontendExpandRejectedWhileSuspended(t *testing.T) {
 // A suspend request that timed out while waiting for the volume host lock must
 // not suspend the frontend after the caller has resumed it.
 func TestEngineFrontendSuspendRejectedAfterRequestExpired(t *testing.T) {
-	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+	ef := NewEngineFrontend("ef-a", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil, false)
 	ef.State = lhtypes.InstanceStateRunning
 	s := &Server{engineFrontendMap: map[string]*EngineFrontend{ef.Name: ef}}
 

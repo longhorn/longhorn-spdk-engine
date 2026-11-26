@@ -7,10 +7,13 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/longhorn/go-spdk-helper/pkg/initiator"
 	helpertypes "github.com/longhorn/go-spdk-helper/pkg/types"
 
 	lhtypes "github.com/longhorn/longhorn-spdk-engine/pkg/types"
 
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	. "gopkg.in/check.v1"
 )
 
@@ -20,7 +23,7 @@ func (s *TestSuite) TestSaveAndLoadEngineFrontendRecord(c *C) {
 	tmpDir := c.MkDir()
 
 	ef := NewEngineFrontend("ef-1", "engine-a", "vol-a",
-		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil)
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, false)
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 3000
 
@@ -51,7 +54,7 @@ func (s *TestSuite) TestSaveRecordPersistsTargetIPAndPort(c *C) {
 	tmpDir := c.MkDir()
 
 	ef := NewEngineFrontend("ef-nvmf", "engine-b", "vol-b",
-		lhtypes.FrontendSPDKTCPNvmf, 2097152, 0, 0, make(chan interface{}, 1), nil)
+		lhtypes.FrontendSPDKTCPNvmf, 2097152, 0, 0, make(chan interface{}, 1), nil, false)
 	ef.NvmeTcpFrontend.TargetIP = "192.168.1.10"
 	ef.NvmeTcpFrontend.TargetPort = 4420
 
@@ -74,7 +77,7 @@ func (s *TestSuite) TestSaveAndLoadEngineFrontendRecordPreservesMultipathMetadat
 	tmpDir := c.MkDir()
 
 	ef := NewEngineFrontend("ef-mp", "engine-a", "vol-mp",
-		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, make(chan interface{}, 1), nil)
+		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, make(chan interface{}, 1), nil, false)
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 3000
 	ef.NvmeTcpFrontend.Nqn = helpertypes.GetNQN("engine-a")
@@ -123,7 +126,7 @@ func (s *TestSuite) TestSaveRecordSkipsUblkFrontend(c *C) {
 	tmpDir := c.MkDir()
 
 	ef := NewEngineFrontend("ef-ublk", "engine-c", "vol-c",
-		lhtypes.FrontendUBLK, 1048576, 0, 0, make(chan interface{}, 1), nil)
+		lhtypes.FrontendUBLK, 1048576, 0, 0, make(chan interface{}, 1), nil, false)
 
 	err := saveEngineFrontendRecord(tmpDir, ef)
 	c.Assert(err, IsNil)
@@ -138,7 +141,7 @@ func (s *TestSuite) TestSaveRecordSkipsUblkFrontend(c *C) {
 
 func (s *TestSuite) TestSaveRecordEmptyMetadataDirIsNoop(c *C) {
 	ef := NewEngineFrontend("ef-x", "engine-x", "vol-x",
-		lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+		lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil, false)
 
 	c.Assert(saveEngineFrontendRecord("", ef), IsNil)
 }
@@ -227,7 +230,7 @@ func (s *TestSuite) TestLoadRecordsMixedValidAndCorrupted(c *C) {
 
 	// Create a valid record.
 	efValid := NewEngineFrontend("ef-valid", "engine-v", "vol-valid",
-		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil)
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, false)
 	efValid.NvmeTcpFrontend.TargetIP = "10.0.0.5"
 	efValid.NvmeTcpFrontend.TargetPort = 5000
 	c.Assert(saveEngineFrontendRecord(tmpDir, efValid), IsNil)
@@ -255,7 +258,7 @@ func (s *TestSuite) TestRemoveEngineFrontendRecord(c *C) {
 	tmpDir := c.MkDir()
 
 	ef := NewEngineFrontend("ef-rm", "engine-rm", "vol-rm",
-		lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil)
+		lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 1), nil, false)
 	c.Assert(saveEngineFrontendRecord(tmpDir, ef), IsNil)
 
 	// Verify exists.
@@ -306,7 +309,7 @@ func (s *TestSuite) TestSaveRecordOverwritesPrevious(c *C) {
 	tmpDir := c.MkDir()
 
 	ef := NewEngineFrontend("ef-ow", "engine-ow", "vol-ow",
-		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, make(chan interface{}, 1), nil)
+		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, make(chan interface{}, 1), nil, false)
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.1"
 	ef.NvmeTcpFrontend.TargetPort = 3000
 	c.Assert(saveEngineFrontendRecord(tmpDir, ef), IsNil)
@@ -329,7 +332,7 @@ func (s *TestSuite) TestRecoverFromHostNvmfReconstructsEndpoint(c *C) {
 	updateCh := make(chan interface{}, 1)
 
 	ef := NewEngineFrontend("ef-nvmf-recover", "engine-r", "vol-r",
-		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, updateCh, nil)
+		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, updateCh, nil, false)
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.5"
 	ef.NvmeTcpFrontend.TargetPort = 4420
 
@@ -357,7 +360,7 @@ func (s *TestSuite) TestRecoverFromHostNvmfNoPortLeavesEmptyEndpoint(c *C) {
 	updateCh := make(chan interface{}, 1)
 
 	ef := NewEngineFrontend("ef-nvmf-noport", "engine-np", "vol-np",
-		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, updateCh, nil)
+		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, updateCh, nil, false)
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.6"
 	// TargetPort is 0 (not recovered from old record).
 
@@ -376,7 +379,7 @@ func (s *TestSuite) TestRecoverFromHostEmptyFrontend(c *C) {
 	updateCh := make(chan interface{}, 1)
 
 	ef := NewEngineFrontend("ef-empty", "engine-e", "vol-e",
-		lhtypes.FrontendEmpty, 1024, 0, 0, updateCh, nil)
+		lhtypes.FrontendEmpty, 1024, 0, 0, updateCh, nil, false)
 
 	err := ef.RecoverFromHost(nil)
 	c.Assert(err, IsNil)
@@ -390,7 +393,7 @@ func (s *TestSuite) TestRecoverFromHostRejectsNonPendingState(c *C) {
 	updateCh := make(chan interface{}, 1)
 
 	ef := NewEngineFrontend("ef-running", "engine-run", "vol-run",
-		lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh, nil)
+		lhtypes.FrontendSPDKTCPNvmf, 1024, 0, 0, updateCh, nil, false)
 	ef.State = lhtypes.InstanceStateRunning
 
 	err := ef.RecoverFromHost(nil)
@@ -402,7 +405,7 @@ func (s *TestSuite) TestRecoverFromHostUnsupportedFrontendSetsError(c *C) {
 	updateCh := make(chan interface{}, 1)
 
 	ef := NewEngineFrontend("ef-unknown", "engine-u", "vol-u",
-		"unknown-frontend", 1024, 0, 0, updateCh, nil)
+		"unknown-frontend", 1024, 0, 0, updateCh, nil, false)
 
 	err := ef.RecoverFromHost(nil)
 	c.Assert(err, NotNil)
@@ -416,7 +419,7 @@ func (s *TestSuite) TestRecoverFromHostBlockdevReconnectsPersistedTarget(c *C) {
 	updateCh := make(chan interface{}, 1)
 
 	ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
-		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh, nil)
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh, nil, false)
 	ef.metadataDir = c.MkDir()
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
 	ef.NvmeTcpFrontend.TargetPort = 4420
@@ -483,7 +486,7 @@ func (s *TestSuite) TestRecoverFromHostBlockdevSkipsReconnectWhenTargetUnreachab
 	updateCh := make(chan interface{}, 1)
 
 	ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
-		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh, nil)
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh, nil, false)
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
 	ef.NvmeTcpFrontend.TargetPort = 4420
 
@@ -532,11 +535,147 @@ func (s *TestSuite) TestRecoverFromHostBlockdevSkipsReconnectWhenTargetUnreachab
 	}
 }
 
+func (s *TestSuite) TestRecoverFromHostSharedBlockRegistersBeforeReconnect(c *C) {
+	freezingErr := grpcstatus.Error(grpccodes.Aborted, ErrSharedBlockFrontendsFreezing.Error())
+	otherErr := grpcstatus.Error(grpccodes.Unavailable, "engine is unreachable")
+	for _, registerErrs := range [][]error{{nil}, {freezingErr, nil}, {otherErr}} {
+		updateCh := make(chan interface{}, 1)
+
+		ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
+			lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh, nil, true)
+		ef.metadataDir = c.MkDir()
+		ef.isInitiatorSuspendedFn = func() (bool, error) { return false, nil }
+		ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
+		ef.NvmeTcpFrontend.TargetPort = 4420
+		ef.getInitiatorEndpointFn = func() string { return "/dev/longhorn/vol-r" }
+		ef.checkTargetReachableFn = func(address string) error { return nil }
+		ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error { return nil }
+
+		reconnected := false
+		ef.loadInitiatorNVMeDeviceInfoFn = func(transportAddress, transportServiceID, subsystemNQN string) error {
+			if !reconnected {
+				return fmt.Errorf("%s", helpertypes.ErrorMessageCannotFindValidNvmeDevice)
+			}
+			return nil
+		}
+		registered := false
+		registerCalls := 0
+		ef.registerToEngineFn = func(i *initiator.Initiator) error {
+			c.Assert(reconnected, Equals, false)
+			registerErr := registerErrs[registerCalls]
+			registerCalls++
+			registered = registerErr == nil
+			return registerErr
+		}
+		ef.reconnectNvmeTCPPathFn = func(transportAddress, transportServiceID string) error {
+			c.Assert(registered, Equals, true)
+			reconnected = true
+			return nil
+		}
+
+		err := ef.RecoverFromHost(nil)
+		c.Assert(registerCalls, Equals, len(registerErrs))
+		if registerErrs[len(registerErrs)-1] == nil {
+			c.Assert(err, IsNil)
+			c.Assert(reconnected, Equals, true)
+		} else {
+			c.Assert(err, ErrorMatches, ".*failed to register engine frontend.*")
+			c.Assert(reconnected, Equals, false)
+		}
+		ef.signalStop()
+	}
+}
+
+// A suspension may start after the registration and reject the reconnect, so
+// the reconnect is retried only while the engine suspends the engine frontends.
+func (s *TestSuite) TestRecoverFromHostSharedBlockRetriesReconnectAfterFreezing(c *C) {
+	freezingErr := grpcstatus.Error(grpccodes.Aborted, ErrSharedBlockFrontendsFreezing.Error())
+	reconnectErr := fmt.Errorf("failed to connect")
+	for _, test := range []struct {
+		name string
+		// registerErrs are returned by the registrations in order.
+		registerErrs   []error
+		cancel         bool
+		wantReconnects int
+		wantErr        string
+	}{
+		{
+			name:           "retried after the suspension finishes",
+			registerErrs:   []error{nil, freezingErr, freezingErr, nil},
+			wantReconnects: 2,
+		},
+		{
+			name:           "not retried without a suspension",
+			registerErrs:   []error{nil, nil},
+			wantReconnects: 1,
+			wantErr:        ".*failed to reconnect NVMe/TCP path during recovery.*",
+		},
+		{
+			name:           "not retried after the recovery is cancelled during the suspension",
+			registerErrs:   []error{nil, freezingErr},
+			cancel:         true,
+			wantReconnects: 1,
+			wantErr:        ErrRecoveryCancelled.Error(),
+		},
+	} {
+		comment := Commentf("test case: %s", test.name)
+
+		ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
+			lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, make(chan interface{}, 1), nil, true)
+		ef.metadataDir = c.MkDir()
+		ef.isInitiatorSuspendedFn = func() (bool, error) { return false, nil }
+		ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
+		ef.NvmeTcpFrontend.TargetPort = 4420
+		ef.getInitiatorEndpointFn = func() string { return "/dev/longhorn/vol-r" }
+		ef.checkTargetReachableFn = func(address string) error { return nil }
+		ef.loadInitiatorEndpointFn = func(dmDeviceIsBusy bool) error { return nil }
+
+		reconnected := false
+		ef.loadInitiatorNVMeDeviceInfoFn = func(transportAddress, transportServiceID, subsystemNQN string) error {
+			if !reconnected {
+				return fmt.Errorf("%s", helpertypes.ErrorMessageCannotFindValidNvmeDevice)
+			}
+			return nil
+		}
+		registerCalls := 0
+		ef.registerToEngineFn = func(i *initiator.Initiator) error {
+			c.Assert(registerCalls < len(test.registerErrs), Equals, true, comment)
+			registerErr := test.registerErrs[registerCalls]
+			registerCalls++
+			return registerErr
+		}
+		reconnects := 0
+		ef.reconnectNvmeTCPPathFn = func(transportAddress, transportServiceID string) error {
+			reconnects++
+			if reconnects == 1 {
+				if test.cancel {
+					ef.Lock()
+					ef.State = lhtypes.InstanceStateStopped
+					ef.Unlock()
+				}
+				return reconnectErr
+			}
+			reconnected = true
+			return nil
+		}
+
+		err := ef.RecoverFromHost(nil)
+		c.Assert(registerCalls, Equals, len(test.registerErrs), comment)
+		c.Assert(reconnects, Equals, test.wantReconnects, comment)
+		if test.wantErr == "" {
+			c.Assert(err, IsNil, comment)
+		} else {
+			c.Assert(err, ErrorMatches, test.wantErr, comment)
+		}
+		ef.signalStop()
+	}
+}
+
 func (s *TestSuite) TestRecoverFromHostBlockdevUsesPersistedTargetForControllerSelection(c *C) {
 	updateCh := make(chan interface{}, 1)
 
 	ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
-		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh, nil)
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh, nil, false)
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
 	ef.NvmeTcpFrontend.TargetPort = 4420
 	ef.getInitiatorEndpointFn = func() string { return "/dev/longhorn/vol-r" }
@@ -584,7 +723,7 @@ func (s *TestSuite) TestRecoverFromHostBlockdevStalePersistedTargetFallsBackToAn
 	updateCh := make(chan interface{}, 1)
 
 	ef := NewEngineFrontend("ef-block-recover", "engine-r", "vol-r",
-		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh, nil)
+		lhtypes.FrontendSPDKTCPBlockdev, 1048576, 0, 0, updateCh, nil, false)
 	// Persisted target is stale — no controller exists at 10.0.0.8:4420.
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.8"
 	ef.NvmeTcpFrontend.TargetPort = 4420
@@ -644,7 +783,7 @@ func (s *TestSuite) TestRecoverEngineFrontendsRestoresTargetIPAndPort(c *C) {
 
 	// Persist a record.
 	ef := NewEngineFrontend("ef-int", "engine-int", "vol-int",
-		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, make(chan interface{}, 1), nil)
+		lhtypes.FrontendSPDKTCPNvmf, 1048576, 0, 0, make(chan interface{}, 1), nil, false)
 	ef.NvmeTcpFrontend.TargetIP = "10.0.0.10"
 	ef.NvmeTcpFrontend.TargetPort = 5555
 	c.Assert(saveEngineFrontendRecord(tmpDir, ef), IsNil)
@@ -657,7 +796,7 @@ func (s *TestSuite) TestRecoverEngineFrontendsRestoresTargetIPAndPort(c *C) {
 	record := records[0]
 	updateCh := make(chan interface{}, 10)
 	recovered := NewEngineFrontend(record.Name, record.EngineName, record.VolumeName,
-		record.Frontend, record.SpecSize, 0, 0, updateCh, nil)
+		record.Frontend, record.SpecSize, 0, 0, updateCh, nil, false)
 	recovered.VolumeNQN = record.VolumeNQN
 	recovered.VolumeNGUID = record.VolumeNGUID
 	recovered.ActivePath = record.ActivePath

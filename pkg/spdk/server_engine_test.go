@@ -20,7 +20,7 @@ import (
 func (s *TestSuite) TestServerEngineReplicaListEmptyForShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaList returns an empty replica map for EC engines")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -54,8 +54,8 @@ func (s *TestSuite) TestServerEngineReplicaListNotFound(c *C) {
 func (s *TestSuite) TestRestoreFrontendBlocksRestoreAndFrontendCreate(c *C) {
 	fmt.Println("Testing a registered restore frontend rejects a new restore and an engine frontend create, and the rejection carries the teardown error once the teardown has given up")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
-	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
+	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil, false)
 	prevEF.State = lhtypes.InstanceStateRunning
 
 	srv := &Server{
@@ -115,7 +115,7 @@ func (s *TestSuite) TestRestoreFrontendBlocksRestoreOnReplacementEngineOfSameVol
 
 	// engine-a was deleted while its restore teardown was still running, so
 	// its restore frontend stays registered. engine-b replaces it for vol-a.
-	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
+	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil, false)
 	prevEF.State = lhtypes.InstanceStateRunning
 
 	srv := &Server{
@@ -139,9 +139,9 @@ func (s *TestSuite) TestRegisterRestoreFrontendRejectsOccupiedEngineName(c *C) {
 	// engine-a (vol-a) was deleted while its restore teardown was still
 	// running, then engine-a was recreated for vol-b. The volume check does
 	// not match, so only the engine-name slot protects vol-a's guard.
-	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
+	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil, false)
 	prevEF.State = lhtypes.InstanceStateRunning
-	e := NewEngine("engine-a", "vol-b", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-b", lhtypes.FrontendEmpty, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 
 	srv := &Server{
 		engineMap:          map[string]*Engine{e.Name: e},
@@ -161,7 +161,7 @@ func (s *TestSuite) TestRegisterRestoreFrontendRejectsOccupiedEngineName(c *C) {
 func (s *TestSuite) TestServerEngineDeleteStopsAndUnregistersRestoreTeardown(c *C) {
 	fmt.Println("Testing Server.EngineDelete signals the restore frontend to stop and drops its entry when the teardown goroutine has already exited")
 
-	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
+	prevEF := NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil, false)
 	// The teardown gave up before the deletion: the goroutine has exited
 	// with the frontend in error and the entry still registered.
 	prevEF.State = lhtypes.InstanceStateError
@@ -215,7 +215,7 @@ func newServerWithBlockedRestoreTeardown(c *C, disconnectErr error) (srv *Server
 		return disconnectErr
 	}
 
-	restoreEF = NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil)
+	restoreEF = NewEngineFrontend("engine-a-restore", "engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 1024, 0, 0, make(chan interface{}, 2), nil, false)
 	restoreEF.State = lhtypes.InstanceStateRunning
 	restoreEF.IsRestoring = true
 	restoreEF.initiator = &initiator.Initiator{}
@@ -324,7 +324,7 @@ func (s *TestSuite) TestServerEngineDeleteWaitTimeoutLeavesRestoreEntryRegistere
 func (s *TestSuite) TestServerEngineReplicaAddRejectedOnShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaAdd rejects EC engines with FailedPrecondition")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -345,7 +345,7 @@ func (s *TestSuite) TestServerEngineReplicaAddRejectedOnShardedEngine(c *C) {
 func (s *TestSuite) TestServerEngineReplicaDeleteRejectedOnShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineReplicaDelete rejects EC engines with FailedPrecondition")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -366,7 +366,7 @@ func (s *TestSuite) TestServerEngineReplicaDeleteRejectedOnShardedEngine(c *C) {
 func (s *TestSuite) TestServerEngineSnapshotHashStatusUnimplementedForShardedEngine(c *C) {
 	fmt.Println("Testing Server.EngineSnapshotHashStatus returns Unimplemented for EC engines")
 
-	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil)
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, false, "")
 	e.backends = map[string]Backend{
 		"sg1": newShardGroupBackend("sg1", "10.0.0.1:1234", nil),
 	}
@@ -381,4 +381,22 @@ func (s *TestSuite) TestServerEngineSnapshotHashStatusUnimplementedForShardedEng
 	})
 	c.Assert(err, NotNil)
 	c.Assert(grpcstatus.Code(err), Equals, grpccodes.Unimplemented)
+}
+
+func (s *TestSuite) TestEngineBackupRestoreRejectsSharedBlockEngineWithFrontend(c *C) {
+	e := NewEngine("engine-a", "vol-a", lhtypes.FrontendSPDKTCPBlockdev, 10, make(chan interface{}, 1), defaultTestSnapshotMaxCount, nil, true, "")
+	srv := &Server{
+		engineMap:          map[string]*Engine{e.Name: e},
+		engineFrontendMap:  map[string]*EngineFrontend{},
+		restoreFrontendMap: map[string]*EngineFrontend{},
+		volumeHostLocks:    map[string]*volumeHostLockEntry{},
+	}
+
+	_, err := srv.EngineBackupRestore(context.Background(), &spdkrpc.EngineBackupRestoreRequest{
+		EngineName: e.Name,
+		BackupUrl:  "backup://target?backup=backup-1&volume=vol-a",
+	})
+	c.Assert(grpcstatus.Code(err), Equals, grpccodes.FailedPrecondition)
+	c.Assert(strings.Contains(err.Error(), "frontend must be disabled"), Equals, true)
+	c.Assert(srv.restoreFrontendMap, HasLen, 0)
 }
