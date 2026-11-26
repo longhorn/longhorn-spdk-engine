@@ -752,6 +752,12 @@ func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCre
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "%v", err)
 	}
 
+	encryption, err := backupstore.NewEncryptionConfig(req.Credential)
+	if err != nil {
+		err = errors.Wrapf(err, "failed to setup encryption for backup %v", backupName)
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%v", err)
+	}
+
 	var labelMap map[string]string
 	if req.Labels != nil {
 		labelMap, err = util.ParseLabels(req.Labels)
@@ -846,6 +852,7 @@ func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCre
 		DeltaOps:   backup,
 		Labels:     labelMap,
 		Parameters: parameters,
+		Encryption: encryption,
 	}
 
 	s.trackBackupLocked(backupName, backup)

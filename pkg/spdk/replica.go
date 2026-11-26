@@ -4865,6 +4865,12 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 		return grpcstatus.Errorf(grpccodes.Internal, "%v", err)
 	}
 
+	encryption, err := backupstore.NewEncryptionConfig(credential)
+	if err != nil {
+		err = errors.Wrapf(err, "failed to setup encryption for restoring backup %v", backupUrl)
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%v", err)
+	}
+
 	backupName, _, _, err := backupstore.DecodeBackupURL(util.UnescapeURL(backupUrl))
 	if err != nil {
 		err = errors.Wrapf(err, "failed to decode backup url %v", backupUrl)
@@ -4926,13 +4932,13 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 
 	if isFullRestore {
 		r.log.Infof("Starting a new full restore for backup %v", backupUrl)
-		if err := r.backupRestore(backupUrl, newRestore.LvolName, concurrentLimit); err != nil {
+		if err := r.backupRestore(backupUrl, newRestore.LvolName, concurrentLimit, encryption); err != nil {
 			return errors.Wrapf(err, "failed to start full backup restore")
 		}
 		r.log.Infof("Successfully initiated full restore for %v to %v", backupUrl, newRestore.LvolName)
 	} else {
 		r.log.Infof("Starting an incremental restore for backup %v", backupUrl)
-		if err := r.backupRestoreIncrementally(backupUrl, newRestore.LastRestored, newRestore.LvolName, concurrentLimit); err != nil {
+		if err := r.backupRestoreIncrementally(backupUrl, newRestore.LastRestored, newRestore.LvolName, concurrentLimit, encryption); err != nil {
 			return errors.Wrapf(err, "failed to start incremental backup restore")
 		}
 		r.log.Infof("Successfully initiated incremental restore for %v to %v", backupUrl, newRestore.LvolName)
@@ -4948,7 +4954,7 @@ func (r *Replica) BackupRestore(spdkClient *spdkclient.Client, backupUrl, snapsh
 
 }
 
-func (r *Replica) backupRestoreIncrementally(backupURL, lastRestored, snapshotLvolName string, concurrentLimit int32) error {
+func (r *Replica) backupRestoreIncrementally(backupURL, lastRestored, snapshotLvolName string, concurrentLimit int32, encryption *backupstore.EncryptionConfig) error {
 	backupURL = butil.UnescapeURL(backupURL)
 
 	r.log.WithFields(logrus.Fields{
@@ -4964,10 +4970,11 @@ func (r *Replica) backupRestoreIncrementally(backupURL, lastRestored, snapshotLv
 		LastBackupName:  lastRestored,
 		Filename:        snapshotLvolName,
 		ConcurrentLimit: int32(concurrentLimit),
+		Encryption:      encryption,
 	})
 }
 
-func (r *Replica) backupRestore(backupURL, snapshotLvolName string, concurrentLimit int32) error {
+func (r *Replica) backupRestore(backupURL, snapshotLvolName string, concurrentLimit int32, encryption *backupstore.EncryptionConfig) error {
 	backupURL = butil.UnescapeURL(backupURL)
 
 	r.log.WithFields(logrus.Fields{
@@ -4981,6 +4988,7 @@ func (r *Replica) backupRestore(backupURL, snapshotLvolName string, concurrentLi
 		DeltaOps:        r.restore,
 		Filename:        snapshotLvolName,
 		ConcurrentLimit: int32(concurrentLimit),
+		Encryption:      encryption,
 	})
 }
 

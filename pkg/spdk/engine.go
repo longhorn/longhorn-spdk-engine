@@ -2465,6 +2465,12 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, endpoin
 		return resp, nil, err
 	}
 
+	encryption, err := backupstore.NewEncryptionConfig(credential)
+	if err != nil {
+		e.recordBackupRestoreStartErrorLocked(spdkClient, backupUrl, "", superiorPortAllocator, err)
+		return resp, nil, err
+	}
+
 	lastRestored := e.restore.LastRestored
 
 	defer func() {
@@ -2485,7 +2491,7 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, endpoin
 	// forever in waitForRestoreComplete (goroutine leak).
 	if isFullRestore {
 		e.log.Infof("Starting a new full restore for backup %v", backupUrl)
-		if err := e.backupRestore(backupUrl, concurrentLimit); err != nil {
+		if err := e.backupRestore(backupUrl, concurrentLimit, encryption); err != nil {
 			err = errors.Wrapf(err, "failed to start full backup restore")
 			e.handleBackupRestoreStartErrorLocked(resp, prevRestore, prevRestoreStatus, err)
 			return resp, nil, err
@@ -2493,7 +2499,7 @@ func (e *Engine) BackupRestore(spdkClient *spdkclient.Client, backupUrl, endpoin
 		e.log.Infof("Successfully initiated full restore for %v to %v", backupUrl, e.Name)
 	} else {
 		e.log.Infof("Starting an incremental restore for backup %v", backupUrl)
-		if err := e.backupRestoreIncrementally(backupUrl, lastRestored, concurrentLimit); err != nil {
+		if err := e.backupRestoreIncrementally(backupUrl, lastRestored, concurrentLimit, encryption); err != nil {
 			err = errors.Wrapf(err, "failed to start incremental backup restore")
 			e.handleBackupRestoreStartErrorLocked(resp, prevRestore, prevRestoreStatus, err)
 			return resp, nil, err
@@ -2754,7 +2760,7 @@ func (e *Engine) revertRestoreBaselineBlockerLocked() error {
 	return nil
 }
 
-func (e *Engine) backupRestore(backupURL string, concurrentLimit int32) error {
+func (e *Engine) backupRestore(backupURL string, concurrentLimit int32, encryption *backupstore.EncryptionConfig) error {
 	backupURL = butil.UnescapeURL(backupURL)
 
 	e.log.WithFields(logrus.Fields{
@@ -2770,10 +2776,11 @@ func (e *Engine) backupRestore(backupURL string, concurrentLimit int32) error {
 		DeltaOps:        e.restore,
 		Filename:        "",
 		ConcurrentLimit: concurrentLimit,
+		Encryption:      encryption,
 	})
 }
 
-func (e *Engine) backupRestoreIncrementally(backupURL, lastRestored string, concurrentLimit int32) error {
+func (e *Engine) backupRestoreIncrementally(backupURL, lastRestored string, concurrentLimit int32, encryption *backupstore.EncryptionConfig) error {
 	backupURL = butil.UnescapeURL(backupURL)
 
 	e.log.WithFields(logrus.Fields{
@@ -2789,6 +2796,7 @@ func (e *Engine) backupRestoreIncrementally(backupURL, lastRestored string, conc
 		LastBackupName:  lastRestored,
 		Filename:        "",
 		ConcurrentLimit: concurrentLimit,
+		Encryption:      encryption,
 	})
 }
 
